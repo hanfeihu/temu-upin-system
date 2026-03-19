@@ -9,7 +9,7 @@ spring:
     # 按需修改为你的数据库
     url: jdbc:postgresql://www.tminos.com:5432/tminos
     username: postgres
-    password: "REDACTED_PASSWORD"
+    password: ""
 
 aliyun:
   oss:
@@ -20,8 +20,8 @@ aliyun:
     # Leave empty to use default OSS public domain:
     # https://<bucket>.<endpoint>/<key>
     public-domain: ""
-    access-key-id: "REDACTED_ACCESS_KEY_ID"
-    access-key-secret: "REDACTED_ACCESS_KEY_SECRET"
+    access-key-id: ""
+    access-key-secret: ""
 # 如果你希望提示词优化也走本地配置，可在此覆盖：
 # ai:
 #   image:

@@ -21,8 +21,8 @@ public class OssDebugMainTest {
 //        String endpoint = "oss-cn-hangzhou.aliyuncs.com";
 //        String bucket = "hanfeihutemuimage";
 //
-//        String accessKeyId = "REDACTED_ACCESS_KEY_ID";
-//        String accessKeySecret = "REDACTED_ACCESS_KEY_SECRET";
+//        String accessKeyId = "";
+//        String accessKeySecret = "";
 //
 //        // Optional: your CDN/custom domain. Leave empty to use default OSS domain.
 //        String publicDomain = "https://oss.tminos.com";
