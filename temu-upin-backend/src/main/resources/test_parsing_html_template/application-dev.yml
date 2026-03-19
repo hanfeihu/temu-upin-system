@@ -1,0 +1,29 @@
+# 本地开发配置（建议不要提交到仓库）
+# 使用方式：
+#   mvn spring-boot:run -Dspring-boot.run.profiles=local
+# 或：
+#   java -jar ... --spring.profiles.active=local
+
+spring:
+  datasource:
+    # 按需修改为你的数据库
+    url: jdbc:postgresql://www.tminos.com:5432/tminos
+    username: postgres
+    password: "REDACTED_PASSWORD"
+
+aliyun:
+  oss:
+    enabled: true
+    region: cn-hangzhou
+    endpoint: oss-cn-hangzhou.aliyuncs.com
+    bucket: hanfeihutemuimage
+    # Leave empty to use default OSS public domain:
+    # https://<bucket>.<endpoint>/<key>
+    public-domain: ""
+    access-key-id: "REDACTED_ACCESS_KEY_ID"
+    access-key-secret: "REDACTED_ACCESS_KEY_SECRET"
+# 如果你希望提示词优化也走本地配置，可在此覆盖：
+# ai:
+#   image:
+#     prompt-optimizer:
+#       api-key: ""

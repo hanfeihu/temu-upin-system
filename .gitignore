@@ -1,0 +1,35 @@
+# Node
+**/node_modules/
+
+# Vite
+**/dist/
+
+# Maven / Java
+**/target/
+
+# Uploads
+**/uploads/
+
+# Local-only Spring configs
+**/src/main/resources/application-local.yml
+
+# Secrets (local only)
+**/.secrets.env
+
+# Local-only OSS secrets
+**/oss-secrets.yml
+
+# OS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+**/.idea/
+**/.project
+**/.classpath
+**/.factorypath
+**/.settings/
+
+# Logs
+*.log

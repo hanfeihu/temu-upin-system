@@ -1,0 +1,115 @@
+spring:
+  application:
+    name: product-scene
+
+  # This project does not use authentication/authorization.
+  # Some upstream dependencies may bring in Spring Security transitively; disable its auto config.
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.security.servlet.SecurityAutoConfiguration
+      - org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration
+  
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://www.tminos.com:5432/tminos}
+    username: ${SPRING_DATASOURCE_USERNAME:postgres}
+    password: ${SPRING_DATASOURCE_PASSWORD:}
+    driver-class-name: org.postgresql.Driver
+  
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+  
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 50MB
+
+# AI Image Generation Configuration
+ai:
+  image:
+    providers:
+      - name: stability
+        enabled: true
+        base-url: https://api.stability.ai
+        api-key: ${STABILITY_API_KEY:}
+        model: sd3
+      - name: volcengine
+        enabled: true
+        api-key: ${VOLCENGINE_API_KEY:}
+        api-secret: ${VOLCENGINE_API_SECRET:}
+        model: img2img_real_mix_style
+      - name: runway
+        enabled: false
+        api-key: ${RUNWAY_API_KEY:}
+    
+    # 提示词优化（使用文本模型）
+    prompt-optimizer:
+      enabled: true
+      provider: tminos
+      base-url: http://cliapi.tminos.com
+      api-key: ${PROMPT_OPTIMIZER_API_KEY:}
+      model: ${PROMPT_OPTIMIZER_MODEL:gpt-5.2}
+
+  temu-attr-filler:
+    enabled: true
+    # base-url can be either https://cliapi.tminos.com or https://cliapi.tminos.com/v1
+    base-url: ${TEMU_ATTR_AI_BASE_URL:https://cliapi.tminos.com/v1}
+    api-key: ${TEMU_ATTR_AI_API_KEY:1234}
+    model: ${TEMU_ATTR_AI_MODEL:gpt-5.2}
+    timeout-ms: ${TEMU_ATTR_AI_TIMEOUT_MS:240000}
+    max-tokens: ${TEMU_ATTR_AI_MAX_TOKENS:2500}
+
+    # Special attribute rules (pid based)
+    # - force-empty-pids: AI must NOT fill these pids (leave empty)
+    # - required-input-nonzero-pids: when AI does fill these input pids, value must not be 0
+    # Example: 电池容量（mAh） pid=1485, 银材料净克重(g） pid=2172 (must be empty)
+    force-empty-pids: [1485, 2172]
+    required-input-nonzero-pids: []
+    required-input-nonzero-default: "1"
+    
+    default-settings:
+      thumbnail:
+        width: 800
+        height: 800
+        count: 1
+      carousel:
+        width: 1200
+        height: 1200
+        count: 5
+      detail:
+        width: 1200
+        height: 1600
+        count: 3
+
+# CORS Configuration
+cors:
+  allowed-origins: http://localhost:5173,http://localhost:3000
+
+temu:
+  goods:
+    access-token: ${TEMU_GOODS_ACCESS_TOKEN:}
+    translate-poll-interval-ms: ${TEMU_TRANSLATE_POLL_INTERVAL_MS:2500}
+    translate-poll-max-attempts: ${TEMU_TRANSLATE_POLL_MAX_ATTEMPTS:80}
+
+  # Automatic background publishing (equivalent to clicking the publish button on product-collections)
+  auto-publish:
+    worker:
+      enabled: ${TEMU_AUTO_PUBLISH_ENABLED:false}
+      poll-ms: ${TEMU_AUTO_PUBLISH_POLL_MS:300000}
+
+# Import-time title cleanup
+import:
+  title-clean:
+    remove-keywords: []
+
+
+
+# Global post-import worker poll interval (ms)
+post-import:
+  worker:
+    poll-ms: 300000
