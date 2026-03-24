@@ -11,7 +11,7 @@ spring:
     # 按需修改为你的数据库
     url: jdbc:postgresql://127.0.0.1:5432/tminos
     username: postgres
-    password: ""
+    password: "Han123..."
 
 aliyun:
   oss:
@@ -23,8 +23,8 @@ aliyun:
     # https://<bucket>.<endpoint>/<key>
     public-domain: ""
     # Fill locally via application-local.yml or env vars
-    access-key-id: ""
-    access-key-secret: ""
+    access-key-id: "${OSS_ACCESS_KEY_ID:}"
+    access-key-secret: "${OSS_ACCESS_KEY_SECRET:}"
 # 如果你希望提示词优化也走本地配置，可在此覆盖：
 # ai:
 #   image:
@@ -32,4 +32,9 @@ aliyun:
 #       api-key: ""
 # Global thread pool
 thread-pool:
-  workers: 24
+  workers: 4
+temu:
+  auto-publish:
+    worker:
+      enabled: true
+      poll-ms: 300000

@@ -355,6 +355,12 @@ public class ProductCollectionController {
                 return ResponseEntity.ok(ApiResponse.success("OK", r));
             }
             String msg = r == null ? "Publish failed" : (r.getMessage() == null ? "Publish failed" : r.getMessage());
+            if (r != null && Boolean.TRUE.equals(r.getBlockedByMainSaleSpec()) && r.getMainSaleSpecTaskId() != null) {
+                String taskToken = "taskId=" + r.getMainSaleSpecTaskId();
+                if (!msg.contains(taskToken)) {
+                    msg = msg + " (" + taskToken + ")";
+                }
+            }
             if (r != null && r.getRunId() != null) {
                 msg = msg + " (runId=" + r.getRunId() + ")";
             }

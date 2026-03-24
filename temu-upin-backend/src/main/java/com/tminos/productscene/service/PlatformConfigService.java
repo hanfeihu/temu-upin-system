@@ -15,18 +15,22 @@ import java.util.*;
 @Service
 public class PlatformConfigService {
 
+    public static final String KEY_TEMU_SHOP_REF_ID = "temu.shopRefId";
     public static final String KEY_DEFAULT_SITE_ID = "default.siteId";
     public static final String KEY_DEFAULT_WAREHOUSE_ID = "default.warehouseId";
     public static final String KEY_SKU_DEFAULT_STOCK = "sku.defaultStock";
+    public static final String KEY_SKU_MAX_STOCK = "sku.maxStock";
     public static final String KEY_ORIGIN_REGION1_SHORT = "origin.region1ShortName";
     public static final String KEY_ORIGIN_REGION2_ID = "origin.region2Id";
     public static final String KEY_SHIPMENT_FREIGHT_TEMPLATE_ID = "shipment.freightTemplateId";
     public static final String KEY_SHIPMENT_LIMIT_SECOND = "shipment.limitSecond";
 
     private static final List<String> KNOWN_KEYS = List.of(
+            KEY_TEMU_SHOP_REF_ID,
             KEY_DEFAULT_SITE_ID,
             KEY_DEFAULT_WAREHOUSE_ID,
             KEY_SKU_DEFAULT_STOCK,
+            KEY_SKU_MAX_STOCK,
             KEY_ORIGIN_REGION1_SHORT,
             KEY_ORIGIN_REGION2_ID,
             KEY_SHIPMENT_FREIGHT_TEMPLATE_ID,
@@ -65,14 +69,15 @@ public class PlatformConfigService {
     @Transactional
     public PlatformConfigDTO.ProfileResponse createProfile(PlatformConfigDTO.SaveProfileRequest req) {
         String name = req == null ? null : req.getName();
-        if (!StringUtils.hasText(name)) {
-            name = "Default";
+        String profileName = Objects.toString(name, "").trim();
+        if (!StringUtils.hasText(profileName)) {
+            profileName = "Default";
         }
         boolean wantDefault = req != null && Boolean.TRUE.equals(req.getIsDefault());
         Map<String, String> items = req == null ? null : req.getItems();
 
         PlatformConfigProfile p = new PlatformConfigProfile();
-        p.setName(name.trim());
+        p.setName(profileName);
         p.setIsDefault(wantDefault);
         p = profileRepo.save(p);
 
@@ -86,6 +91,7 @@ public class PlatformConfigService {
 
     @Transactional
     public PlatformConfigDTO.ProfileResponse updateProfile(Long id, PlatformConfigDTO.SaveProfileRequest req) {
+        Objects.requireNonNull(id, "id");
         PlatformConfigProfile p = profileRepo.findById(id)
                 .orElseThrow(() -> new EntityNotFoundException("config profile not found: " + id));
         if (req != null && StringUtils.hasText(req.getName())) {
@@ -96,7 +102,7 @@ public class PlatformConfigService {
             setDefault(p.getId());
             p = profileRepo.findById(id).orElse(p);
         }
-        profileRepo.save(p);
+        profileRepo.save(Objects.requireNonNull(p, "profile"));
 
         saveItems(p.getId(), req == null ? null : req.getItems());
         Map<String, String> items = loadItems(p.getId());
@@ -105,14 +111,16 @@ public class PlatformConfigService {
 
     @Transactional
     public void deleteProfile(Long id) {
+        Objects.requireNonNull(id, "id");
         PlatformConfigProfile p = profileRepo.findById(id)
                 .orElseThrow(() -> new EntityNotFoundException("config profile not found: " + id));
         itemRepo.deleteByProfileId(id);
-        profileRepo.delete(p);
+        profileRepo.delete(Objects.requireNonNull(p, "profile"));
     }
 
     @Transactional
     public void setDefault(Long profileId) {
+        Objects.requireNonNull(profileId, "profileId");
         PlatformConfigProfile target = profileRepo.findById(profileId)
                 .orElseThrow(() -> new EntityNotFoundException("config profile not found: " + profileId));
         List<PlatformConfigProfile> all = profileRepo.findAllByOrderByIdAsc();
@@ -142,6 +150,7 @@ public class PlatformConfigService {
         out.putIfAbsent(KEY_DEFAULT_SITE_ID, "100");
         out.putIfAbsent(KEY_DEFAULT_WAREHOUSE_ID, "WH-03304781516934009");
         out.putIfAbsent(KEY_SKU_DEFAULT_STOCK, "100");
+        out.putIfAbsent(KEY_SKU_MAX_STOCK, "10842");
         out.putIfAbsent(KEY_ORIGIN_REGION1_SHORT, "CN");
         out.putIfAbsent(KEY_ORIGIN_REGION2_ID, "43000000000016");
         out.putIfAbsent(KEY_SHIPMENT_FREIGHT_TEMPLATE_ID, "HFT-14851213328261424009");

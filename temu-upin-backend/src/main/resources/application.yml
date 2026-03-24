@@ -1,6 +1,14 @@
+server:
+  tomcat:
+    max-http-form-post-size: 100GB
+    max-swallow-size: 100GB
+
 spring:
+  profiles:
+    active: local   # 也可以不写，改用启动参数指定
   application:
     name: product-scene
+
 
   # This project does not use authentication/authorization.
   # Some upstream dependencies may bring in Spring Security transitively; disable its auto config.
@@ -26,8 +34,8 @@ spring:
   
   servlet:
     multipart:
-      max-file-size: 50MB
-      max-request-size: 50MB
+      max-file-size: 100GB
+      max-request-size: 100GB
 
 # AI Image Generation Configuration
 ai:
@@ -52,7 +60,7 @@ ai:
       enabled: true
       provider: tminos
       base-url: http://cliapi.tminos.com
-      api-key: ${PROMPT_OPTIMIZER_API_KEY:}
+      api-key: ${PROMPT_OPTIMIZER_API_KEY:1234}
       model: ${PROMPT_OPTIMIZER_MODEL:gpt-5.2}
 
   temu-attr-filler:
@@ -101,6 +109,16 @@ temu:
     worker:
       enabled: ${TEMU_AUTO_PUBLISH_ENABLED:false}
       poll-ms: ${TEMU_AUTO_PUBLISH_POLL_MS:300000}
+
+  main-sale-spec-infer:
+    worker:
+      enabled: ${TEMU_MAIN_SALE_SPEC_INFER_ENABLED:false}
+      poll-ms: ${TEMU_MAIN_SALE_SPEC_INFER_POLL_MS:300000}
+
+  attr-ai-fill:
+    worker:
+      enabled: ${TEMU_ATTR_AI_FILL_ENABLED:false}
+      poll-ms: ${TEMU_ATTR_AI_FILL_POLL_MS:300000}
 
 # Import-time title cleanup
 import:

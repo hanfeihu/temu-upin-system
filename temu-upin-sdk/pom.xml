@@ -28,12 +28,12 @@
       <artifactId>gson</artifactId>
       <version>2.10.1</version>
     </dependency>
-      <dependency>
-          <groupId>org.projectlombok</groupId>
-          <artifactId>lombok</artifactId>
-          <version>${lombok.version}</version>
-          <scope>provided</scope>
-      </dependency>
+    <dependency>
+      <groupId>org.projectlombok</groupId>
+      <artifactId>lombok</artifactId>
+      <version>${lombok.version}</version>
+      <scope>provided</scope>
+    </dependency>
     <dependency>
       <groupId>org.slf4j</groupId>
       <artifactId>slf4j-api</artifactId>
@@ -41,12 +41,6 @@
     </dependency>
   </dependencies>
 
-  <!--
-    IMPORTANT:
-    The parent project enables Lombok annotation processing.
-    On JDK 24 it can crash javac (TypeTag :: UNKNOWN).
-    This SDK module does not rely on annotation processors, so we disable them here.
-  -->
   <build>
     <plugins>
       <plugin>
@@ -54,7 +48,13 @@
         <artifactId>maven-compiler-plugin</artifactId>
         <configuration>
           <release>${java.version}</release>
-          <proc>none</proc>
+          <annotationProcessorPaths>
+            <path>
+              <groupId>org.projectlombok</groupId>
+              <artifactId>lombok</artifactId>
+              <version>${lombok.version}</version>
+            </path>
+          </annotationProcessorPaths>
         </configuration>
       </plugin>
     </plugins>

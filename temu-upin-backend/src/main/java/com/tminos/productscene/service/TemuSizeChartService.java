@@ -1,7 +1,7 @@
 package com.tminos.productscene.service;
 
 import com.tminos.productscene.entity.ProductCollection;
-import com.tminos.temu.openapi.dto.AddGloGoodsRequest;
+import com.tminos.temu.upin.sdk.v2.dto.AddGloGoodsRequest;
 import com.tminos.temu.upin.sdk.v2.common.TemuOpenApiCredentials;
 import com.tminos.temu.upin.sdk.v2.dto.TemuApiResponse;
 import com.tminos.temu.upin.sdk.v2.sizechart.TemuSizeChartV2Client;
@@ -22,10 +22,10 @@ public class TemuSizeChartService {
 
     private static final Logger log = LoggerFactory.getLogger(TemuSizeChartService.class);
 
-    private final PlatformConfigService platformConfigService;
+    private final TemuOpenApiCredentialService temuOpenApiCredentialService;
 
-    public TemuSizeChartService(PlatformConfigService platformConfigService) {
-        this.platformConfigService = platformConfigService;
+    public TemuSizeChartService(TemuOpenApiCredentialService temuOpenApiCredentialService) {
+        this.temuOpenApiCredentialService = temuOpenApiCredentialService;
     }
 
     public Map<String, Object> debugQueryForProduct(ProductCollection pc,
@@ -38,7 +38,7 @@ public class TemuSizeChartService {
             return out;
         }
         int leafCatId = parseLeafCatId(pc.getTemuCatid());
-        TemuOpenApiCredentials creds = platformConfigService.getDefaultTemuOpenApiCredentialsOrThrow();
+        TemuOpenApiCredentials creds = temuOpenApiCredentialService.getDefaultTemuOpenApiCredentialsOrThrow();
         TemuSizeChartV2Client client = new TemuSizeChartV2Client(creds);
 
         String api = normalizeApiType(apiType);
@@ -103,7 +103,7 @@ public class TemuSizeChartService {
         out.put("temuCatid", pc.getTemuCatid());
         out.put("temuCatname", pc.getTemuCatname());
 
-        TemuOpenApiCredentials creds = platformConfigService.getDefaultTemuOpenApiCredentialsOrThrow();
+        TemuOpenApiCredentials creds = temuOpenApiCredentialService.getDefaultTemuOpenApiCredentialsOrThrow();
         out.put("shopId", creds.getShopId());
         out.put("appKey", creds.getAppKey());
         TemuSizeChartV2Client client = new TemuSizeChartV2Client(creds);
@@ -207,7 +207,7 @@ public class TemuSizeChartService {
         int leafCatId = parseLeafCatId(pc.getTemuCatid());
         if (leafCatId <= 0) return null;
 
-        TemuOpenApiCredentials creds = platformConfigService.getDefaultTemuOpenApiCredentialsOrThrow();
+        TemuOpenApiCredentials creds = temuOpenApiCredentialService.getDefaultTemuOpenApiCredentialsOrThrow();
         TemuSizeChartV2Client client = new TemuSizeChartV2Client(creds);
 
         Integer classId = null;

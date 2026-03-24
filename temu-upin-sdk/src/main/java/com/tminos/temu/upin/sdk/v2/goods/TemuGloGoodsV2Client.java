@@ -4,6 +4,8 @@ import com.google.gson.Gson;
 import com.google.gson.reflect.TypeToken;
 import com.tminos.temu.upin.sdk.v2.common.TemuOpenApiCredentials;
 import com.tminos.temu.upin.sdk.v2.common.TemuOpenApiEndpoints;
+import com.tminos.temu.upin.sdk.v2.dto.AddGloGoodsRequest;
+import com.tminos.temu.upin.sdk.v2.dto.AddGloGoodsResponse;
 import com.tminos.temu.upin.sdk.v2.dto.TemuApiResponse;
 import com.tminos.temu.upin.sdk.v2.util.HttpClient;
 import com.tminos.temu.upin.sdk.v2.util.JsonUtil;
@@ -51,9 +53,20 @@ public class TemuGloGoodsV2Client {
         return addGloGoodsRaw(body);
     }
 
+    public String addGloGoodsRaw(AddGloGoodsRequest request) throws Exception {
+        return addGloGoodsRaw((Object) request);
+    }
+
 
     public <T> TemuApiResponse<T> addGloGoods(Map<String, Object> requestBody, Class<T> resultType) throws Exception {
         return post(mergeIntoBase(requestBody), resultType);
+    }
+
+    public TemuApiResponse<AddGloGoodsResponse> addGloGoods(AddGloGoodsRequest request) throws Exception {
+        Gson gson = new Gson();
+        Type mapType = new TypeToken<Map<String, Object>>() {}.getType();
+        Map<String, Object> body = request == null ? null : gson.fromJson(gson.toJson(request), mapType);
+        return addGloGoods(body, AddGloGoodsResponse.class);
     }
 
     private Map<String, Object> mergeIntoBase(Map<String, Object> requestBody) {
@@ -83,12 +96,9 @@ public class TemuGloGoodsV2Client {
         sanitizeParams(params);
         params.put("sign", SignatureUtil.generateSignature(params, creds.getAppSecret()));
         String json = JsonUtil.toJson(params);
-        TemuApiResponse<T> first = parseResponse(HttpClient.sendPostRequest(TemuOpenApiEndpoints.API_BASE_URL_PA, json), resultType);
-        if (first != null && (first.isSuccess() || !isBlank(first.getErrorMsg()))) {
-            return first;
-        }
+
         TemuApiResponse<T> second = parseResponse(HttpClient.sendPostRequest(TemuOpenApiEndpoints.API_BASE_URL, json), resultType);
-        return second == null ? first : second;
+        return second;
     }
 
     private String postRaw(Map<String, Object> params) throws Exception {

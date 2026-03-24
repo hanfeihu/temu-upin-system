@@ -308,20 +308,31 @@
                 </div>
 
                 <div class="temu-attr-input">
-                  <a-select
-                    v-if="p.values && p.values.length"
-                    size="small"
-                    v-model:value="temuAttrValues[attrKey(p)]"
-                    :options="visibleAttrOptions(p)"
-                    :mode="p.chooseMaxNum && p.chooseMaxNum > 1 ? 'multiple' : undefined"
-                    allow-clear
-                    :placeholder="(p.__rule && (p.__rule.fillMode === 'FORCE_EMPTY' || p.__rule.fillMode === 'FIXED_VALUE'))
-                      ? '已锁定'
-                      : (isChildAttr(p) && !childAllowedInfo(p).hasParentSelected ? (childAllowedInfo(p).parentHint || '请先选择父属性') : '请选择')"
-                    style="width: 100%"
-                    :disabled="p.__rule && (p.__rule.fillMode === 'FORCE_EMPTY' || p.__rule.fillMode === 'FIXED_VALUE')"
-                    @change="onTemuAttrChanged"
-                  />
+                  <div v-if="hasAttrSelectableValues(p)" class="temu-attr-input-stack">
+                    <a-select
+                      size="small"
+                      v-model:value="temuAttrValues[attrKey(p)]"
+                      :options="visibleAttrOptions(p)"
+                      :mode="p.chooseMaxNum && p.chooseMaxNum > 1 ? 'multiple' : undefined"
+                      allow-clear
+                      :placeholder="(p.__rule && (p.__rule.fillMode === 'FORCE_EMPTY' || p.__rule.fillMode === 'FIXED_VALUE'))
+                        ? '已锁定'
+                        : (isChildAttr(p) && !childAllowedInfo(p).hasParentSelected ? (childAllowedInfo(p).parentHint || '请先选择父属性') : '请选择')"
+                      style="width: 100%"
+                      :disabled="p.__rule && (p.__rule.fillMode === 'FORCE_EMPTY' || p.__rule.fillMode === 'FIXED_VALUE')"
+                      @change="onTemuAttrChanged"
+                    />
+                    <a-input
+                      v-if="hasAttrNumberInput(p)"
+                      size="small"
+                      v-model:value="temuAttrNumberValues[attrKey(p)]"
+                      allow-clear
+                      :placeholder="attrNumberInputPlaceholder(p)"
+                      :disabled="p.__rule && (p.__rule.fillMode === 'FORCE_EMPTY' || p.__rule.fillMode === 'FIXED_VALUE')"
+                    >
+                      <template v-if="attrUnitText(p)" #suffix>{{ attrUnitText(p) }}</template>
+                    </a-input>
+                  </div>
                   <a-input
                     v-else
                     size="small"
@@ -639,6 +650,7 @@ const temuRecord = ref(null)
 const temuAttrOpen = ref(false)
 const temuAttrGroups = ref([])
 const temuAttrValues = reactive({})
+const temuAttrNumberValues = reactive({})
 const temuAttrParentSelectedVids = reactive({})
 const savingTemuAttr = ref(false)
 const aiFillingTemuAttr = ref(false)
@@ -1033,11 +1045,34 @@ const visibleAttrOptions = (p) => {
   return childAllowedInfo(p).allowed
 }
 
+const hasAttrSelectableValues = (p) => {
+  return Array.isArray(p?.values) && p.values.length > 0
+}
+
+const hasAttrNumberInput = (p) => {
+  if (!hasAttrSelectableValues(p)) return false
+  if (String(p.numberInputTitle || '').trim()) return true
+  if (Number(p.controlType || 0) === 16) return true
+  return false
+}
+
+const attrNumberInputPlaceholder = (p) => {
+  const title = String(p?.numberInputTitle || '').trim()
+  if (title) return `请输入${title}`
+  return '请输入数值'
+}
+
+const attrUnitText = (p) => {
+  if (!Array.isArray(p?.valueUnit) || !p.valueUnit.length) return ''
+  return String(p.valueUnit[0] ?? '').trim()
+}
+
 const openTemuAttributes = async (r) => {
   if (!r?.id) return
   temuRecord.value = r
   temuAttrGroups.value = []
   for (const k of Object.keys(temuAttrValues)) delete temuAttrValues[k]
+  for (const k of Object.keys(temuAttrNumberValues)) delete temuAttrNumberValues[k]
   for (const k of Object.keys(temuAttrParentSelectedVids)) delete temuAttrParentSelectedVids[k]
 
   // Load existing saved attributes (from detail API)
@@ -1062,6 +1097,9 @@ const openTemuAttributes = async (r) => {
               temuAttrValues[key] = vids
             } else if (vids.length === 1) {
               temuAttrValues[key] = vids[0]
+            }
+            if (p.numberInputValue !== undefined && p.numberInputValue !== null && String(p.numberInputValue).trim() !== '') {
+              temuAttrNumberValues[key] = String(p.numberInputValue)
             }
           }
         } else {
@@ -1128,6 +1166,7 @@ const openTemuAttributes = async (r) => {
         const mode = rule.fillMode
         if (mode === 'FORCE_EMPTY') {
           temuAttrValues[attrKey(p)] = ''
+          temuAttrNumberValues[attrKey(p)] = ''
         }
         if (mode === 'FIXED_VALUE') {
           const v = String(rule.fixedValue || '')
@@ -1199,6 +1238,9 @@ const aiFillTemuAttr = async () => {
       } else if (vids.length === 1) {
         temuAttrValues[key] = vids[0]
       }
+      if (p.numberInputValue !== undefined && p.numberInputValue !== null && String(p.numberInputValue).trim() !== '') {
+        temuAttrNumberValues[key] = String(p.numberInputValue)
+      }
     }
 
     // Re-apply rules after AI fill (FORCE_EMPTY / FIXED_VALUE should win)
@@ -1207,6 +1249,7 @@ const aiFillTemuAttr = async () => {
       if (!rule) continue
       if (rule.fillMode === 'FORCE_EMPTY') {
         temuAttrValues[attrKey(g)] = ''
+        temuAttrNumberValues[attrKey(g)] = ''
       }
       if (rule.fillMode === 'FIXED_VALUE') {
         temuAttrValues[attrKey(g)] = String(rule.fixedValue || '')
@@ -1263,6 +1306,13 @@ const saveTemuAttributes = async () => {
       message.error(`请填写必填属性：${p.name}`)
       return
     }
+    if (hasAttrNumberInput(p)) {
+      const nv = temuAttrNumberValues[attrKey(p)]
+      if (nv === undefined || nv === null || String(nv).trim() === '') {
+        message.error(`请填写属性数值：${p.name}`)
+        return
+      }
+    }
   }
 
   savingTemuAttr.value = true
@@ -1307,6 +1357,7 @@ const saveTemuAttributes = async () => {
     if (isFixedValueByRule(p)) {
       effectiveSel = String(p.__rule?.fixedValue || '')
     }
+    let effectiveNumber = temuAttrNumberValues[attrKey(p)]
 
     const isEmpty =
       effectiveSel === undefined ||
@@ -1314,7 +1365,10 @@ const saveTemuAttributes = async () => {
       (Array.isArray(effectiveSel) ? effectiveSel.length === 0 : String(effectiveSel).trim() === '')
       if (isEmpty) continue
 
-      const selectedVids = Array.isArray(effectiveSel) ? effectiveSel.map(x => String(x)) : [String(effectiveSel)]
+      const hasSelectableValues = hasAttrSelectableValues(p)
+      const selectedVids = hasSelectableValues
+        ? (Array.isArray(effectiveSel) ? effectiveSel.map(x => String(x)) : [String(effectiveSel)])
+        : []
 
     // Child attribute validation: if this property has parent rules, only keep selections that satisfy
     // current parent selection. If no matching parent is selected, skip persisting the child.
@@ -1354,7 +1408,7 @@ const saveTemuAttributes = async () => {
     }
 
     const valueTextMap = new Map((p.values || []).map(v => [String(v.vid), v.value]))
-    const finalSelectedValues = (p.values && p.values.length)
+    const finalSelectedValues = hasSelectableValues
       ? finalSelectedVids.map(vid => ({ vid: Number(vid), value: valueTextMap.get(String(vid)) || String(vid) }))
       : []
 
@@ -1367,8 +1421,10 @@ const saveTemuAttributes = async () => {
       required: !!p.required,
       selectedVids: finalSelectedVids,
       selectedValues: finalSelectedValues,
-       freeText: (!p.values || !p.values.length) ? (Array.isArray(effectiveSel) ? effectiveSel.join(',') : String(effectiveSel)) : null,
-       numberInputValue: (!p.values || !p.values.length) ? (Array.isArray(effectiveSel) ? effectiveSel.join(',') : String(effectiveSel)) : ''
+      freeText: !hasSelectableValues ? (Array.isArray(effectiveSel) ? effectiveSel.join(',') : String(effectiveSel)) : null,
+      numberInputValue: !hasSelectableValues
+        ? ''
+        : (hasAttrNumberInput(p) ? String(effectiveNumber == null ? '' : effectiveNumber) : '')
     })
   }
 
