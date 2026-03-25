@@ -26,9 +26,9 @@
             </template>
             <template v-else-if="column.key === 'items'">
               <div class="items">
-                <div class="item" v-for="k in knownKeys" :key="k">
-                  <span class="k">{{ k }}</span>
-                  <span class="v mono">{{ record.items?.[k] ?? '-' }}</span>
+                  <div class="item" v-for="meta in keyMetas" :key="meta.key">
+                    <span class="k">{{ meta.label }}</span>
+                    <span class="v mono">{{ formatConfigValue(meta.key, record.items?.[meta.key]) }}</span>
                 </div>
               </div>
             </template>
@@ -68,8 +68,18 @@
 
           <a-divider />
 
-          <a-form-item v-for="k in knownKeys" :key="k" :label="k">
-            <a-input v-model:value="form.items[k]" />
+          <a-form-item v-for="meta in keyMetas" :key="meta.key" :label="meta.label">
+            <a-select
+              v-if="meta.key === SHOP_KEY"
+              v-model:value="form.items[meta.key]"
+              allow-clear
+              show-search
+              placeholder="请选择默认店铺"
+              :loading="shopsLoading"
+              :filter-option="filterShopOption"
+              :options="shopOptions"
+            />
+            <a-input v-else v-model:value="form.items[meta.key]" />
           </a-form-item>
         </a-form>
       </a-modal>
@@ -82,15 +92,19 @@ import { onMounted, reactive, ref } from 'vue'
 import { message } from 'ant-design-vue'
 import ProLayout from '@/platform/components/ProLayout.vue'
 import { platformConfigApi } from '@/platform/api/platformConfig'
+import { temuShopsApi } from '@/platform/api/temuShops'
 
-const knownKeys = [
-  'default.siteId',
-  'default.warehouseId',
-  'sku.defaultStock',
-  'origin.region1ShortName',
-  'origin.region2Id',
-  'shipment.freightTemplateId',
-  'shipment.limitSecond'
+const SHOP_KEY = 'temu.shopRefId'
+
+const keyMetas = [
+  { key: SHOP_KEY, label: '默认 TEMU 店铺' },
+  { key: 'default.siteId', label: '默认站点 ID' },
+  { key: 'default.warehouseId', label: '默认仓库 ID' },
+  { key: 'sku.defaultStock', label: '默认库存' },
+  { key: 'origin.region1ShortName', label: '产地区域1简称' },
+  { key: 'origin.region2Id', label: '产地区域2 ID' },
+  { key: 'shipment.freightTemplateId', label: '运费模板 ID' },
+  { key: 'shipment.limitSecond', label: '发货时限秒数' }
 ]
 
 const columns = [
@@ -101,6 +115,50 @@ const columns = [
 
 const loading = ref(false)
 const profiles = ref([])
+const shopsLoading = ref(false)
+const shops = ref([])
+
+const shopOptions = ref([])
+
+const loadShops = async () => {
+  shopsLoading.value = true
+  try {
+    const res = await temuShopsApi.list()
+    if (res?.success) {
+      shops.value = Array.isArray(res.data) ? res.data : []
+      shopOptions.value = shops.value.map((shop) => ({
+        value: String(shop.id),
+        label: `${shop.shopName || '未命名店铺'}（${shop.shopId || '-'}）${shop.enabled ? '' : ' [禁用]'}`
+      }))
+      return
+    }
+    message.error(res?.message || '加载店铺失败')
+  } catch (e) {
+    message.error(e.message || '加载店铺失败')
+  } finally {
+    shopsLoading.value = false
+  }
+}
+
+const findShop = (value) => {
+  const id = String(value || '').trim()
+  if (!id) return null
+  return shops.value.find((shop) => String(shop.id) === id) || null
+}
+
+const formatConfigValue = (key, value) => {
+  const text = value == null ? '' : String(value).trim()
+  if (!text) return '-'
+  if (key !== SHOP_KEY) return text
+  const shop = findShop(text)
+  if (!shop) return text
+  return `${shop.shopName || '未命名店铺'}（${shop.shopId || '-'}）`
+}
+
+const filterShopOption = (input, option) => {
+  const label = String(option?.label || '').toLowerCase()
+  return label.includes(String(input || '').toLowerCase())
+}
 
 const reload = async () => {
   loading.value = true
@@ -131,7 +189,7 @@ const resetForm = () => {
   form.name = ''
   form.isDefault = false
   const out = {}
-  for (const k of knownKeys) out[k] = ''
+  for (const meta of keyMetas) out[meta.key] = ''
   form.items = out
 }
 
@@ -146,8 +204,8 @@ const openEdit = (r) => {
   resetForm()
   form.name = r?.name || ''
   form.isDefault = !!r?.isDefault
-  for (const k of knownKeys) {
-    form.items[k] = r?.items?.[k] ?? ''
+  for (const meta of keyMetas) {
+    form.items[meta.key] = r?.items?.[meta.key] ?? ''
   }
   editOpen.value = true
 }
@@ -208,6 +266,7 @@ const remove = async (r) => {
 }
 
 onMounted(reload)
+onMounted(loadShops)
 </script>
 
 <style scoped>

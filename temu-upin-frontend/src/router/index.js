@@ -22,6 +22,11 @@ const routes = [
     component: () => import('@/views/PlatformPublishLogs.vue')
   },
   {
+    path: '/platform/publish-success-cases',
+    name: 'PlatformPublishSuccessCases',
+    component: () => import('@/views/PlatformPublishSuccessCases.vue')
+  },
+  {
     path: '/platform/temu-auto-publish-logs',
     name: 'PlatformTemuAutoPublishLogs',
     component: () => import('@/views/PlatformTemuAutoPublishLogs.vue')
@@ -35,16 +40,6 @@ const routes = [
     path: '/platform/temu-main-sale-spec-inference',
     name: 'PlatformTemuMainSaleSpecInference',
     component: () => import('@/views/PlatformTemuMainSaleSpecInference.vue')
-  },
-  {
-    path: '/platform/spec-mappings/profiles',
-    name: 'PlatformSpecMappingProfiles',
-    component: () => import('@/views/PlatformSpecMappingProfiles.vue')
-  },
-  {
-    path: '/platform/spec-mappings/workbench/:spuId',
-    name: 'PlatformSpecMappingWorkbench',
-    component: () => import('@/views/PlatformSpecMappingWorkbench.vue')
   },
   {
     path: '/platform/ai-channels',

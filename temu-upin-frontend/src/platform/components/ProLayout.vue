@@ -43,6 +43,13 @@
             发布日志
           </a-menu-item>
 
+          <a-menu-item key="/platform/publish-success-cases">
+            <template #icon>
+              <file-text-outlined />
+            </template>
+            发布成功案例
+          </a-menu-item>
+
           <a-menu-item key="/platform/temu-auto-publish-logs">
             <template #icon>
               <file-text-outlined />
@@ -76,13 +83,6 @@
                 <file-text-outlined />
               </template>
               主销售属性推理
-            </a-menu-item>
-
-           <a-menu-item key="/platform/spec-mappings/profiles">
-              <template #icon>
-                <setting-outlined />
-              </template>
-              1688 与 TEMU 规格映射
             </a-menu-item>
 
             <a-menu-item key="/platform/temu-attr-ai-fill">
@@ -125,6 +125,13 @@
                <setting-outlined />
              </template>
              标题过滤词
+           </a-menu-item>
+
+           <a-menu-item key="/platform/ai-channels">
+             <template #icon>
+               <setting-outlined />
+             </template>
+             AI 渠道管理
            </a-menu-item>
         </a-menu>
 
@@ -178,18 +185,19 @@ const selectedKeys = computed(() => {
   if (p.startsWith('/platform/product-collections')) return ['/platform/product-collections']
   if (p.startsWith('/platform/config')) return ['/platform/config']
   if (p.startsWith('/platform/publish-logs')) return ['/platform/publish-logs']
+  if (p.startsWith('/platform/publish-success-cases')) return ['/platform/publish-success-cases']
   if (p.startsWith('/platform/temu-auto-publish-logs')) return ['/platform/temu-auto-publish-logs']
   if (p.startsWith('/platform/post-import-logs')) return ['/platform/post-import-logs']
   if (p.startsWith('/platform/biz-logs')) return ['/platform/biz-logs']
   if (p.startsWith('/platform/temu-attr-rules')) return ['/platform/temu-attr-rules']
   if (p.startsWith('/platform/temu-main-sale-spec-inference')) return ['/platform/temu-main-sale-spec-inference']
-  if (p.startsWith('/platform/spec-mappings')) return ['/platform/spec-mappings/profiles']
   if (p.startsWith('/platform/temu-attr-ai-fill')) return ['/platform/temu-attr-ai-fill']
   if (p.startsWith('/platform/temu-apps')) return ['/platform/temu-apps']
   if (p.startsWith('/platform/temu-shops')) return ['/platform/temu-shops']
   if (p.startsWith('/platform/ocr-tasks')) return ['/platform/ocr-tasks']
   if (p.startsWith('/platform/ocr-filter-words')) return ['/platform/ocr-filter-words']
   if (p.startsWith('/platform/title-filter-words')) return ['/platform/title-filter-words']
+  if (p.startsWith('/platform/ai-channels')) return ['/platform/ai-channels']
   return []
 })
 

@@ -1,19 +1,24 @@
 package com.tminos.productscene.service;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tminos.productscene.dto.TemuPublishDTO;
 import com.tminos.productscene.entity.ProductCollection;
 import com.tminos.productscene.entity.ProductCollectionTemuSku;
+import com.tminos.productscene.entity.TemuMainSaleSpecInferenceTask;
 import com.tminos.productscene.entity.TemuImageMeta;
 import com.tminos.productscene.repository.ProductCollectionRepository;
 import com.tminos.productscene.repository.ProductCollectionTemuSkuRepository;
+import com.tminos.productscene.repository.TemuMainSaleSpecInferenceTaskRepository;
 import com.tminos.productscene.config.AITemuAttrFillerConfig;
-import com.tminos.temu.openapi.client.goods.CategoryApiClient;
-import com.tminos.temu.openapi.client.goods.GloGoodsApiClient;
-import com.tminos.temu.openapi.client.goods.ImageApiClient;
-import com.tminos.temu.openapi.config.TemuOpenApiGoodsConfig;
-import com.tminos.temu.openapi.dto.AddGloGoodsRequest;
+
+import com.tminos.temu.upin.sdk.v2.category.CategoryApiClient;
+import com.tminos.temu.upin.sdk.v2.common.TemuOpenApiCredentials;
+import com.tminos.temu.upin.sdk.v2.dto.AddGloGoodsRequest;
+import com.tminos.temu.upin.sdk.v2.dto.AddGloGoodsResponse;
+import com.tminos.temu.upin.sdk.v2.dto.TemuApiResponse;
+import com.tminos.temu.upin.sdk.v2.goods.TemuGloGoodsV2Client;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -30,31 +35,46 @@ public class TemuPublishService {
     private final ProductCollectionService productCollectionService;
     private final ProductCollectionRepository productCollectionRepository;
     private final ProductCollectionTemuSkuRepository temuSkuRepository;
+    private final TemuMainSaleSpecInferenceTaskRepository mainSaleSpecInferenceTaskRepository;
+    private final TemuMainSaleSpecInferenceService mainSaleSpecInferenceService;
     private final PlatformConfigService platformConfigService;
     private final TemuImageNormalizeService imageNormalizeService;
     private final TemuImageMetaService temuImageMetaService;
     private final TemuPublishLogService publishLogService;
+    private final TemuPublishSuccessCaseService publishSuccessCaseService;
+    private final TemuAttrAiFillService temuAttrAiFillService;
     private final ObjectMapper objectMapper;
     private final AITemuAttrFillerConfig aiTemuAttrFillerConfig;
+    private final TemuOpenApiCredentialService temuOpenApiCredentialService;
 
     public TemuPublishService(ProductCollectionService productCollectionService,
                              ProductCollectionRepository productCollectionRepository,
                              ProductCollectionTemuSkuRepository temuSkuRepository,
+                             TemuMainSaleSpecInferenceTaskRepository mainSaleSpecInferenceTaskRepository,
+                             TemuMainSaleSpecInferenceService mainSaleSpecInferenceService,
                              PlatformConfigService platformConfigService,
                              TemuImageNormalizeService imageNormalizeService,
                              TemuImageMetaService temuImageMetaService,
                              TemuPublishLogService publishLogService,
+                             TemuPublishSuccessCaseService publishSuccessCaseService,
+                             TemuAttrAiFillService temuAttrAiFillService,
                              ObjectMapper objectMapper,
-                             AITemuAttrFillerConfig aiTemuAttrFillerConfig) {
+                             AITemuAttrFillerConfig aiTemuAttrFillerConfig,
+                             TemuOpenApiCredentialService temuOpenApiCredentialService) {
         this.productCollectionService = productCollectionService;
         this.productCollectionRepository = productCollectionRepository;
         this.temuSkuRepository = temuSkuRepository;
+        this.mainSaleSpecInferenceTaskRepository = mainSaleSpecInferenceTaskRepository;
+        this.mainSaleSpecInferenceService = mainSaleSpecInferenceService;
         this.platformConfigService = platformConfigService;
         this.imageNormalizeService = imageNormalizeService;
         this.temuImageMetaService = temuImageMetaService;
         this.publishLogService = publishLogService;
+        this.publishSuccessCaseService = publishSuccessCaseService;
+        this.temuAttrAiFillService = temuAttrAiFillService;
         this.objectMapper = objectMapper;
         this.aiTemuAttrFillerConfig = aiTemuAttrFillerConfig;
+        this.temuOpenApiCredentialService = temuOpenApiCredentialService;
     }
 
     @Transactional
@@ -93,6 +113,25 @@ public class TemuPublishService {
             markPublishFailed(pc, runId, "missing temu category");
             return new TemuPublishDTO.PublishResponse(false, "temu 类目为空，请先匹配并保存", runId, null, null, null, warnings);
         }
+
+        try {
+            TemuAttrAiFillService.EnsureForPublishResult ensure = temuAttrAiFillService.ensureReadyForPublish(spuId, true);
+            if (ensure != null) {
+                Map<String, Object> data = new LinkedHashMap<>();
+                data.put("taskId", ensure.task() == null ? null : ensure.task().getId());
+                data.put("created", ensure.created());
+                data.put("executed", ensure.executed());
+                data.put("appliedToProduct", ensure.appliedToProduct());
+                publishLogService.data(runId, "ATTR_AI", "ensure temu attr ai task", data);
+                if (ensure.appliedToProduct()) {
+                    pc = productCollectionService.get(spuId);
+                    warnings.add("publish auto-filled TEMU attributes from AI task result");
+                }
+            }
+        } catch (Exception e) {
+            publishLogService.warn(runId, "ATTR_AI", "ensure temu attr ai task failed: " + safeErrMessage(e));
+        }
+
         if (!StringUtils.hasText(pc.getTemuAttributes())) {
             publishLogService.error(runId, "VALIDATE", "missing temu attributes", null);
             publishLogService.finishFailed(runId, "missing temu attributes", null, null);
@@ -107,13 +146,21 @@ public class TemuPublishService {
             return new TemuPublishDTO.PublishResponse(false, "TEMU SKU 为空，请先做 SKU 转换", runId, null, null, null, warnings);
         }
 
+        MainSaleSpecDraftGate draftGate = ensureMainSaleSpecDraftReadyForPublish(spuId, runId, warnings);
+        if (!draftGate.ready()) {
+            String message = draftGate.message();
+            publishLogService.warn(runId, "SPEC_GATE", message);
+            publishLogService.finishFailed(runId, message, null, null);
+            markPublishFailed(pc, runId, message);
+            return blockedByMainSaleSpecResponse(message, runId, warnings, draftGate.task());
+        }
+
         publishLogService.info(runId, "VALIDATE", "preconditions ok");
 
         // 2) load default config
         Map<String, String> cfg = platformConfigService.getDefaultConfigOrThrow();
         int siteId = parseInt(cfg.get(PlatformConfigService.KEY_DEFAULT_SITE_ID), 100);
         String warehouseId = firstNonBlank(cfg.get(PlatformConfigService.KEY_DEFAULT_WAREHOUSE_ID), "WH-03304781516934009");
-        int defaultStock = parseInt(cfg.get(PlatformConfigService.KEY_SKU_DEFAULT_STOCK), 100);
         String originRegion1 = firstNonBlank(cfg.get(PlatformConfigService.KEY_ORIGIN_REGION1_SHORT), "CN");
         long originRegion2Id = parseLong(cfg.get(PlatformConfigService.KEY_ORIGIN_REGION2_ID), 43000000000016L);
         String freightTemplateId = firstNonBlank(cfg.get(PlatformConfigService.KEY_SHIPMENT_FREIGHT_TEMPLATE_ID), "HFT-14851213328261424009");
@@ -121,12 +168,17 @@ public class TemuPublishService {
 
         publishLogService.data(runId, "CONFIG", "loaded default config", cfg);
 
-        if (!TemuOpenApiGoodsConfig.isConfigComplete()) {
-            publishLogService.error(runId, "CONFIG", "sdk config incomplete", null);
-            publishLogService.finishFailed(runId, "sdk config incomplete", null, null);
-            markPublishFailed(pc, runId, "sdk config incomplete");
-            return new TemuPublishDTO.PublishResponse(false, "TEMU SDK 配置不完整（access token/app key/secret）", runId, null, null, null, warnings);
+        TemuOpenApiCredentials creds;
+        try {
+            creds = temuOpenApiCredentialService.getDefaultTemuOpenApiCredentialsOrThrow();
+        } catch (Exception e) {
+            publishLogService.error(runId, "CONFIG", "temu credentials missing", null);
+            publishLogService.finishFailed(runId, "temu credentials missing", null, null);
+            markPublishFailed(pc, runId, "temu credentials missing");
+            return new TemuPublishDTO.PublishResponse(false, "TEMU 配置不完整（店铺/appKey/appSecret/token）", runId, null, null, null, warnings);
         }
+
+        CategoryApiClient categoryClient = new CategoryApiClient(creds);
 
         // 3) normalize images (800x800 + kwcdn)
         // Performance: batch fetch cached image meta so we can skip probe/upload when already normalized.
@@ -199,8 +251,6 @@ public class TemuPublishService {
         }
 
         // 4) build request body (DTO form: AddGloGoodsRequest)
-        GloGoodsApiClient.setDefaultSiteId(siteId);
-        GloGoodsApiClient.setDefaultWarehouseId(warehouseId);
 
         AddGloGoodsRequest req = new AddGloGoodsRequest();
         String enTitle = sanitizeEnglishName(maybeTranslateTitleToEn(pc.getProductName(), warnings), warnings);
@@ -274,113 +324,36 @@ public class TemuPublishService {
         }
         req.setProductPropertyReqs(props);
 
+        StoredMainSaleSpecDraft storedDraft = draftGate.draft();
+
         // build SKU reqs first (spec ids will be assigned after we create specs)
         String fallbackThumb = !carousel.isEmpty() ? carousel.get(0) : mainImage;
         List<AddGloGoodsRequest.ProductSkuReq> skuReqs = new ArrayList<>();
-        int idx = 0;
-        for (ProductCollectionTemuSku s : temuSkus) {
-            if (s == null) continue;
-            AddGloGoodsRequest.ProductSkuReq sku = new AddGloGoodsRequest.ProductSkuReq();
-            sku.setCurrencyType("CNY");
-
-            int cents = priceToCents(s.getSupplyPrice());
-            sku.setSiteSupplierPrices(new ArrayList<>(List.of(
-                    new AddGloGoodsRequest.ProductSkuReq.SiteSupplierPrice(siteId, cents)
-            )));
-
-            AddGloGoodsRequest.ProductSkuReq.ProductSkuStockQuantityReq stockReq = new AddGloGoodsRequest.ProductSkuReq.ProductSkuStockQuantityReq();
-            stockReq.setWarehouseStockQuantityReqs(new ArrayList<>(List.of(
-                    new AddGloGoodsRequest.ProductSkuReq.ProductSkuStockQuantityReq.WarehouseStockQuantityReq(defaultStock, warehouseId, null)
-            )));
-            sku.setProductSkuStockQuantityReq(stockReq);
-
-            String thumb = firstNonBlank(s.getImage(), fallbackThumb);
-            sku.setThumbUrl(thumb);
-
-            // wh ext attr: weight mg + volume mm
-            int weightMg = Math.max(30, s.getWeightG() == null ? 150 : s.getWeightG()) * 1000;
-            int lenMm = cmToMmOrDefault(s.getLengthCm(), 10);
-            int widthMm = cmToMmOrDefault(s.getWidthCm(), 5);
-            int heightMm = cmToMmOrDefault(s.getHeightCm(), 5);
-
-            // TEMU constraint: longest >= middle >= shortest
-            int[] dims = new int[]{Math.max(1, lenMm), Math.max(1, widthMm), Math.max(1, heightMm)};
-            java.util.Arrays.sort(dims);
-            // after sort ascending: [shortest, middle, longest]
-            int longest = dims[2];
-            int middle = dims[1];
-            int shortest = dims[0];
-
-            // Category constraint example: shortest side must be >= 0.2cm (2mm)
-            if (shortest > 0 && shortest < 2) {
-                shortest = 2;
-            }
-
-            AddGloGoodsRequest.ProductSkuReq.ProductSkuWeightReq weightReq = new AddGloGoodsRequest.ProductSkuReq.ProductSkuWeightReq();
-            weightReq.setValue(weightMg);
-            AddGloGoodsRequest.ProductSkuReq.ProductSkuVolumeReq volReq = new AddGloGoodsRequest.ProductSkuReq.ProductSkuVolumeReq();
-            volReq.setLen(longest);
-            volReq.setWidth(middle);
-            volReq.setHeight(shortest);
-            AddGloGoodsRequest.ProductSkuReq.ProductSkuSensitiveAttrReq senAttr = new AddGloGoodsRequest.ProductSkuReq.ProductSkuSensitiveAttrReq();
-            senAttr.setIsSensitive(0);
-
-            AddGloGoodsRequest.ProductSkuReq.ProductSkuWhExtAttrReq skuWhExt = new AddGloGoodsRequest.ProductSkuReq.ProductSkuWhExtAttrReq();
-            skuWhExt.setProductSkuWeightReq(weightReq);
-            skuWhExt.setProductSkuVolumeReq(volReq);
-            skuWhExt.setProductSkuSensitiveLimitReq(new AddGloGoodsRequest.ProductSkuReq.ProductSkuSensitiveLimitReq());
-            skuWhExt.setProductSkuSensitiveAttrReq(senAttr);
-            sku.setProductSkuWhExtAttrReq(skuWhExt);
-
-            sku.setExtCode(safeSkuExtCode(s.getTemuSkuId(), s.getOriginSkuId(), idx));
-            skuReqs.add(sku);
-            idx++;
+        if (storedDraft == null) {
+            String message = "主销售属性草案缺失，请先生成并确认后再发布";
+            publishLogService.error(runId, "SPEC", message, null);
+            publishLogService.finishFailed(runId, message, null, null);
+            markPublishFailed(pc, runId, message);
+            return blockedByMainSaleSpecResponse(message, runId, warnings, null);
         }
-        if (skuReqs.isEmpty()) {
-            publishLogService.error(runId, "VALIDATE", "no valid temu skus", null);
-            publishLogService.finishFailed(runId, "no valid temu skus", null, null);
-            return new TemuPublishDTO.PublishResponse(false, "TEMU SKU 为空或无效，请先做 SKU 转换", runId, null, null, null, warnings);
-        }
-
-        // Create parent spec + specId for each sku, and fill: productSpecPropertyReqs + SKU productSkuSpecReqs + SKC mainProductSkuSpecReqs
-        SpecBundle specBundle;
         try {
-            specBundle = buildSpecsForSkus(runId, skuReqs, temuSkus, warnings);
+            StoredMaterializedSpecDraft materialized = materializeStoredDraft(categoryClient, storedDraft);
+            req.setProductSpecPropertyReqs(materialized.productSpecPropertyReqs());
+            req.setProductSkcReqs(buildProductSkcReqsFromStoredDraft(spuId, pc, mainImage, fallbackThumb, materialized));
+            for (AddGloGoodsRequest.ProductSkcReq skc : req.getProductSkcReqs()) {
+                if (skc != null && skc.getProductSkuReqs() != null) {
+                    skuReqs.addAll(skc.getProductSkuReqs());
+                }
+            }
         } catch (Exception e) {
             String err = exceptionToString(e);
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("error", safeErrMessage(e));
             data.put("exception", e.getClass().getName());
-            publishLogService.error(runId, "SPEC", "build specs failed", data);
+            publishLogService.error(runId, "SPEC", "materialize stored draft failed", data);
             publishLogService.finishFailed(runId, err, null, null);
-            return new TemuPublishDTO.PublishResponse(false, "规格创建失败: " + safeErrMessage(e), runId, null, null, null, warnings);
+            return new TemuPublishDTO.PublishResponse(false, "主销售属性任务草案无效: " + safeErrMessage(e), runId, null, null, null, warnings);
         }
-        req.setProductSpecPropertyReqs(specBundle.productSpecPropertyReqs);
-
-        AddGloGoodsRequest.ProductSkcReq skc = new AddGloGoodsRequest.ProductSkcReq();
-        // Make extCode deterministic so we can find it later by 1688 product id.
-        // Format: SKC_<spuId>_<alibabaProductId>
-        skc.setExtCode(safeSkcExtCode(spuId, pc == null ? null : pc.getAlibabaProductId(), pc == null ? null : pc.getProductId()));
-        {
-            String p = firstNonBlank(mainImage, fallbackThumb);
-            if (StringUtils.hasText(p)) {
-                skc.setPreviewImgUrls(new ArrayList<>(List.of(p)));
-            } else {
-                skc.setPreviewImgUrls(new ArrayList<>());
-            }
-        }
-        // TEMU validates "main sales" spec strictly for some categories.
-        // It must be consistent with productSpecPropertyReqs + SKU-level productSkuSpecReqs.
-        if (specBundle.mainSkcSpec == null
-                || specBundle.mainSkcSpec.getParentSpecId() == null
-                || specBundle.mainSkcSpec.getParentSpecId() <= 0
-                || specBundle.mainSkcSpec.getSpecId() == null
-                || specBundle.mainSkcSpec.getSpecId() <= 0) {
-            throw new IllegalStateException("invalid mainSkcSpec");
-        }
-        skc.setMainProductSkuSpecReqs(new ArrayList<>(List.of(specBundle.mainSkcSpec)));
-        skc.setProductSkuReqs(skuReqs);
-        req.setProductSkcReqs(new ArrayList<>(List.of(skc)));
 
         String requestJson = null;
         try {
@@ -398,8 +371,11 @@ public class TemuPublishService {
 
         // 5) call API
         String raw;
+        TemuApiResponse<AddGloGoodsResponse> apiResp;
         try {
-            raw = GloGoodsApiClient.addGloGoodsRaw(req);
+            TemuGloGoodsV2Client goodsClient = new TemuGloGoodsV2Client(creds);
+            apiResp = goodsClient.addGloGoods(req);
+            raw = objectMapper.writeValueAsString(apiResp);
         } catch (Exception e) {
             String err = exceptionToString(e);
             Map<String, Object> data = new LinkedHashMap<>();
@@ -419,15 +395,11 @@ public class TemuPublishService {
 
         // 6) parse result and persist
         String goodsId = null;
-        boolean success = false;
+        boolean success = apiResp != null && apiResp.isSuccess();
         try {
-            JsonNode root = objectMapper.readTree(raw);
-            success = root.path("success").asBoolean(false);
-            if (success) {
-                JsonNode r = root.path("result");
-                if (r.has("goodsId")) {
-                    goodsId = r.get("goodsId").asText();
-                }
+            AddGloGoodsResponse result = apiResp == null ? null : apiResp.getResult();
+            if (result != null && result.getGoodsId() != null) {
+                goodsId = String.valueOf(result.getGoodsId());
             }
         } catch (Exception e) {
             warnings.add("publish response parse failed: " + e.getMessage());
@@ -448,13 +420,11 @@ public class TemuPublishService {
 
         if (success) {
             publishLogService.finishSuccess(runId, goodsId, requestJson, raw);
+            publishSuccessCaseService.recordSuccess(runId, pc, goodsId, requestJson, raw);
         } else {
             // try to extract error
             String err = null;
-            try {
-                JsonNode root = objectMapper.readTree(raw);
-                err = root.path("errorMsg").asText(null);
-            } catch (Exception ignored) {}
+            err = apiResp == null ? null : apiResp.getErrorMsg();
             publishLogService.finishFailed(runId, err, requestJson, raw);
         }
 
@@ -600,14 +570,13 @@ public class TemuPublishService {
         if (!StringUtils.hasText(savedJson)) return out;
         try {
             JsonNode root = objectMapper.readTree(savedJson);
+            Set<String> emittedKeys = new LinkedHashSet<>();
 
             // Conditional skip rules for parent-child attributes.
             // Example: if "供电方式" is "无需供电使用", then "插头规格" must be empty (otherwise parent-child validation fails).
             // Template reference (commonly):
             // - 供电方式 pid=1425, value "无需供电使用" vid=53941, value "插头供电" vid=36781
             // - 插头规格 pid=1404
-            Set<String> powerVids = extractSelectedVids(root, 1425);
-            boolean powerIsPlug = powerVids.contains("36781");
 
             JsonNode props = root.path("properties");
             if (!props.isArray()) return out;
@@ -637,6 +606,15 @@ public class TemuPublishService {
                     }
                 }
 
+                AttrTemplate template = null;
+                boolean required = false;
+                if (templateByPid != null && pid > 0) {
+                    template = templateByPid.get(pid);
+                    if (template != null) {
+                        required = template.required;
+                    }
+                }
+
                 String freeText = p.path("freeText").isNull() ? null : p.path("freeText").asText(null);
                 if (StringUtils.hasText(freeText)) {
                     AddGloGoodsRequest.ProductPropertyReq item = new AddGloGoodsRequest.ProductPropertyReq();
@@ -647,9 +625,10 @@ public class TemuPublishService {
                     item.setPropName(propName);
                     item.setPropValue(freeText);
                     item.setValueUnit(valueUnit == null ? "" : valueUnit);
-                    // For numeric/text input properties, numberInputValue can help SDK sanitize.
-                    item.setNumberInputValue(StringUtils.hasText(numberInputValue) ? numberInputValue : freeText);
-                    out.add(item);
+                    item.setNumberInputValue(resolveFreeTextNumberInputValue(template, numberInputValue));
+                    if (emittedKeys.add(buildPropertyReqDedupeKey(item))) {
+                        out.add(item);
+                    }
                     continue;
                 }
 
@@ -667,8 +646,10 @@ public class TemuPublishService {
                     item.setPropName(propName);
                     item.setPropValue(value);
                     item.setValueUnit(valueUnit == null ? "" : valueUnit);
-                    item.setNumberInputValue("");
-                    out.add(item);
+                    item.setNumberInputValue(resolveNumberInputValue(template, pid, propName, valueUnit, numberInputValue, selected.size()));
+                    if (emittedKeys.add(buildPropertyReqDedupeKey(item))) {
+                        out.add(item);
+                    }
                 } else {
                     // fallback: selectedVids
                     JsonNode vids = p.path("selectedVids");
@@ -683,8 +664,23 @@ public class TemuPublishService {
                         item.setPropName(propName);
                         item.setPropValue(v);
                         item.setValueUnit(valueUnit == null ? "" : valueUnit);
-                        item.setNumberInputValue("");
-                        out.add(item);
+                        item.setNumberInputValue(resolveNumberInputValue(template, pid, propName, valueUnit, numberInputValue, vids.size()));
+                        if (emittedKeys.add(buildPropertyReqDedupeKey(item))) {
+                            out.add(item);
+                        }
+                    } else if (required && !shouldForceEmptyAttr(pid, propName)) {
+                        AddGloGoodsRequest.ProductPropertyReq item = new AddGloGoodsRequest.ProductPropertyReq();
+                        item.setPid(pid);
+                        item.setTemplatePid(templatePid);
+                        item.setRefPid(refPid);
+                        item.setVid(0);
+                        item.setPropName(propName);
+                        item.setPropValue("");
+                        item.setValueUnit(valueUnit == null ? "" : valueUnit);
+                        item.setNumberInputValue(resolveFreeTextNumberInputValue(template, numberInputValue));
+                        if (emittedKeys.add(buildPropertyReqDedupeKey(item))) {
+                            out.add(item);
+                        }
                     }
                 }
             }
@@ -705,6 +701,44 @@ public class TemuPublishService {
             warnings.add("temuAttributes parse failed: " + e.getMessage());
         }
         return out;
+    }
+
+    private String buildPropertyReqDedupeKey(AddGloGoodsRequest.ProductPropertyReq item) {
+        if (item == null) return "";
+        return String.valueOf(item.getTemplatePid()) + "|"
+                + String.valueOf(item.getPid()) + "|"
+                + String.valueOf(item.getVid()) + "|"
+                + String.valueOf(item.getPropValue());
+    }
+
+    private String resolveFreeTextNumberInputValue(AttrTemplate template,
+                                                   String numberInputValue) {
+        if (template == null || !template.supportsNumberInput()) {
+            return "";
+        }
+        return StringUtils.hasText(numberInputValue) ? numberInputValue.trim() : "";
+    }
+
+    private String resolveNumberInputValue(AttrTemplate template,
+                                           int pid,
+                                           String propName,
+                                           String valueUnit,
+                                           String numberInputValue,
+                                           int selectedCount) {
+        if (template == null || !template.supportsNumberInput()) {
+            return "";
+        }
+        if (StringUtils.hasText(numberInputValue)) {
+            return numberInputValue.trim();
+        }
+        if (selectedCount == 1
+                && pid == 2
+                && "%".equals(valueUnit == null ? "" : valueUnit.trim())
+                && StringUtils.hasText(propName)
+                && propName.contains("成分")) {
+            return "100";
+        }
+        return "";
     }
 
     private Set<String> extractSelectedVids(JsonNode root, int pid) {
@@ -760,8 +794,12 @@ public class TemuPublishService {
                 if (vu.isArray() && vu.size() > 0) {
                     valueUnit = vu.get(0).asText("");
                 }
+                boolean required = p.path("required").asBoolean(false);
+                boolean hasValues = p.has("values") && p.get("values").isArray() && p.get("values").size() > 0;
+                String numberInputTitle = p.path("numberInputTitle").asText("");
+                int controlType = p.path("controlType").asInt(0);
                 if (pid > 0 && templatePid > 0 && refPid > 0) {
-                    out.put(pid, new AttrTemplate(pid, templatePid, refPid, name, valueUnit));
+                    out.put(pid, new AttrTemplate(pid, templatePid, refPid, name, valueUnit, required, hasValues, numberInputTitle, controlType));
                 }
             }
             {
@@ -782,13 +820,33 @@ public class TemuPublishService {
         final int refPid;
         final String name;
         final String valueUnit;
+        final boolean required;
+        final boolean hasValues;
+        final String numberInputTitle;
+        final int controlType;
 
-        AttrTemplate(int pid, int templatePid, int refPid, String name, String valueUnit) {
+        AttrTemplate(int pid,
+                     int templatePid,
+                     int refPid,
+                     String name,
+                     String valueUnit,
+                     boolean required,
+                     boolean hasValues,
+                     String numberInputTitle,
+                     int controlType) {
             this.pid = pid;
             this.templatePid = templatePid;
             this.refPid = refPid;
             this.name = name;
             this.valueUnit = valueUnit;
+            this.required = required;
+            this.hasValues = hasValues;
+            this.numberInputTitle = numberInputTitle;
+            this.controlType = controlType;
+        }
+
+        boolean supportsNumberInput() {
+            return hasValues && (StringUtils.hasText(numberInputTitle) || controlType == 16);
         }
     }
 
@@ -825,13 +883,20 @@ public class TemuPublishService {
     }
 
     private SpecBundle buildSpecsForSkus(Long runId,
+                                        long leafCatId,
+                                        CategoryApiClient categoryClient,
+                                        List<AddGloGoodsRequest.ProductPropertyReq> productPropertyReqs,
                                         List<AddGloGoodsRequest.ProductSkuReq> skuReqs,
                                         List<ProductCollectionTemuSku> temuSkus,
                                         List<String> warnings) throws Exception {
         Integer parentSpecId;
         String parentSpecName;
 
-        String psJson = CategoryApiClient.getParentSpecList();
+        if (categoryClient == null) {
+            throw new IllegalArgumentException("categoryClient is required");
+        }
+
+        String psJson = categoryClient.getParentSpecList();
         JsonNode psRoot = objectMapper.readTree(psJson);
         if (!psRoot.path("success").asBoolean(false)) {
             throw new IllegalStateException("getParentSpecList failed: " + psRoot.path("errorMsg").asText("unknown"));
@@ -841,7 +906,7 @@ public class TemuPublishService {
             throw new IllegalStateException("parentSpecDTOS empty");
         }
 
-        ParentSpec chosen = chooseParentSpecFromSkus(dtos, temuSkus);
+        ParentSpec chosen = chooseParentSpecFromMandatoryOrSkus(runId, leafCatId, categoryClient, productPropertyReqs, dtos, temuSkus);
         parentSpecId = chosen.parentSpecId;
         parentSpecName = chosen.parentSpecName;
         if (parentSpecId <= 0) {
@@ -860,7 +925,7 @@ public class TemuPublishService {
             Integer specId = cache.get(specValueName);
             String finalSpecName = specValueName;
             if (specId == null) {
-                String csJson = CategoryApiClient.createSpec(parentSpecId, specValueName);
+                String csJson = categoryClient.createSpec(parentSpecId, specValueName);
                 JsonNode csRoot = objectMapper.readTree(csJson);
                 if (!csRoot.path("success").asBoolean(false)) {
                     throw new IllegalStateException("createSpec failed(name=" + specValueName + "): " + csRoot.path("errorMsg").asText("unknown"));
@@ -898,12 +963,16 @@ public class TemuPublishService {
             topSpecProps.add(top);
 
             if (mainSkcSpec == null) {
-                AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq ms = new AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq();
-                ms.setParentSpecId(parentSpecId);
-                ms.setParentSpecName(parentSpecName == null ? "" : parentSpecName);
-                ms.setSpecId(specId);
-                ms.setSpecName(finalSpecName == null ? "" : finalSpecName);
-                mainSkcSpec = ms;
+                if (isModelLikeParentSpec(parentSpecName)) {
+                    mainSkcSpec = emptyMainProductSkuSpecReq();
+                } else {
+                    AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq ms = new AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq();
+                    ms.setParentSpecId(parentSpecId);
+                    ms.setParentSpecName(parentSpecName == null ? "" : parentSpecName);
+                    ms.setSpecId(specId);
+                    ms.setSpecName(finalSpecName == null ? "" : finalSpecName);
+                    mainSkcSpec = ms;
+                }
             }
         }
 
@@ -918,6 +987,149 @@ public class TemuPublishService {
             publishLogService.data(runId, "SPEC", "specs prepared", data);
         }
         return new SpecBundle(parentSpecId, parentSpecName, mainSkcSpec, topSpecProps);
+    }
+
+    private ParentSpec chooseParentSpecFromMandatoryOrSkus(Long runId,
+                                                          long leafCatId,
+                                                          CategoryApiClient categoryClient,
+                                                          List<AddGloGoodsRequest.ProductPropertyReq> productPropertyReqs,
+                                                          JsonNode parentSpecDtos,
+                                                          List<ProductCollectionTemuSku> temuSkus) {
+        ParentSpec fallback = chooseParentSpecFromSkus(parentSpecDtos, temuSkus);
+
+        if (leafCatId <= 0 || categoryClient == null) {
+            return fallback;
+        }
+
+        try {
+            List<Map<String, Object>> propMaps = new ArrayList<>();
+            if (productPropertyReqs != null) {
+                for (AddGloGoodsRequest.ProductPropertyReq p : productPropertyReqs) {
+                    if (p == null) continue;
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("pid", p.getPid());
+                    m.put("templatePid", p.getTemplatePid());
+                    m.put("refPid", p.getRefPid());
+                    m.put("vid", p.getVid());
+                    m.put("propName", p.getPropName());
+                    m.put("propValue", p.getPropValue());
+                    m.put("valueUnit", p.getValueUnit());
+                    m.put("numberInputValue", p.getNumberInputValue());
+                    propMaps.add(m);
+                }
+            }
+
+            String raw = categoryClient.getCategoryMandatory(leafCatId, null, propMaps);
+            JsonNode root = objectMapper.readTree(raw);
+            if (!root.path("success").asBoolean(false)) {
+                return fallback;
+            }
+
+            List<ParentSpec> allowed = collectParentSpecs(root.path("result"));
+            if (allowed.isEmpty()) {
+                return fallback;
+            }
+
+            Map<String, Integer> nameToId = new LinkedHashMap<>();
+            if (parentSpecDtos != null && parentSpecDtos.isArray()) {
+                for (JsonNode dto : parentSpecDtos) {
+                    String n = dto.path("parentSpecName").asText("");
+                    int id = dto.path("parentSpecId").asInt(0);
+                    if (StringUtils.hasText(n) && id > 0) {
+                        nameToId.put(n, id);
+                    }
+                }
+            }
+
+            ParentSpec chosen = null;
+            for (ParentSpec p : allowed) {
+                if (p == null) continue;
+                if (!StringUtils.hasText(p.parentSpecName)) continue;
+                Integer id = nameToId.get(p.parentSpecName);
+                if (id != null && id > 0) {
+                    chosen = new ParentSpec(id, p.parentSpecName);
+                    break;
+                }
+            }
+
+            if (chosen != null && chosen.parentSpecId > 0) {
+                try {
+                    Map<String, Object> data = new LinkedHashMap<>();
+                    data.put("leafCatId", leafCatId);
+                    data.put("allowedParentSpecCount", allowed.size());
+                    List<Map<String, Object>> rows = new ArrayList<>();
+                    for (ParentSpec p : allowed) {
+                        Map<String, Object> r = new LinkedHashMap<>();
+                        r.put("parentSpecId", p.parentSpecId);
+                        r.put("parentSpecName", p.parentSpecName);
+                        rows.add(r);
+                        if (rows.size() >= 20) break;
+                    }
+                    data.put("allowedParentSpecs", rows);
+                    data.put("chosenParentSpecId", chosen.parentSpecId);
+                    data.put("chosenParentSpecName", chosen.parentSpecName);
+                    publishLogService.data(runId, "SPEC", "parent spec chosen by catsmandatory", data);
+                } catch (Exception ignored) {
+                }
+                return chosen;
+            }
+
+            return fallback;
+        } catch (Exception ignored) {
+            return fallback;
+        }
+    }
+
+    private List<ParentSpec> collectParentSpecs(JsonNode node) {
+        List<ParentSpec> out = new ArrayList<>();
+        collectParentSpecsInto(node, out);
+        if (out.isEmpty()) return out;
+        Map<String, ParentSpec> byName = new LinkedHashMap<>();
+        for (ParentSpec p : out) {
+            if (p == null) continue;
+            if (!StringUtils.hasText(p.parentSpecName)) continue;
+            if (!byName.containsKey(p.parentSpecName)) {
+                byName.put(p.parentSpecName, p);
+            }
+        }
+        return new ArrayList<>(byName.values());
+    }
+
+    private void collectParentSpecsInto(JsonNode node, List<ParentSpec> out) {
+        if (node == null || node.isNull() || out == null) return;
+
+        if (node.isObject()) {
+            JsonNode idNode = node.get("parentSpecId");
+            JsonNode nameNode = node.get("parentSpecName");
+            if (idNode != null && !idNode.isNull() && nameNode != null && !nameNode.isNull()) {
+                int id = idNode.asInt(0);
+                String name = nameNode.asText(null);
+                if (id > 0 && StringUtils.hasText(name)) {
+                    out.add(new ParentSpec(id, name.trim()));
+                }
+            }
+            java.util.Iterator<Map.Entry<String, JsonNode>> it = node.fields();
+            while (it.hasNext()) {
+                Map.Entry<String, JsonNode> e = it.next();
+                collectParentSpecsInto(e.getValue(), out);
+            }
+            return;
+        }
+
+        if (node.isArray()) {
+            for (JsonNode x : node) {
+                collectParentSpecsInto(x, out);
+            }
+        }
+    }
+
+    private long leafCatId(int[] catIds) {
+        if (catIds == null || catIds.length == 0) return 0;
+        for (int i = catIds.length - 1; i >= 0; i--) {
+            int v = catIds[i];
+            if (v > 0) return v;
+        }
+        return 0;
     }
 
     private ParentSpec chooseParentSpecFromSkus(JsonNode parentSpecDtos, List<ProductCollectionTemuSku> temuSkus) {
@@ -1025,6 +1237,9 @@ public class TemuPublishService {
             candidate = skuReq == null ? null : skuReq.getExtCode();
         }
         if (!StringUtils.hasText(candidate)) {
+            candidate = "Default-" + (index + 1);
+        }
+        if (candidate == null) {
             candidate = "Default-" + (index + 1);
         }
         candidate = candidate.trim();
@@ -1337,9 +1552,7 @@ public class TemuPublishService {
             sourceSkuGroups = new ArrayList<>(regroupedSkuMap.values());
         }
 
-        validateStoredDraftSkcStructure(sourceMainGroups, sourceSkuGroups, hasExplicitEmptyMainSpecPlaceholder);
-
-        if (hasExplicitEmptyMainSpecPlaceholder) {
+        if (hasExplicitEmptyMainSpecPlaceholder || shouldUseEmptyMainSpecPlaceholder(sourceMainGroups)) {
             List<AddGloGoodsRequest.ProductSkuReq> mergedSkuGroup = new ArrayList<>();
             for (List<AddGloGoodsRequest.ProductSkuReq> group : sourceSkuGroups) {
                 if (group != null && !group.isEmpty()) {
@@ -1418,39 +1631,32 @@ public class TemuPublishService {
         return sawPlaceholder;
     }
 
-    private void validateStoredDraftSkcStructure(List<List<AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq>> mainGroups,
-                                                 List<List<AddGloGoodsRequest.ProductSkuReq>> skuGroups,
-                                                 boolean hasExplicitEmptyMainSpecPlaceholder) {
-        if (skuGroups == null || skuGroups.isEmpty()) {
-            throw new IllegalStateException("stored productSkuReqs group is empty");
+    private boolean shouldUseEmptyMainSpecPlaceholder(List<List<AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq>> mainGroups) {
+        if (mainGroups == null || mainGroups.isEmpty()) {
+            return false;
         }
-
-        if (!hasExplicitEmptyMainSpecPlaceholder) {
-            if (mainGroups == null || mainGroups.isEmpty()) {
-                throw new IllegalStateException("stored mainProductSkuSpecReqs group is empty");
-            }
-            return;
-        }
-
-        LinkedHashSet<String> distinctSkuSpecGroupKeys = new LinkedHashSet<>();
-        for (List<AddGloGoodsRequest.ProductSkuReq> skuGroup : skuGroups) {
-            if (skuGroup == null || skuGroup.isEmpty()) {
+        Integer parentSpecId = null;
+        String parentSpecName = null;
+        for (List<AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq> group : mainGroups) {
+            if (group == null || group.isEmpty()) {
                 continue;
             }
-            for (AddGloGoodsRequest.ProductSkuReq skuReq : skuGroup) {
-                if (skuReq == null) {
+            for (AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq item : group) {
+                if (item == null) {
                     continue;
                 }
-                List<AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq> skuMainGroup = buildMainGroupFromSku(skuReq);
-                if (skuMainGroup.isEmpty()) {
-                    continue;
+                if (!isModelLikeParentSpec(item.getParentSpecName())) {
+                    return false;
                 }
-                distinctSkuSpecGroupKeys.add(buildMainSpecGroupKey(skuMainGroup));
-                if (distinctSkuSpecGroupKeys.size() > 1) {
-                    throw new IllegalStateException("stored draft placeholder conflicts with multiple sku spec groups");
+                if (parentSpecId == null) {
+                    parentSpecId = item.getParentSpecId();
+                    parentSpecName = item.getParentSpecName();
+                } else if (!Objects.equals(parentSpecId, item.getParentSpecId()) || !Objects.equals(parentSpecName, item.getParentSpecName())) {
+                    return false;
                 }
             }
         }
+        return parentSpecId != null;
     }
 
     private AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq emptyMainProductSkuSpecReq() {
@@ -1460,6 +1666,15 @@ public class TemuPublishService {
         item.setSpecId(0);
         item.setSpecName("");
         return item;
+    }
+
+    private boolean isModelLikeParentSpec(String parentSpecName) {
+        String value = firstNonBlank(parentSpecName);
+        if (!StringUtils.hasText(value)) {
+            return false;
+        }
+        String lower = value.toLowerCase();
+        return value.contains("型号") || value.contains("规格") || lower.contains("model") || lower.contains("spec");
     }
 
     private List<AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq> buildMainGroupFromSku(AddGloGoodsRequest.ProductSkuReq skuReq) {

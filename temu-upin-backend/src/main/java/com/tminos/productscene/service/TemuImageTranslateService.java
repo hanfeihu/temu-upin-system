@@ -5,12 +5,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tminos.productscene.config.TemuGoodsConfig;
 import com.tminos.productscene.entity.ProductCollection;
 import com.tminos.productscene.repository.ProductCollectionRepository;
-import com.tminos.temu.openapi.client.goods.ImageApiClient;
-import com.tminos.temu.openapi.client.goods.ImageApiClient.ImageTranslateQueryResult;
-import com.tminos.temu.openapi.client.goods.ImageApiClient.ImageTranslateRequest;
-import com.tminos.temu.openapi.client.goods.ImageApiClient.ImageTranslateSubmitResult;
-import com.tminos.temu.openapi.client.goods.TemuApiResponse;
-import com.tminos.temu.openapi.config.TemuOpenApiGoodsConfig;
+import com.tminos.temu.upin.sdk.v2.common.TemuOpenApiCredentials;
+import com.tminos.temu.upin.sdk.v2.dto.TemuApiResponse;
+import com.tminos.temu.upin.sdk.v2.image.TemuImageV2Client;
+import com.tminos.temu.upin.sdk.v2.image.TemuImageV2Client.ImageTranslateQueryResult;
+import com.tminos.temu.upin.sdk.v2.image.TemuImageV2Client.ImageTranslateRequest;
+import com.tminos.temu.upin.sdk.v2.image.TemuImageV2Client.ImageTranslateSubmitResult;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -45,6 +46,7 @@ public class TemuImageTranslateService {
     private final TemuImageMetaService temuImageMetaService;
     private final Executor globalWorkerExecutor;
     private final AliyunImageTranslateService aliyunImageTranslateService;
+    private final TemuOpenApiCredentialService temuOpenApiCredentialService;
 
     public TemuImageTranslateService(TemuGoodsConfig temuGoodsConfig,
                                      OssService ossService,
@@ -54,7 +56,8 @@ public class TemuImageTranslateService {
                                      TemuImageNormalizeService imageNormalizeService,
                                      TemuImageMetaService temuImageMetaService,
                                      @org.springframework.beans.factory.annotation.Qualifier("globalWorkerExecutor") Executor globalWorkerExecutor,
-                                     AliyunImageTranslateService aliyunImageTranslateService) {
+                                     AliyunImageTranslateService aliyunImageTranslateService,
+                                     TemuOpenApiCredentialService temuOpenApiCredentialService) {
         this.temuGoodsConfig = temuGoodsConfig;
         this.ossService = ossService;
         this.objectMapper = objectMapper;
@@ -64,6 +67,7 @@ public class TemuImageTranslateService {
         this.temuImageMetaService = temuImageMetaService;
         this.globalWorkerExecutor = globalWorkerExecutor;
         this.aliyunImageTranslateService = aliyunImageTranslateService;
+        this.temuOpenApiCredentialService = temuOpenApiCredentialService;
     }
 
     public Result translateGlobalImage(String imageUrl,
@@ -82,10 +86,10 @@ public class TemuImageTranslateService {
         boolean contain = containDetail == null || containDetail;
         boolean doUploadToOss = uploadToOss != null && uploadToOss;
 
-        ensureTemuAccessToken();
+        TemuImageV2Client client = new TemuImageV2Client(buildTemuCreds());
 
         // 1) upload image by url (TEMU wants its own hosted url)
-        String uploadRaw = ImageApiClient.uploadGlobalImageByUrl(imageUrl.trim());
+        String uploadRaw = client.uploadGlobalImageByUrlRaw(imageUrl.trim(), null, null);
         String uploadedUrl = extractNestedText(uploadRaw, "result", "imageUrl");
         if (!StringUtils.hasText(uploadedUrl)) {
             uploadedUrl = extractNestedText(uploadRaw, "result", "url");
@@ -105,7 +109,7 @@ public class TemuImageTranslateService {
             req.setScene(scene.trim());
         }
 
-        TemuApiResponse<ImageTranslateSubmitResult> submit = ImageApiClient.translateGlobalImage(req);
+        TemuApiResponse<ImageTranslateSubmitResult> submit = client.translateGlobalImage(req);
 
         // Important: "success=true" only means the API call succeeded.
         // Business success is decided by result.resultCode (1000000 means ok).
@@ -124,7 +128,7 @@ public class TemuImageTranslateService {
         String taskId = submit == null || submit.getResult() == null ? null : submit.getResult().getTaskId();
         if (!StringUtils.hasText(taskId)) {
             // try raw extraction as fallback (and read resultCode/resultMsg)
-            String raw = ImageApiClient.translateGlobalImageRaw(req);
+            String raw = client.translateGlobalImageRaw(req);
             String rc = extractNestedText(raw, "result", "resultCode");
             String rm = extractNestedText(raw, "result", "resultMsg");
             try {
@@ -157,7 +161,7 @@ public class TemuImageTranslateService {
 
         String translatedUrl = null;
         for (int i = 0; i < maxAttempts; i++) {
-            TemuApiResponse<ImageTranslateQueryResult> q = ImageApiClient.getTranslateGlobalImageResult(taskId);
+            TemuApiResponse<ImageTranslateQueryResult> q = client.getTranslateGlobalImageResult(taskId);
             ImageTranslateQueryResult r = q == null ? null : q.getResult();
             if (r != null) {
                 if (StringUtils.hasText(r.getImageResultUrl())) {
@@ -192,8 +196,8 @@ public class TemuImageTranslateService {
         if (!StringUtils.hasText(imageUrl)) {
             throw new IllegalArgumentException("imageUrl is required");
         }
-        ensureTemuAccessToken();
-        String raw = ImageApiClient.uploadGlobalImageByUrl(imageUrl.trim());
+        TemuImageV2Client client = new TemuImageV2Client(buildTemuCreds());
+        String raw = client.uploadGlobalImageByUrlRaw(imageUrl.trim(), null, null);
         String uploadedUrl = extractNestedText(raw, "result", "imageUrl");
         if (!StringUtils.hasText(uploadedUrl)) {
             uploadedUrl = extractNestedText(raw, "result", "url");
@@ -455,19 +459,13 @@ public class TemuImageTranslateService {
         }
     }
 
-    private void ensureTemuAccessToken() {
-        // In this project we store goods access token under temu.goods.access-token.
-        // Some environments may already have the SDK config set elsewhere; only override when a token is present.
+    private TemuOpenApiCredentials buildTemuCreds() {
+        TemuOpenApiCredentials creds = temuOpenApiCredentialService.getDefaultTemuOpenApiCredentialsOrThrow();
         String token = temuGoodsConfig == null ? null : temuGoodsConfig.getAccessToken();
-        if (!StringUtils.hasText(token)) {
-            // Let SDK throw a clear error if it's missing.
-            return;
+        if (StringUtils.hasText(token)) {
+            creds.setAccessToken(token.trim());
         }
-        try {
-            TemuOpenApiGoodsConfig.setAccessToken(token.trim());
-        } catch (Exception ignored) {
-            // keep silent; SDK may manage config differently.
-        }
+        return creds;
     }
 
     private boolean isOssEnabled() {

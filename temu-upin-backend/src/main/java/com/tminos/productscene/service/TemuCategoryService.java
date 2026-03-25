@@ -3,9 +3,11 @@ package com.tminos.productscene.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tminos.productscene.dto.TemuCategoryDTO;
-import com.tminos.temu.openapi.client.goods.CategoryApiClient;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+
+import com.tminos.temu.upin.sdk.v2.category.CategoryApiClient;
+import com.tminos.temu.upin.sdk.v2.common.TemuOpenApiCredentials;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -15,6 +17,7 @@ import java.util.List;
 public class TemuCategoryService {
 
     private final ObjectMapper objectMapper;
+    private final TemuOpenApiCredentialService temuOpenApiCredentialService;
 
     public TemuCategoryDTO.MatchCategoryResponse matchCategory(String title) {
         if (title == null || title.isBlank()) {
@@ -25,7 +28,9 @@ public class TemuCategoryService {
         }
 
         try {
-            String raw = CategoryApiClient.matchCategory(title.trim());
+            TemuOpenApiCredentials creds = temuOpenApiCredentialService.getDefaultTemuOpenApiCredentialsOrThrow();
+            CategoryApiClient client = new CategoryApiClient(creds);
+            String raw = client.matchCategory(title.trim());
             JsonNode root = objectMapper.readTree(raw);
 
             TemuCategoryDTO.MatchCategoryResponse.MatchCategoryResponseBuilder b = TemuCategoryDTO.MatchCategoryResponse.builder();
@@ -68,7 +73,9 @@ public class TemuCategoryService {
             return null;
         }
         try {
-            return CategoryApiClient.getCategoryAttributes(Integer.valueOf(leafCatId.trim()));
+            TemuOpenApiCredentials creds = temuOpenApiCredentialService.getDefaultTemuOpenApiCredentialsOrThrow();
+            CategoryApiClient client = new CategoryApiClient(creds);
+            return client.getCategoryAttributes(Integer.valueOf(leafCatId.trim()));
         } catch (Exception e) {
             return null;
         }

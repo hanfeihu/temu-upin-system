@@ -27,8 +27,16 @@ public class TemuShopService {
 
     @Transactional(readOnly = true)
     public List<TemuShopDTO.View> list(Boolean enabled) {
-        Boolean en = enabled == null ? Boolean.TRUE : enabled;
-        List<TemuShop> rows = repo.findByEnabledOrderByIdDesc(en);
+        List<TemuShop> rows;
+        if (enabled == null) {
+            rows = repo.findAll();
+            rows.sort((a, b) -> Long.compare(
+                    b == null || b.getId() == null ? Long.MIN_VALUE : b.getId(),
+                    a == null || a.getId() == null ? Long.MIN_VALUE : a.getId()
+            ));
+        } else {
+            rows = repo.findByEnabledOrderByIdDesc(enabled);
+        }
         List<TemuShopDTO.View> out = new ArrayList<>();
         for (TemuShop r : rows) out.add(toView(r));
         return out;

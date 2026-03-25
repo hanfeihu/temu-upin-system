@@ -155,8 +155,7 @@ public class TemuImageV2Client {
         sanitizeParams(params);
         params.put("sign", SignatureUtil.generateSignature(params, creds.getAppSecret()));
         String json = JsonUtil.toJson(params);
-        String first = HttpClient.sendPostRequest(TemuOpenApiEndpoints.API_BASE_URL_PA, json);
-        if (first != null && !first.isBlank()) return first;
+
         return HttpClient.sendPostRequest(TemuOpenApiEndpoints.API_BASE_URL, json);
     }
 

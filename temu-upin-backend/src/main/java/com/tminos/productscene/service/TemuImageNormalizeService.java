@@ -1,8 +1,9 @@
 package com.tminos.productscene.service;
 
-import com.tminos.temu.openapi.client.goods.ImageApiClient;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.tminos.temu.upin.sdk.v2.image.TemuImageV2Client;
+import com.tminos.temu.upin.sdk.v2.common.TemuOpenApiCredentials;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -26,9 +27,12 @@ public class TemuImageNormalizeService {
     private static final int TARGET_H = 800;
 
     private final ObjectMapper objectMapper;
+    private final TemuOpenApiCredentialService temuOpenApiCredentialService;
 
-    public TemuImageNormalizeService(ObjectMapper objectMapper) {
+    public TemuImageNormalizeService(ObjectMapper objectMapper,
+                                    TemuOpenApiCredentialService temuOpenApiCredentialService) {
         this.objectMapper = objectMapper;
+        this.temuOpenApiCredentialService = temuOpenApiCredentialService;
     }
 
     public Result normalizeToTemu800(String url) throws Exception {
@@ -42,7 +46,9 @@ public class TemuImageNormalizeService {
         String candidate = original;
         boolean isKwcdn = isTemuKwcdn(candidate);
         if (!isKwcdn) {
-            String uploadedRaw = ImageApiClient.uploadGlobalImageByUrl(candidate);
+            TemuOpenApiCredentials creds = temuOpenApiCredentialService.getDefaultTemuOpenApiCredentialsOrThrow();
+            TemuImageV2Client client = new TemuImageV2Client(creds);
+            String uploadedRaw = client.uploadGlobalImageByUrlRaw(candidate, null, null);
             String uploadedUrl = parseUploadedImageUrlOrThrow(uploadedRaw);
             candidate = normalizeUrlString(uploadedUrl);
             uploadedByUrlFirst = true;
@@ -109,7 +115,9 @@ public class TemuImageNormalizeService {
         ByteArrayOutputStream bos = new ByteArrayOutputStream();
         ImageIO.write(out, "jpg", bos);
         String base64 = "data:image/jpeg;base64," + Base64.getEncoder().encodeToString(bos.toByteArray());
-        String uploadedRaw2 = ImageApiClient.uploadGlobalImageBase64(base64);
+        TemuOpenApiCredentials creds = temuOpenApiCredentialService.getDefaultTemuOpenApiCredentialsOrThrow();
+        TemuImageV2Client client = new TemuImageV2Client(creds);
+        String uploadedRaw2 = client.uploadGlobalImageBase64Raw(base64, null, null);
         String uploadedUrl2 = parseUploadedImageUrlOrThrow(uploadedRaw2);
 
         Result r = new Result();

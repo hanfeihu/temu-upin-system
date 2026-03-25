@@ -84,7 +84,7 @@ public class CategoryApiClient {
     public String matchCategory(String searchText) throws Exception {
         Map<String, Object> params = baseParams(API_CATEGORY_MATCH);
         params.put("searchText", searchText);
-        return postRaw(TemuOpenApiEndpoints.API_BASE_URL, params);
+        return postRaw(TemuOpenApiEndpoints.API_BASE_URL_PA, params);
     }
 
     public String mapCategoryByTitle(
