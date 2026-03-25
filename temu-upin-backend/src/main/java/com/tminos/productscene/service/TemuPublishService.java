@@ -1064,6 +1064,474 @@ public class TemuPublishService {
         }
     }
 
+    private record StoredMainSaleSpecDraft(
+            List<AddGloGoodsRequest.ProductSpecPropertyReq> productSpecPropertyReqs,
+            List<List<AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq>> mainProductSkuSpecReqGroups,
+            List<List<AddGloGoodsRequest.ProductSkuReq>> productSkuReqGroups
+    ) {
+    }
+
+    private record StoredMaterializedSpecDraft(
+            List<AddGloGoodsRequest.ProductSpecPropertyReq> productSpecPropertyReqs,
+            List<List<AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq>> mainProductSkuSpecReqGroups,
+            List<List<AddGloGoodsRequest.ProductSkuReq>> productSkuReqGroups,
+            Map<String, CreatedSpecInfo> tempSpecInfoMap
+    ) {
+    }
+
+    private record MainSaleSpecDraftGate(
+            boolean ready,
+            StoredMainSaleSpecDraft draft,
+            TemuMainSaleSpecInferenceTask task,
+            String message
+    ) {
+    }
+
+    private record CreatedSpecInfo(
+            Integer specId,
+            String specName
+        ) {
+        }
+
+    private MainSaleSpecDraftGate ensureMainSaleSpecDraftReadyForPublish(Long spuId, Long runId, List<String> warnings) {
+        if (spuId == null) {
+            return new MainSaleSpecDraftGate(false, null, null, "spuId 为空，无法检查主销售属性草案");
+        }
+
+        TemuMainSaleSpecInferenceTask task = mainSaleSpecInferenceTaskRepository.findFirstBySpuIdOrderByIdDesc(spuId).orElse(null);
+        if (task == null) {
+            try {
+                task = mainSaleSpecInferenceService.createTask(spuId);
+                String message = "已自动创建主销售属性任务，请先生成并确认草案后再发布，taskId=" + task.getId();
+                warnings.add(message);
+                publishLogService.info(runId, "SPEC_GATE", message);
+                return new MainSaleSpecDraftGate(false, null, task, message);
+            } catch (Exception e) {
+                String message = "主销售属性任务不存在，且自动创建失败: " + safeErrMessage(e);
+                warnings.add(message);
+                publishLogService.warn(runId, "SPEC_GATE", message);
+                return new MainSaleSpecDraftGate(false, null, null, message);
+            }
+        }
+
+        StoredMainSaleSpecDraft draft = loadStoredMainSaleSpecDraft(spuId, runId, warnings);
+        if (draft != null) {
+            return new MainSaleSpecDraftGate(true, draft, task, null);
+        }
+
+        String message = buildMainSaleSpecBlockedMessage(task);
+        warnings.add(message);
+        publishLogService.warn(runId, "SPEC_GATE", message);
+        return new MainSaleSpecDraftGate(false, null, task, message);
+    }
+
+    private String buildMainSaleSpecBlockedMessage(TemuMainSaleSpecInferenceTask task) {
+        if (task == null) {
+            return "主销售属性任务不存在，请先生成并确认草案后再发布";
+        }
+        Long taskId = task.getId();
+        Integer status = task.getStatus();
+        String suffix = taskId == null ? "" : "，taskId=" + taskId;
+        if (Objects.equals(status, TemuMainSaleSpecInferenceService.STATUS_PENDING)) {
+            return "主销售属性任务尚未执行，请先生成并确认草案后再发布" + suffix;
+        }
+        if (Objects.equals(status, TemuMainSaleSpecInferenceService.STATUS_RUNNING)) {
+            return "主销售属性任务执行中，请等待草案生成完成后再发布" + suffix;
+        }
+        if (StringUtils.hasText(task.getErrorMsg())) {
+            return "主销售属性任务执行失败，请先处理草案问题后再发布" + suffix + "，error=" + task.getErrorMsg();
+        }
+        return "主销售属性任务结果不完整，请先确认草案后再发布" + suffix;
+    }
+
+    private TemuPublishDTO.PublishResponse blockedByMainSaleSpecResponse(String message,
+                                                                        Long runId,
+                                                                        List<String> warnings,
+                                                                        TemuMainSaleSpecInferenceTask task) {
+        Long taskId = task == null ? null : task.getId();
+        Integer taskStatus = task == null ? null : task.getStatus();
+        return new TemuPublishDTO.PublishResponse(
+                false,
+                message,
+                runId,
+                null,
+                null,
+                null,
+                warnings,
+                taskId,
+                taskStatus,
+                true
+        );
+    }
+
+    private StoredMainSaleSpecDraft loadStoredMainSaleSpecDraft(Long spuId, Long runId, List<String> warnings) {
+        if (spuId == null) {
+            return null;
+        }
+        TemuMainSaleSpecInferenceTask task = mainSaleSpecInferenceTaskRepository.findFirstBySpuIdOrderByIdDesc(spuId).orElse(null);
+        if (task == null) {
+            return null;
+        }
+        if (!StringUtils.hasText(task.getProductSpecPropertyReqs())
+                || !StringUtils.hasText(task.getMainProductSkuSpecReqs())
+                || !StringUtils.hasText(task.getProductSkuReqs())) {
+            warnings.add("已找到 spuId=" + spuId + " 的主销售属性任务，但结果不完整，当前发布已被前置规则阻断");
+            return null;
+        }
+        try {
+            List<AddGloGoodsRequest.ProductSpecPropertyReq> productSpecPropertyReqs = objectMapper.readValue(
+                    task.getProductSpecPropertyReqs(),
+                    new TypeReference<List<AddGloGoodsRequest.ProductSpecPropertyReq>>() {}
+            );
+            List<List<AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq>> mainGroups = objectMapper.readValue(
+                    task.getMainProductSkuSpecReqs(),
+                    new TypeReference<List<List<AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq>>>() {}
+            );
+            List<List<AddGloGoodsRequest.ProductSkuReq>> skuGroups = objectMapper.readValue(
+                    task.getProductSkuReqs(),
+                    new TypeReference<List<List<AddGloGoodsRequest.ProductSkuReq>>>() {}
+            );
+            if (productSpecPropertyReqs == null || productSpecPropertyReqs.isEmpty() || skuGroups == null || skuGroups.isEmpty()) {
+                warnings.add("主销售属性任务缺少可发布的 SKU 草案，当前发布已被前置规则阻断");
+                return null;
+            }
+            publishLogService.info(runId, "SPEC", "using stored main sale spec draft: spuId=" + spuId + ", taskId=" + task.getId());
+            return new StoredMainSaleSpecDraft(productSpecPropertyReqs, mainGroups, skuGroups);
+        } catch (Exception e) {
+            warnings.add("主销售属性任务结果解析失败，当前发布已被前置规则阻断: " + safeErrMessage(e));
+            publishLogService.warn(runId, "SPEC", "stored main sale spec draft parse failed: spuId=" + spuId + ", error=" + safeErrMessage(e));
+            return null;
+        }
+    }
+
+    private StoredMaterializedSpecDraft materializeStoredDraft(CategoryApiClient categoryClient,
+                                                               StoredMainSaleSpecDraft draft) throws Exception {
+        Map<String, CreatedSpecInfo> actualSpecInfoMap = new LinkedHashMap<>();
+        Map<String, CreatedSpecInfo> tempSpecInfoMap = new LinkedHashMap<>();
+        List<AddGloGoodsRequest.ProductSpecPropertyReq> topProps = new ArrayList<>();
+        for (AddGloGoodsRequest.ProductSpecPropertyReq prop : draft.productSpecPropertyReqs()) {
+            if (prop == null) {
+                continue;
+            }
+            if (prop.getParentSpecId() == null || !StringUtils.hasText(prop.getPropValue())) {
+                throw new IllegalStateException("stored productSpecPropertyReqs contains invalid item");
+            }
+            String tempKey = storedSpecKey(prop.getParentSpecId(), prop.getSpecId(), prop.getPropValue());
+            CreatedSpecInfo createdSpecInfo = actualSpecInfoMap.get(tempKey);
+            if (createdSpecInfo == null) {
+                createdSpecInfo = createSpecInfo(categoryClient, prop.getParentSpecId(), prop.getPropValue());
+                if (createdSpecInfo == null || createdSpecInfo.specId() == null || createdSpecInfo.specId() <= 0) {
+                    throw new IllegalStateException("createSpec failed for " + prop.getPropValue());
+                }
+                actualSpecInfoMap.put(tempKey, createdSpecInfo);
+            }
+            if (prop.getSpecId() != null) {
+                tempSpecInfoMap.put(simpleStoredSpecKey(prop.getParentSpecId(), prop.getSpecId()), createdSpecInfo);
+            }
+            AddGloGoodsRequest.ProductSpecPropertyReq cloned = objectMapper.convertValue(prop, AddGloGoodsRequest.ProductSpecPropertyReq.class);
+            cloned.setSpecId(createdSpecInfo.specId());
+            if (StringUtils.hasText(createdSpecInfo.specName())) {
+                cloned.setPropValue(createdSpecInfo.specName());
+            }
+            topProps.add(cloned);
+        }
+        if (topProps.isEmpty()) {
+            throw new IllegalStateException("stored productSpecPropertyReqs is empty");
+        }
+
+        List<List<AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq>> mainGroups = new ArrayList<>();
+        List<List<AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq>> sourceMainGroups =
+                draft.mainProductSkuSpecReqGroups() == null ? List.of() : draft.mainProductSkuSpecReqGroups();
+        for (List<AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq> group : sourceMainGroups) {
+            List<AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq> clonedGroup = new ArrayList<>();
+            if (group != null) {
+                for (AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq item : group) {
+                    if (item == null) {
+                        continue;
+                    }
+                    AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq cloned = objectMapper.convertValue(item, AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq.class);
+                    if (isEmptyMainSpecPlaceholder(item.getParentSpecId(), item.getSpecId())) {
+                        cloned.setParentSpecId(0);
+                        cloned.setParentSpecName("");
+                        cloned.setSpecId(0);
+                        cloned.setSpecName("");
+                        clonedGroup.add(cloned);
+                        continue;
+                    }
+                    CreatedSpecInfo specInfo = resolveStoredSpecInfo(tempSpecInfoMap, item.getParentSpecId(), item.getSpecId());
+                    cloned.setSpecId(specInfo.specId());
+                    if (StringUtils.hasText(specInfo.specName())) {
+                        cloned.setSpecName(specInfo.specName());
+                    }
+                    clonedGroup.add(cloned);
+                }
+            }
+            mainGroups.add(clonedGroup);
+        }
+
+        List<List<AddGloGoodsRequest.ProductSkuReq>> skuGroups = new ArrayList<>();
+        for (List<AddGloGoodsRequest.ProductSkuReq> group : draft.productSkuReqGroups()) {
+            List<AddGloGoodsRequest.ProductSkuReq> clonedGroup = new ArrayList<>();
+            if (group != null) {
+                for (AddGloGoodsRequest.ProductSkuReq sku : group) {
+                    if (sku == null) {
+                        continue;
+                    }
+                    AddGloGoodsRequest.ProductSkuReq clonedSku = objectMapper.convertValue(sku, AddGloGoodsRequest.ProductSkuReq.class);
+                    clonedSku.setSupplierPrice(null);
+                    if (clonedSku.getProductSkuSpecReqs() != null) {
+                        for (AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq skuSpecReq : clonedSku.getProductSkuSpecReqs()) {
+                            if (skuSpecReq == null) {
+                                continue;
+                            }
+                            CreatedSpecInfo specInfo = resolveStoredSpecInfo(tempSpecInfoMap, skuSpecReq.getParentSpecId(), skuSpecReq.getSpecId());
+                            skuSpecReq.setSpecId(specInfo.specId());
+                            if (StringUtils.hasText(specInfo.specName())) {
+                                skuSpecReq.setSpecName(specInfo.specName());
+                            }
+                        }
+                    }
+                    clonedGroup.add(clonedSku);
+                }
+            }
+            skuGroups.add(clonedGroup);
+        }
+        return new StoredMaterializedSpecDraft(topProps, mainGroups, skuGroups, tempSpecInfoMap);
+    }
+
+    private List<AddGloGoodsRequest.ProductSkcReq> buildProductSkcReqsFromStoredDraft(Long spuId,
+                                                                                       ProductCollection pc,
+                                                                                       String mainImage,
+                                                                                       String fallbackThumb,
+                                                                                       StoredMaterializedSpecDraft materialized) {
+        int groupCount = Math.max(materialized.mainProductSkuSpecReqGroups().size(), materialized.productSkuReqGroups().size());
+        if (groupCount <= 0) {
+            throw new IllegalStateException("stored SKU groups is empty");
+        }
+        String baseExtCode = safeSkcExtCode(spuId, pc == null ? null : pc.getAlibabaProductId(), pc == null ? null : pc.getProductId());
+        List<List<AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq>> sourceMainGroups = materialized.mainProductSkuSpecReqGroups();
+        List<List<AddGloGoodsRequest.ProductSkuReq>> sourceSkuGroups = materialized.productSkuReqGroups();
+        boolean hasExplicitEmptyMainSpecPlaceholder = hasExplicitEmptyMainSpecPlaceholder(sourceMainGroups);
+
+        boolean needsRegroup = !hasExplicitEmptyMainSpecPlaceholder
+            && sourceMainGroups.size() <= 1
+            && sourceSkuGroups.size() == 1
+            && sourceSkuGroups.get(0) != null
+            && sourceSkuGroups.get(0).size() > 1;
+        if (needsRegroup) {
+            LinkedHashMap<String, List<AddGloGoodsRequest.ProductSkuReq>> regroupedSkuMap = new LinkedHashMap<>();
+            LinkedHashMap<String, List<AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq>> regroupedMainMap = new LinkedHashMap<>();
+            for (AddGloGoodsRequest.ProductSkuReq skuReq : sourceSkuGroups.get(0)) {
+                if (skuReq == null) {
+                    continue;
+                }
+                List<AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq> mainGroup = buildMainGroupFromSku(skuReq);
+                if (mainGroup.isEmpty()) {
+                    throw new IllegalStateException("stored productSkuReqs contains sku without productSkuSpecReqs");
+                }
+                String key = buildMainSpecGroupKey(mainGroup);
+                regroupedSkuMap.computeIfAbsent(key, k -> new ArrayList<>()).add(skuReq);
+                regroupedMainMap.putIfAbsent(key, mainGroup);
+            }
+            sourceMainGroups = new ArrayList<>(regroupedMainMap.values());
+            sourceSkuGroups = new ArrayList<>(regroupedSkuMap.values());
+        }
+
+        validateStoredDraftSkcStructure(sourceMainGroups, sourceSkuGroups, hasExplicitEmptyMainSpecPlaceholder);
+
+        if (hasExplicitEmptyMainSpecPlaceholder) {
+            List<AddGloGoodsRequest.ProductSkuReq> mergedSkuGroup = new ArrayList<>();
+            for (List<AddGloGoodsRequest.ProductSkuReq> group : sourceSkuGroups) {
+                if (group != null && !group.isEmpty()) {
+                    mergedSkuGroup.addAll(group);
+                }
+            }
+            if (mergedSkuGroup.isEmpty()) {
+                throw new IllegalStateException("stored productSkuReqs group is empty");
+            }
+            AddGloGoodsRequest.ProductSkcReq skc = new AddGloGoodsRequest.ProductSkcReq();
+            skc.setExtCode(baseExtCode);
+            String preview = null;
+            for (AddGloGoodsRequest.ProductSkuReq skuReq : mergedSkuGroup) {
+                if (skuReq != null && StringUtils.hasText(skuReq.getThumbUrl())) {
+                    preview = skuReq.getThumbUrl();
+                    break;
+                }
+            }
+            preview = firstNonBlank(preview, mainImage, fallbackThumb);
+            skc.setPreviewImgUrls(StringUtils.hasText(preview) ? new ArrayList<>(List.of(preview)) : new ArrayList<>());
+            skc.setMainProductSkuSpecReqs(new ArrayList<>(List.of(emptyMainProductSkuSpecReq())));
+            skc.setProductSkuReqs(mergedSkuGroup);
+            return new ArrayList<>(List.of(skc));
+        }
+
+        List<AddGloGoodsRequest.ProductSkcReq> out = new ArrayList<>();
+        int finalGroupCount = Math.max(sourceMainGroups.size(), sourceSkuGroups.size());
+        for (int i = 0; i < finalGroupCount; i++) {
+            List<AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq> mainGroup =
+                    i < sourceMainGroups.size() ? sourceMainGroups.get(i) : List.of();
+            List<AddGloGoodsRequest.ProductSkuReq> skuGroup =
+                    i < sourceSkuGroups.size() ? sourceSkuGroups.get(i) : List.of();
+            if (mainGroup == null || mainGroup.isEmpty()) {
+                throw new IllegalStateException("stored mainProductSkuSpecReqs group is empty");
+            }
+            if (skuGroup == null || skuGroup.isEmpty()) {
+                throw new IllegalStateException("stored productSkuReqs group is empty");
+            }
+            AddGloGoodsRequest.ProductSkcReq skc = new AddGloGoodsRequest.ProductSkcReq();
+            skc.setExtCode(finalGroupCount == 1 ? baseExtCode : baseExtCode + "_" + (i + 1));
+            String preview = null;
+            for (AddGloGoodsRequest.ProductSkuReq skuReq : skuGroup) {
+                if (skuReq != null && StringUtils.hasText(skuReq.getThumbUrl())) {
+                    preview = skuReq.getThumbUrl();
+                    break;
+                }
+            }
+            preview = firstNonBlank(preview, mainImage, fallbackThumb);
+            skc.setPreviewImgUrls(StringUtils.hasText(preview) ? new ArrayList<>(List.of(preview)) : new ArrayList<>());
+            skc.setMainProductSkuSpecReqs(new ArrayList<>(mainGroup));
+            skc.setProductSkuReqs(new ArrayList<>(skuGroup));
+            out.add(skc);
+        }
+        return out;
+    }
+
+    private boolean hasExplicitEmptyMainSpecPlaceholder(List<List<AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq>> mainGroups) {
+        if (mainGroups == null || mainGroups.isEmpty()) {
+            return false;
+        }
+        boolean sawPlaceholder = false;
+        for (List<AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq> group : mainGroups) {
+            if (group == null || group.isEmpty()) {
+                continue;
+            }
+            for (AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq item : group) {
+                if (item == null) {
+                    continue;
+                }
+                if (!isEmptyMainSpecPlaceholder(item.getParentSpecId(), item.getSpecId())) {
+                    return false;
+                }
+                sawPlaceholder = true;
+            }
+        }
+        return sawPlaceholder;
+    }
+
+    private void validateStoredDraftSkcStructure(List<List<AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq>> mainGroups,
+                                                 List<List<AddGloGoodsRequest.ProductSkuReq>> skuGroups,
+                                                 boolean hasExplicitEmptyMainSpecPlaceholder) {
+        if (skuGroups == null || skuGroups.isEmpty()) {
+            throw new IllegalStateException("stored productSkuReqs group is empty");
+        }
+
+        if (!hasExplicitEmptyMainSpecPlaceholder) {
+            if (mainGroups == null || mainGroups.isEmpty()) {
+                throw new IllegalStateException("stored mainProductSkuSpecReqs group is empty");
+            }
+            return;
+        }
+
+        LinkedHashSet<String> distinctSkuSpecGroupKeys = new LinkedHashSet<>();
+        for (List<AddGloGoodsRequest.ProductSkuReq> skuGroup : skuGroups) {
+            if (skuGroup == null || skuGroup.isEmpty()) {
+                continue;
+            }
+            for (AddGloGoodsRequest.ProductSkuReq skuReq : skuGroup) {
+                if (skuReq == null) {
+                    continue;
+                }
+                List<AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq> skuMainGroup = buildMainGroupFromSku(skuReq);
+                if (skuMainGroup.isEmpty()) {
+                    continue;
+                }
+                distinctSkuSpecGroupKeys.add(buildMainSpecGroupKey(skuMainGroup));
+                if (distinctSkuSpecGroupKeys.size() > 1) {
+                    throw new IllegalStateException("stored draft placeholder conflicts with multiple sku spec groups");
+                }
+            }
+        }
+    }
+
+    private AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq emptyMainProductSkuSpecReq() {
+        AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq item = new AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq();
+        item.setParentSpecId(0);
+        item.setParentSpecName("");
+        item.setSpecId(0);
+        item.setSpecName("");
+        return item;
+    }
+
+    private List<AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq> buildMainGroupFromSku(AddGloGoodsRequest.ProductSkuReq skuReq) {
+        List<AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq> out = new ArrayList<>();
+        if (skuReq == null || skuReq.getProductSkuSpecReqs() == null) {
+            return out;
+        }
+        for (AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq specReq : skuReq.getProductSkuSpecReqs()) {
+            if (specReq == null || specReq.getParentSpecId() == null || specReq.getSpecId() == null) {
+                continue;
+            }
+            AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq mainReq = new AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq();
+            mainReq.setParentSpecId(specReq.getParentSpecId());
+            mainReq.setParentSpecName(specReq.getParentSpecName());
+            mainReq.setSpecId(specReq.getSpecId());
+            mainReq.setSpecName(specReq.getSpecName());
+            out.add(mainReq);
+        }
+        return out;
+    }
+
+    private String buildMainSpecGroupKey(List<AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq> mainGroup) {
+        List<String> parts = new ArrayList<>();
+        for (AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq item : mainGroup) {
+            if (item == null) {
+                continue;
+            }
+            parts.add(item.getParentSpecId() + "=" + item.getSpecId());
+        }
+        return String.join("|", parts);
+    }
+
+    private CreatedSpecInfo resolveStoredSpecInfo(Map<String, CreatedSpecInfo> tempSpecInfoMap,
+                                                  Integer parentSpecId,
+                                                  Integer tempSpecId) {
+        CreatedSpecInfo actual = tempSpecInfoMap.get(simpleStoredSpecKey(parentSpecId, tempSpecId));
+        if (actual != null) {
+            return actual;
+        }
+        throw new IllegalStateException("stored specId mapping not found for parentSpecId=" + parentSpecId + ", specId=" + tempSpecId);
+    }
+
+    private boolean isEmptyMainSpecPlaceholder(Integer parentSpecId, Integer specId) {
+        return Objects.equals(parentSpecId, 0) && Objects.equals(specId, 0);
+    }
+
+    private CreatedSpecInfo createSpecInfo(CategoryApiClient categoryClient,
+                                           Integer parentSpecId,
+                                           String specValue) throws Exception {
+        String raw = categoryClient.createSpec(parentSpecId, specValue);
+        JsonNode root = objectMapper.readTree(raw);
+        if (!root.path("success").asBoolean(false)) {
+            String errorMsg = root.path("errorMsg").asText(null);
+            throw new IllegalStateException("createSpec failed for " + specValue + (StringUtils.hasText(errorMsg) ? ": " + errorMsg : ""));
+        }
+        JsonNode result = root.path("result");
+        int specId = result.path("specId").asInt(0);
+        String specName = result.path("specName").asText(specValue);
+        if (specId <= 0) {
+            throw new IllegalStateException("createSpec returned invalid specId for " + specValue);
+        }
+        return new CreatedSpecInfo(specId, specName);
+    }
+
+    private String storedSpecKey(Integer parentSpecId, Integer specId, String propValue) {
+        return String.valueOf(parentSpecId) + "|" + String.valueOf(specId) + "|" + (propValue == null ? "" : propValue.trim());
+    }
+
+    private String simpleStoredSpecKey(Integer parentSpecId, Integer specId) {
+        return String.valueOf(parentSpecId) + "|" + String.valueOf(specId);
+    }
+
     private String safeErrMessage(Exception e) {
         if (e == null) return "unknown";
         String m = e.getMessage();

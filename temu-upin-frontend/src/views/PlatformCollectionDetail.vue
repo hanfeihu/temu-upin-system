@@ -7,6 +7,7 @@
           返回
         </button>
         <div class="head-right">
+          <a-button @click="go(`/platform/spec-mappings/workbench/${id}`)">规格映射工作台</a-button>
           <a-button :loading="swappingImages" @click="swapCarouselAndDetail">轮播详情图交换</a-button>
           <a-button :loading="replacingKwcdn" @click="replaceImagesToKwcdn">一键替换图片链接</a-button>
           <a-button @click="go('/ai')">AI 做图</a-button>
