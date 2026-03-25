@@ -6,6 +6,7 @@ import com.tminos.productscene.entity.ProductCollectionSku;
 import com.tminos.productscene.entity.ProductCollectionTemuSku;
 import com.tminos.productscene.repository.ProductCollectionSkuRepository;
 import com.tminos.productscene.repository.ProductCollectionTemuSkuRepository;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -14,7 +15,9 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 @Service
 public class TemuSkuService {
@@ -75,7 +78,7 @@ public class TemuSkuService {
             t.setOriginSkuId(o.getSkuId());
             String fallbackSpec = StringUtils.hasText(o.getSkuId()) ? ("SKU-" + o.getSkuId().trim()) : ("Option-" + seq);
             t.setSpecKey(normalizeSpecKeyForTemuDisplay(o.getSpecKey(), fallbackSpec));
-            t.setSpecJson(o.getSpecJson());
+            t.setSpecJson(translateSpecJsonValues(o.getSpecJson()));
             t.setImage(o.getImage());
             t.setOriginPrice(originPrice);
             t.setSupplyPrice(supply);
@@ -266,6 +269,33 @@ public class TemuSkuService {
             t = t.substring(0, 120).trim();
         }
         return t;
+    }
+
+    /**
+     * Translate values in specJson to English, keeping the original Chinese keys.
+     * e.g. {"尺寸":"木叶+双格包"} -> {"尺寸":"Konoha Double-Compartment Bag"}
+     */
+    private String translateSpecJsonValues(String specJson) {
+        if (!StringUtils.hasText(specJson)) return specJson;
+        try {
+            ObjectMapper om = new ObjectMapper();
+            @SuppressWarnings("unchecked")
+            Map<String, Object> map = om.readValue(specJson, Map.class);
+            Map<String, Object> translated = new LinkedHashMap<>();
+            for (Map.Entry<String, Object> entry : map.entrySet()) {
+                Object val = entry.getValue();
+                if (val instanceof String sv && StringUtils.hasText(sv)
+                        && !"*".equals(sv.trim()) && containsCjk(sv)) {
+                    String tr = translateToEnBestEffort(sv);
+                    translated.put(entry.getKey(), StringUtils.hasText(tr) ? tr.trim() : sv);
+                } else {
+                    translated.put(entry.getKey(), val);
+                }
+            }
+            return om.writeValueAsString(translated);
+        } catch (Exception e) {
+            return specJson;
+        }
     }
 
     private boolean containsCjk(String s) {

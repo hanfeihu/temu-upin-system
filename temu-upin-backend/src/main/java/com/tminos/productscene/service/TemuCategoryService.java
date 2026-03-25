@@ -5,12 +5,15 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tminos.productscene.dto.TemuCategoryDTO;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import com.tminos.temu.upin.sdk.v2.category.CategoryApiClient;
 import com.tminos.temu.upin.sdk.v2.common.TemuOpenApiCredentials;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 @Service
 @RequiredArgsConstructor
@@ -78,6 +81,50 @@ public class TemuCategoryService {
             return client.getCategoryAttributes(Integer.valueOf(leafCatId.trim()));
         } catch (Exception e) {
             return null;
+        }
+    }
+
+    public List<TemuCategoryDTO.ParentSpecOption> listParentSpecs() {
+        try {
+            TemuOpenApiCredentials creds = temuOpenApiCredentialService.getDefaultTemuOpenApiCredentialsOrThrow();
+            CategoryApiClient client = new CategoryApiClient(creds);
+            String raw = client.getParentSpecList();
+            JsonNode root = objectMapper.readTree(raw);
+            if (!root.path("success").asBoolean(false)) {
+                throw new IllegalStateException(text(root, "errorMsg"));
+            }
+            Map<String, TemuCategoryDTO.ParentSpecOption> byName = new LinkedHashMap<>();
+            collectParentSpecsInto(root.path("result"), byName);
+            return new ArrayList<>(byName.values());
+        } catch (Exception e) {
+            throw new IllegalStateException(StringUtils.hasText(e.getMessage()) ? e.getMessage() : "获取 TEMU 父规格失败", e);
+        }
+    }
+
+    private void collectParentSpecsInto(JsonNode node, Map<String, TemuCategoryDTO.ParentSpecOption> byName) {
+        if (node == null || node.isNull()) {
+            return;
+        }
+        if (node.isObject()) {
+            JsonNode idNode = node.get("parentSpecId");
+            JsonNode nameNode = node.get("parentSpecName");
+            if (idNode != null && !idNode.isNull() && nameNode != null && !nameNode.isNull()) {
+                int id = idNode.asInt(0);
+                String name = nameNode.asText("");
+                if (id > 0 && StringUtils.hasText(name) && !byName.containsKey(name.trim())) {
+                    byName.put(name.trim(), TemuCategoryDTO.ParentSpecOption.builder()
+                            .parentSpecId(id)
+                            .parentSpecName(name.trim())
+                            .build());
+                }
+            }
+            node.fields().forEachRemaining(entry -> collectParentSpecsInto(entry.getValue(), byName));
+            return;
+        }
+        if (node.isArray()) {
+            for (JsonNode item : node) {
+                collectParentSpecsInto(item, byName);
+            }
         }
     }
 

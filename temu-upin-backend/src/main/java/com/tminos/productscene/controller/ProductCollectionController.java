@@ -3,6 +3,9 @@ package com.tminos.productscene.controller;
 import com.tminos.productscene.dto.ImportHtmlRequest;
 import com.tminos.productscene.dto.ProductCollectionDTO.ProductCollectionResponse;
 import com.tminos.productscene.dto.ProductCollectionDTO.ProductCollectionDetailResponse;
+import com.tminos.productscene.dto.ProductCollectionDTO.SplitProductRequest;
+import com.tminos.productscene.dto.ProductCollectionDTO.SplitProductResponse;
+import com.tminos.productscene.dto.ProductCollectionDTO.TemuPublishPayloadResponse;
 import com.tminos.productscene.dto.ProductCollectionDTO.UpdateProductCollectionRequest;
 import com.tminos.productscene.dto.ProductDTO.ApiResponse;
 import com.tminos.productscene.dto.StabilityFusionDTO;
@@ -153,12 +156,25 @@ public class ProductCollectionController {
         return ResponseEntity.ok(ApiResponse.success(service.getDetail(id)));
     }
 
+    @GetMapping("/{id}/temu-publish-payload")
+    public ResponseEntity<ApiResponse<TemuPublishPayloadResponse>> getTemuPublishPayload(@PathVariable Long id) {
+        return ResponseEntity.ok(ApiResponse.success(service.getTemuPublishPayload(id)));
+    }
+
     @PutMapping("/{id}")
     public ResponseEntity<ApiResponse<ProductCollection>> update(
             @PathVariable Long id,
             @Valid @RequestBody UpdateProductCollectionRequest request
     ) {
         return ResponseEntity.ok(ApiResponse.success("Updated", service.update(id, request)));
+    }
+
+    @PostMapping("/{id}/split")
+    public ResponseEntity<ApiResponse<SplitProductResponse>> split(
+            @PathVariable Long id,
+            @Valid @RequestBody SplitProductRequest request
+    ) {
+        return ResponseEntity.ok(ApiResponse.success("Split success", service.splitProduct(id, request)));
     }
 
     @PostMapping("/{id}/post-import/requeue")
@@ -272,6 +288,17 @@ public class ProductCollectionController {
         }
     }
 
+    @PostMapping("/{id}/temu/images/normalize-800")
+    public ResponseEntity<ApiResponse<java.util.Map<String, Object>>> normalizeAllImagesTo800(@PathVariable Long id) {
+        service.get(id);
+        try {
+            java.util.Map<String, Object> out = temuImageTranslateService.normalizeAllImagesToTemu800(id);
+            return ResponseEntity.ok(ApiResponse.success(out));
+        } catch (Exception e) {
+            return ResponseEntity.ok(ApiResponse.error("Normalize failed: " + e.getMessage()));
+        }
+    }
+
     @PostMapping({"/{id}/image/translate", "/{id}/temu/image/translate"})
     public ResponseEntity<ApiResponse<TemuImageDTO.TranslateImageResponse>> translateImage(
             @PathVariable Long id,
@@ -355,12 +382,6 @@ public class ProductCollectionController {
                 return ResponseEntity.ok(ApiResponse.success("OK", r));
             }
             String msg = r == null ? "Publish failed" : (r.getMessage() == null ? "Publish failed" : r.getMessage());
-            if (r != null && Boolean.TRUE.equals(r.getBlockedByMainSaleSpec()) && r.getMainSaleSpecTaskId() != null) {
-                String taskToken = "taskId=" + r.getMainSaleSpecTaskId();
-                if (!msg.contains(taskToken)) {
-                    msg = msg + " (" + taskToken + ")";
-                }
-            }
             if (r != null && r.getRunId() != null) {
                 msg = msg + " (runId=" + r.getRunId() + ")";
             }

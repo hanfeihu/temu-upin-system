@@ -296,4 +296,63 @@ public class ProductCollectionDTO {
 
         private String temuAttributes;
     }
+
+    @Getter
+    @Setter
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @Builder
+    public static class SplitProductRequest {
+        private List<SplitGroupRequest> groups;
+    }
+
+    @Getter
+    @Setter
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @Builder
+    public static class SplitGroupRequest {
+        private String name;
+        private List<Long> skuRowIds;
+    }
+
+    @Getter
+    @Setter
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @Builder
+    public static class SplitProductResponse {
+        private Long sourceSpuId;
+        private String sourceProductName;
+        private Integer splitCount;
+        private List<SplitCreatedProductResponse> products;
+    }
+
+    @Getter
+    @Setter
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @Builder
+    public static class SplitCreatedProductResponse {
+        private Long id;
+        private String productId;
+        private String productName;
+        private Integer skuCount;
+    }
+
+    @Getter
+    @Setter
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @Builder
+    public static class TemuPublishPayloadResponse {
+        private Long spuId;
+        private String temuCatid;
+        private String sourceProductName;
+        private String translatedProductName;
+        private List<String> carouselImages;
+        private List<String> detailImages;
+        private Object temuAttributes;
+        private List<com.tminos.productscene.dto.TemuSkuDTO.TemuSkuRow> temuSkus;
+    }
 }

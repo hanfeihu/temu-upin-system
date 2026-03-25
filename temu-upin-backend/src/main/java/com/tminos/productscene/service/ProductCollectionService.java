@@ -23,7 +23,7 @@ import com.tminos.productscene.config.ImportTitleCleanConfig;
 import com.tminos.productscene.service.pull.parser.Alibaba1688HtmlParser;
 import jakarta.persistence.EntityNotFoundException;
 import org.springframework.data.domain.*;
-import org.springframework.data.jpa.domain.Specification;
+import org.springframework.util.StringUtils;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.slf4j.Logger;
@@ -35,8 +35,11 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -378,6 +381,23 @@ public class ProductCollectionService {
     }
 
     @Transactional(readOnly = true)
+    public com.tminos.productscene.dto.ProductCollectionDTO.TemuPublishPayloadResponse getTemuPublishPayload(Long spuId) {
+        ProductCollection pc = get(spuId);
+        List<ProductCollectionTemuSku> temuSkus = temuSkuRepo.findBySpuIdOrderByIdAsc(spuId);
+
+        return com.tminos.productscene.dto.ProductCollectionDTO.TemuPublishPayloadResponse.builder()
+                .spuId(pc.getId())
+                .temuCatid(pc.getTemuCatid())
+                .sourceProductName(pc.getProductName())
+                .translatedProductName(translateTitleForTemuPublish(pc.getProductName()))
+                .carouselImages(parseJsonStringArraySafe(pc.getCarouselImages()))
+                .detailImages(parseJsonStringArraySafe(pc.getDetailImages()))
+                .temuAttributes(parseJsonObjectSafe(pc.getTemuAttributes()))
+                .temuSkus(buildTemuSkuResponses(temuSkus))
+                .build();
+    }
+
+    @Transactional(readOnly = true)
     public List<Map<String, Object>> listTemuCategories(Boolean showDeleted) {
         boolean sd = showDeleted != null && showDeleted;
         List<Object[]> rows = repo.findDistinctTemuCategories(sd);
@@ -481,6 +501,109 @@ public class ProductCollectionService {
         if (req.getTemuAttributes() != null) pc.setTemuAttributes(req.getTemuAttributes());
 
         return repo.save(pc);
+    }
+
+    @Transactional
+    public com.tminos.productscene.dto.ProductCollectionDTO.SplitProductResponse splitProduct(
+            Long id,
+            com.tminos.productscene.dto.ProductCollectionDTO.SplitProductRequest request
+    ) {
+        ProductCollection source = get(id);
+        List<ProductCollectionSku> sourceSkuRows = skuRepo.findBySpuId(id);
+        sourceSkuRows.sort(Comparator.comparing(ProductCollectionSku::getId, Comparator.nullsLast(Long::compareTo)));
+        if (sourceSkuRows.isEmpty()) {
+            throw new IllegalArgumentException("当前商品没有可拆分的 SKU");
+        }
+
+        List<com.tminos.productscene.dto.ProductCollectionDTO.SplitGroupRequest> requestGroups = request == null
+                ? Collections.emptyList()
+                : request.getGroups();
+        if (requestGroups == null || requestGroups.isEmpty()) {
+            throw new IllegalArgumentException("请至少提供两个拆分商品分组");
+        }
+
+        Map<Long, ProductCollectionSku> skuByRowId = sourceSkuRows.stream()
+                .filter(row -> row.getId() != null)
+                .collect(Collectors.toMap(ProductCollectionSku::getId, row -> row, (left, right) -> left, LinkedHashMap::new));
+
+        List<SplitGroupSelection> selections = new ArrayList<>();
+        Set<Long> assignedSkuRowIds = new LinkedHashSet<>();
+        for (int index = 0; index < requestGroups.size(); index++) {
+            com.tminos.productscene.dto.ProductCollectionDTO.SplitGroupRequest groupRequest = requestGroups.get(index);
+            if (groupRequest == null) {
+                continue;
+            }
+            String groupName = firstNonBlank(groupRequest.getName(), "拆分商品" + (index + 1));
+            List<Long> rowIds = groupRequest.getSkuRowIds() == null ? Collections.emptyList() : groupRequest.getSkuRowIds();
+            LinkedHashSet<Long> distinctRowIds = new LinkedHashSet<>();
+            for (Long rowId : rowIds) {
+                if (rowId == null) {
+                    continue;
+                }
+                ProductCollectionSku row = skuByRowId.get(rowId);
+                if (row == null) {
+                    throw new IllegalArgumentException("存在无效的 SKU 行 id=" + rowId);
+                }
+                if (!assignedSkuRowIds.add(rowId)) {
+                    throw new IllegalArgumentException("SKU 只能分配到一个新商品中，重复的 skuRowId=" + rowId);
+                }
+                distinctRowIds.add(rowId);
+            }
+            if (distinctRowIds.isEmpty()) {
+                continue;
+            }
+            List<ProductCollectionSku> rows = distinctRowIds.stream().map(skuByRowId::get).filter(Objects::nonNull).toList();
+            selections.add(new SplitGroupSelection(groupName, rows));
+        }
+
+        if (selections.size() < 2) {
+            throw new IllegalArgumentException("至少拆分成两个新商品，且每个商品都要包含 SKU");
+        }
+        if (assignedSkuRowIds.size() != sourceSkuRows.size()) {
+            throw new IllegalArgumentException("请先把所有 SKU 都分配到新商品中，当前已分配 " + assignedSkuRowIds.size() + " / " + sourceSkuRows.size());
+        }
+
+        List<ProductCollectionTemuSku> sourceTemuSkus = temuSkuRepo.findBySpuIdOrderByIdAsc(id);
+        List<ProductCollectionSkuProp> sourceProps = skuPropRepo.findBySpuIdOrderBySortAsc(id);
+        List<Long> sourcePropIds = sourceProps.stream().map(ProductCollectionSkuProp::getId).filter(Objects::nonNull).toList();
+        List<ProductCollectionSkuPropValue> sourcePropValues = sourcePropIds.isEmpty()
+                ? Collections.emptyList()
+                : skuPropValueRepo.findByPropIdIn(sourcePropIds);
+        Map<Long, List<ProductCollectionSkuPropValue>> sourcePropValueMap = sourcePropValues.stream()
+                .collect(Collectors.groupingBy(ProductCollectionSkuPropValue::getPropId, LinkedHashMap::new, Collectors.toList()));
+
+        List<com.tminos.productscene.dto.ProductCollectionDTO.SplitCreatedProductResponse> createdProducts = new ArrayList<>();
+        int groupIndex = 1;
+        for (SplitGroupSelection selection : selections) {
+            List<ProductCollectionSku> groupSkuRows = selection.skuRows();
+            List<ProductCollectionTemuSku> groupTemuSkus = pickTemuSkusForGroup(groupSkuRows, sourceTemuSkus);
+
+            ProductCollection target = cloneProductForSplit(source, selection.groupName(), groupIndex, groupSkuRows, groupTemuSkus);
+            target.setSkuData(buildSkuDataJson(groupSkuRows));
+            target.setSkuModel(buildSkuModelJson(groupSkuRows, sourceProps, sourcePropValueMap));
+            target = repo.save(target);
+
+            saveSplitSkuRows(target.getId(), groupSkuRows);
+            rebuildSkuPropsForSubset(target.getId(), groupSkuRows, sourceProps, sourcePropValueMap);
+            saveSplitTemuSkuRows(target.getId(), groupTemuSkus);
+
+            createdProducts.add(com.tminos.productscene.dto.ProductCollectionDTO.SplitCreatedProductResponse.builder()
+                    .id(target.getId())
+                    .productId(target.getProductId())
+                    .productName(target.getProductName())
+                    .skuCount(groupSkuRows.size())
+                    .build());
+            groupIndex++;
+        }
+
+        deleteHard(id);
+
+        return com.tminos.productscene.dto.ProductCollectionDTO.SplitProductResponse.builder()
+                .sourceSpuId(id)
+                .sourceProductName(source.getProductName())
+                .splitCount(createdProducts.size())
+                .products(createdProducts)
+                .build();
     }
 
     @Transactional
@@ -822,6 +945,85 @@ public class ProductCollectionService {
         }
     }
 
+    private Object parseJsonObjectSafe(String json) {
+        if (!StringUtils.hasText(json)) {
+            return null;
+        }
+        try {
+            return objectMapper.readValue(json, Object.class);
+        } catch (Exception ignored) {
+            return json;
+        }
+    }
+
+    private String translateTitleForTemuPublish(String title) {
+        List<String> warnings = new ArrayList<>();
+        return sanitizeEnglishName(maybeTranslateTitleToEn(title, warnings), warnings);
+    }
+
+    private String maybeTranslateTitleToEn(String title, List<String> warnings) {
+        if (!StringUtils.hasText(title)) return title;
+        String t = title.trim();
+        if (!containsCjk(t)) return t;
+
+        String[] candidates = {
+                "com.tminos.erp.common.util.AliyunTranslateUtil",
+                "com.tminos.temu.openapi.util.AliyunTranslateUtil",
+                "com.tminos.temu.openapi.util.aliyun.AliyunTranslateUtil",
+                "com.tminos.productscene.util.AliyunTranslateUtil",
+                "AliyunTranslateUtil"
+        };
+
+        for (String clzName : candidates) {
+            try {
+                Class<?> clz = Class.forName(clzName);
+                java.lang.reflect.Method m = clz.getMethod("translateToEn", String.class);
+                Object out = m.invoke(null, t);
+                if (out instanceof String s && StringUtils.hasText(s)) {
+                    return s.trim();
+                }
+            } catch (Exception ignored) {
+            }
+        }
+
+        if (warnings != null) {
+            warnings.add("title translation skipped: AliyunTranslateUtil.translateToEn not found");
+        }
+        return t;
+    }
+
+    private String sanitizeEnglishName(String s, List<String> warnings) {
+        if (!StringUtils.hasText(s)) return s;
+        String input = s.trim();
+        String cleaned = input
+                .replaceAll("[^A-Za-z0-9\\-\\_\\.\\,\\/\\(\\)\\[\\]\\+\\&\\%\\s]", " ")
+                .replaceAll("\\s+", " ")
+                .trim();
+        if (!StringUtils.hasText(cleaned)) {
+            cleaned = "Product";
+        }
+        if (!cleaned.equals(input) && warnings != null) {
+            warnings.add("english name sanitized");
+        }
+        if (cleaned.length() > 200) {
+            cleaned = cleaned.substring(0, 200).trim();
+        }
+        return cleaned;
+    }
+
+    private boolean containsCjk(String s) {
+        if (s == null) {
+            return false;
+        }
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c >= '\u4e00' && c <= '\u9fff') {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /**
      * Clean imported product title by removing configured keywords.
      * This runs at import time so later flows (category match, AI fill, publish) see a cleaner title.
@@ -1075,8 +1277,412 @@ public class ProductCollectionService {
         }
     }
 
+    private ProductCollection cloneProductForSplit(ProductCollection source,
+                                                   String groupName,
+                                                   int groupIndex,
+                                                   List<ProductCollectionSku> skuRows,
+                                                   List<ProductCollectionTemuSku> temuSkus) {
+        LocalDateTime now = LocalDateTime.now();
+        ProductCollection target = new ProductCollection();
+        target.setCreatedAt(now);
+        target.setUpdatedAt(now);
+        target.setCreatedBy(source.getCreatedBy());
+        target.setUpdatedBy(source.getUpdatedBy());
+        target.setDeleted(Boolean.FALSE);
+        target.setVersion(0);
+        target.setAnnualSales(source.getAnnualSales());
+        target.setAttributesData(source.getAttributesData());
+        target.setCarouselImages(source.getCarouselImages());
+        target.setCollectCount(source.getCollectCount());
+        target.setCollectionStatus(0);
+        target.setCollectionTime(source.getCollectionTime());
+        target.setCompanyLocation(source.getCompanyLocation());
+        target.setCompanyName(source.getCompanyName());
+        target.setDetailImages(source.getDetailImages());
+        target.setHasSevereInventory(source.getHasSevereInventory());
+        target.setMonthlyConsignment(source.getMonthlyConsignment());
+        target.setMonthlySales(source.getMonthlySales());
+        target.setMoq(source.getMoq());
+        target.setMoqText(source.getMoqText());
+        target.setNetWeight(source.getNetWeight());
+        target.setOriginalCategory(source.getOriginalCategory());
+        target.setOriginalContent(source.getOriginalContent());
+        target.setPackagingDimensions(source.getPackagingDimensions());
+        target.setPackagingHeight(source.getPackagingHeight());
+        target.setPackagingLength(source.getPackagingLength());
+        target.setPackagingWeight(source.getPackagingWeight());
+        target.setPackagingWidth(source.getPackagingWidth());
+        target.setProductCategory(source.getProductCategory());
+        target.setProductId(buildSplitProductId(source.getProductId(), groupIndex));
+        target.setProductMainImage(resolveSplitMainImage(skuRows, temuSkus, source.getProductMainImage()));
+        target.setProductName(buildSplitProductName(source.getProductName(), groupName));
+        target.setProductUrl(source.getProductUrl());
+        target.setRatingScore(source.getRatingScore());
+        target.setRepeatCustomerRate(source.getRepeatCustomerRate());
+        target.setReviewCount(source.getReviewCount());
+        target.setServiceScore(source.getServiceScore());
+        target.setShippingLocation(source.getShippingLocation());
+        target.setSourcePlatform(source.getSourcePlatform());
+        target.setTemuCatid(source.getTemuCatid());
+        target.setTemuCatname(source.getTemuCatname());
+        target.setCarouselThumbImages(source.getCarouselThumbImages());
+        target.setCarouselVideo(source.getCarouselVideo());
+        target.setBaseFreight(source.getBaseFreight());
+        target.setCustomMadeSpecs(source.getCustomMadeSpecs());
+        target.setShippingServicesInfo(source.getShippingServicesInfo());
+        target.setPriceSteps(source.getPriceSteps());
+        target.setAlibabaProductId(source.getAlibabaProductId());
+        target.setOriginalHtml(source.getOriginalHtml());
+        target.setTemuAttributes(source.getTemuAttributes());
+        target.setTemuPublished(Boolean.FALSE);
+        target.setTemuGoodsId(null);
+        target.setTemuPublishedAt(null);
+        target.setTemuPublishRaw(null);
+        target.setExecStatus(source.getExecStatus());
+        target.setOcrStatus(source.getOcrStatus());
+        target.setExecResult(source.getExecResult());
+        target.setLastPublishRunId(null);
+
+        List<BigDecimal> prices = skuRows.stream().map(ProductCollectionSku::getPrice).filter(Objects::nonNull).toList();
+        target.setMinPrice(prices.isEmpty() ? source.getMinPrice() : prices.stream().min(BigDecimal::compareTo).orElse(source.getMinPrice()));
+        target.setMaxPrice(prices.isEmpty() ? source.getMaxPrice() : prices.stream().max(BigDecimal::compareTo).orElse(source.getMaxPrice()));
+        return target;
+    }
+
+    private String buildSplitProductId(String sourceProductId, int groupIndex) {
+        String base = firstNonBlank(sourceProductId, "product");
+        return base + "-split-" + groupIndex + "-" + (System.currentTimeMillis() % 1_000_000);
+    }
+
+    private String buildSplitProductName(String sourceProductName, String groupName) {
+        String base = firstNonBlank(sourceProductName, "拆分商品");
+        String suffix = firstNonBlank(groupName, "新分组");
+        return base + " - " + suffix;
+    }
+
+    private String resolveSplitMainImage(List<ProductCollectionSku> skuRows,
+                                         List<ProductCollectionTemuSku> temuSkus,
+                                         String fallback) {
+        for (ProductCollectionTemuSku temuSku : temuSkus) {
+            String image = trimToNull(temuSku == null ? null : temuSku.getImage());
+            if (image != null) {
+                return image;
+            }
+        }
+        for (ProductCollectionSku skuRow : skuRows) {
+            String image = trimToNull(skuRow == null ? null : skuRow.getImage());
+            if (image != null) {
+                return image;
+            }
+        }
+        return fallback;
+    }
+
+    private List<ProductCollectionTemuSku> pickTemuSkusForGroup(List<ProductCollectionSku> skuRows,
+                                                                 List<ProductCollectionTemuSku> sourceTemuSkus) {
+        if (sourceTemuSkus == null || sourceTemuSkus.isEmpty() || skuRows == null || skuRows.isEmpty()) {
+            return Collections.emptyList();
+        }
+        Set<Long> addedIds = new LinkedHashSet<>();
+        List<ProductCollectionTemuSku> out = new ArrayList<>();
+        for (ProductCollectionSku skuRow : skuRows) {
+            String skuId = trimToNull(skuRow == null ? null : skuRow.getSkuId());
+            String specKey = trimToNull(skuRow == null ? null : skuRow.getSpecKey());
+            for (ProductCollectionTemuSku temuSku : sourceTemuSkus) {
+                if (temuSku == null || temuSku.getId() == null || addedIds.contains(temuSku.getId())) {
+                    continue;
+                }
+                boolean sameOriginSku = skuId != null && skuId.equals(trimToNull(temuSku.getOriginSkuId()));
+                boolean sameSpecKey = specKey != null && specKey.equals(trimToNull(temuSku.getSpecKey()));
+                if (sameOriginSku || sameSpecKey) {
+                    addedIds.add(temuSku.getId());
+                    out.add(temuSku);
+                }
+            }
+        }
+        return out;
+    }
+
+    private void saveSplitSkuRows(Long targetSpuId, List<ProductCollectionSku> sourceSkuRows) {
+        List<ProductCollectionSku> copies = new ArrayList<>();
+        for (ProductCollectionSku sourceSkuRow : sourceSkuRows) {
+            if (sourceSkuRow == null) {
+                continue;
+            }
+            ProductCollectionSku copy = new ProductCollectionSku();
+            copy.setSpuId(targetSpuId);
+            copy.setSkuId(sourceSkuRow.getSkuId());
+            copy.setSpecKey(sourceSkuRow.getSpecKey());
+            copy.setSpecJson(sourceSkuRow.getSpecJson());
+            copy.setStock(sourceSkuRow.getStock());
+            copy.setPrice(sourceSkuRow.getPrice());
+            copy.setImage(sourceSkuRow.getImage());
+            copies.add(copy);
+        }
+        skuRepo.saveAll(copies);
+    }
+
+    private void saveSplitTemuSkuRows(Long targetSpuId, List<ProductCollectionTemuSku> sourceTemuSkus) {
+        if (sourceTemuSkus == null || sourceTemuSkus.isEmpty()) {
+            return;
+        }
+        List<ProductCollectionTemuSku> copies = new ArrayList<>();
+        for (ProductCollectionTemuSku sourceTemuSku : sourceTemuSkus) {
+            if (sourceTemuSku == null) {
+                continue;
+            }
+            ProductCollectionTemuSku copy = new ProductCollectionTemuSku();
+            copy.setSpuId(targetSpuId);
+            copy.setTemuSkuId(sourceTemuSku.getTemuSkuId());
+            copy.setOriginSkuId(sourceTemuSku.getOriginSkuId());
+            copy.setSpecKey(sourceTemuSku.getSpecKey());
+            copy.setSpecJson(sourceTemuSku.getSpecJson());
+            copy.setImage(sourceTemuSku.getImage());
+            copy.setOriginPrice(sourceTemuSku.getOriginPrice());
+            copy.setSupplyPrice(sourceTemuSku.getSupplyPrice());
+            copy.setWeightG(sourceTemuSku.getWeightG());
+            copy.setLengthCm(sourceTemuSku.getLengthCm());
+            copy.setWidthCm(sourceTemuSku.getWidthCm());
+            copy.setHeightCm(sourceTemuSku.getHeightCm());
+            copies.add(copy);
+        }
+        temuSkuRepo.saveAll(copies);
+    }
+
+    private void rebuildSkuPropsForSubset(Long targetSpuId,
+                                          List<ProductCollectionSku> skuRows,
+                                          List<ProductCollectionSkuProp> sourceProps,
+                                          Map<Long, List<ProductCollectionSkuPropValue>> sourcePropValueMap) {
+        if (skuRows == null || skuRows.isEmpty()) {
+            return;
+        }
+        List<ProductCollectionSkuProp> propTemplates = (sourceProps == null || sourceProps.isEmpty())
+                ? deriveSkuPropsFromSpecJson(skuRows)
+                : sourceProps;
+        Map<String, Map<String, ProductCollectionSkuPropValue>> valueMetaByProp = buildPropValueMetaMap(propTemplates, sourcePropValueMap);
+
+        for (ProductCollectionSkuProp sourceProp : propTemplates) {
+            if (sourceProp == null || !hasText(sourceProp.getName())) {
+                continue;
+            }
+            LinkedHashSet<String> values = new LinkedHashSet<>();
+            for (ProductCollectionSku skuRow : skuRows) {
+                String value = trimToNull(parseSpecJsonOrderedMap(skuRow == null ? null : skuRow.getSpecJson()).get(sourceProp.getName()));
+                if (value != null) {
+                    values.add(value);
+                }
+            }
+            if (values.isEmpty()) {
+                continue;
+            }
+
+            ProductCollectionSkuProp newProp = ProductCollectionSkuProp.builder()
+                    .spuId(targetSpuId)
+                    .fid(sourceProp.getFid())
+                    .name(sourceProp.getName())
+                    .sort(sourceProp.getSort())
+                    .build();
+            newProp = skuPropRepo.save(newProp);
+
+            int sort = 0;
+            Map<String, ProductCollectionSkuPropValue> valueMeta = valueMetaByProp.getOrDefault(sourceProp.getName(), Collections.emptyMap());
+            for (String value : values) {
+                ProductCollectionSkuPropValue sourceValue = valueMeta.get(value);
+                skuPropValueRepo.save(ProductCollectionSkuPropValue.builder()
+                        .propId(newProp.getId())
+                        .value(value)
+                        .image(sourceValue == null ? null : sourceValue.getImage())
+                        .sort(sourceValue == null || sourceValue.getSort() == null ? sort++ : sourceValue.getSort())
+                        .build());
+            }
+        }
+    }
+
+    private String buildSkuDataJson(List<ProductCollectionSku> skuRows) {
+        List<Map<String, Object>> skus = new ArrayList<>();
+        for (ProductCollectionSku skuRow : skuRows) {
+            if (skuRow == null) {
+                continue;
+            }
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("skuId", skuRow.getSkuId());
+            row.put("specKey", skuRow.getSpecKey());
+            row.put("specJson", parseSpecJsonOrderedMap(skuRow.getSpecJson()));
+            row.put("stock", skuRow.getStock());
+            row.put("price", skuRow.getPrice());
+            row.put("image", skuRow.getImage());
+            skus.add(row);
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("skus", skus);
+        return writeJsonSilently(out);
+    }
+
+    private String buildSkuModelJson(List<ProductCollectionSku> skuRows,
+                                     List<ProductCollectionSkuProp> sourceProps,
+                                     Map<Long, List<ProductCollectionSkuPropValue>> sourcePropValueMap) {
+        List<ProductCollectionSkuProp> propTemplates = (sourceProps == null || sourceProps.isEmpty())
+                ? deriveSkuPropsFromSpecJson(skuRows)
+                : sourceProps;
+        Map<String, Map<String, ProductCollectionSkuPropValue>> valueMetaByProp = buildPropValueMetaMap(propTemplates, sourcePropValueMap);
+
+        List<Map<String, Object>> props = new ArrayList<>();
+        for (ProductCollectionSkuProp sourceProp : propTemplates) {
+            if (sourceProp == null || !hasText(sourceProp.getName())) {
+                continue;
+            }
+            LinkedHashSet<String> values = new LinkedHashSet<>();
+            for (ProductCollectionSku skuRow : skuRows) {
+                String value = trimToNull(parseSpecJsonOrderedMap(skuRow == null ? null : skuRow.getSpecJson()).get(sourceProp.getName()));
+                if (value != null) {
+                    values.add(value);
+                }
+            }
+            if (values.isEmpty()) {
+                continue;
+            }
+            List<Map<String, Object>> valueItems = new ArrayList<>();
+            int sort = 0;
+            Map<String, ProductCollectionSkuPropValue> valueMeta = valueMetaByProp.getOrDefault(sourceProp.getName(), Collections.emptyMap());
+            for (String value : values) {
+                ProductCollectionSkuPropValue sourceValue = valueMeta.get(value);
+                Map<String, Object> valueItem = new LinkedHashMap<>();
+                valueItem.put("name", value);
+                valueItem.put("image", sourceValue == null ? null : sourceValue.getImage());
+                valueItem.put("sort", sourceValue == null || sourceValue.getSort() == null ? sort++ : sourceValue.getSort());
+                valueItems.add(valueItem);
+            }
+            Map<String, Object> propItem = new LinkedHashMap<>();
+            propItem.put("fid", sourceProp.getFid());
+            propItem.put("name", sourceProp.getName());
+            propItem.put("sort", sourceProp.getSort());
+            propItem.put("values", valueItems);
+            props.add(propItem);
+        }
+
+        Map<String, Object> skuMap = new LinkedHashMap<>();
+        for (ProductCollectionSku skuRow : skuRows) {
+            if (skuRow == null || !hasText(skuRow.getSpecKey())) {
+                continue;
+            }
+            Map<String, Object> skuItem = new LinkedHashMap<>();
+            skuItem.put("skuId", skuRow.getSkuId());
+            skuItem.put("stock", skuRow.getStock());
+            skuItem.put("price", skuRow.getPrice());
+            skuItem.put("image", skuRow.getImage());
+            skuMap.put(skuRow.getSpecKey(), skuItem);
+        }
+
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("keySep", ">");
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("props", props);
+        out.put("skuMap", skuMap);
+        out.put("meta", meta);
+        return writeJsonSilently(out);
+    }
+
+    private List<ProductCollectionSkuProp> deriveSkuPropsFromSpecJson(List<ProductCollectionSku> skuRows) {
+        LinkedHashMap<String, Integer> orders = new LinkedHashMap<>();
+        int index = 0;
+        for (ProductCollectionSku skuRow : skuRows) {
+            LinkedHashMap<String, String> specMap = parseSpecJsonOrderedMap(skuRow == null ? null : skuRow.getSpecJson());
+            for (String key : specMap.keySet()) {
+                if (hasText(key) && !orders.containsKey(key)) {
+                    orders.put(key, index++);
+                }
+            }
+        }
+        List<ProductCollectionSkuProp> out = new ArrayList<>();
+        for (Map.Entry<String, Integer> entry : orders.entrySet()) {
+            ProductCollectionSkuProp prop = new ProductCollectionSkuProp();
+            prop.setName(entry.getKey());
+            prop.setSort(entry.getValue());
+            out.add(prop);
+        }
+        return out;
+    }
+
+    private Map<String, Map<String, ProductCollectionSkuPropValue>> buildPropValueMetaMap(List<ProductCollectionSkuProp> props,
+                                                                                           Map<Long, List<ProductCollectionSkuPropValue>> sourcePropValueMap) {
+        Map<String, Map<String, ProductCollectionSkuPropValue>> out = new LinkedHashMap<>();
+        for (ProductCollectionSkuProp prop : props) {
+            if (prop == null || prop.getId() == null || !hasText(prop.getName())) {
+                continue;
+            }
+            Map<String, ProductCollectionSkuPropValue> values = new LinkedHashMap<>();
+            for (ProductCollectionSkuPropValue value : sourcePropValueMap.getOrDefault(prop.getId(), Collections.emptyList())) {
+                if (value != null && hasText(value.getValue())) {
+                    values.putIfAbsent(value.getValue(), value);
+                }
+            }
+            out.put(prop.getName(), values);
+        }
+        return out;
+    }
+
+    private LinkedHashMap<String, String> parseSpecJsonOrderedMap(String specJson) {
+        LinkedHashMap<String, String> out = new LinkedHashMap<>();
+        if (!hasText(specJson)) {
+            return out;
+        }
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> raw = objectMapper.readValue(specJson, LinkedHashMap.class);
+            for (Map.Entry<String, Object> entry : raw.entrySet()) {
+                String key = trimToNull(entry.getKey());
+                String value = trimToNull(entry.getValue() == null ? null : String.valueOf(entry.getValue()));
+                if (key != null) {
+                    out.put(key, value == null ? "" : value);
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return out;
+    }
+
+    private String writeJsonSilently(Object value) {
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private boolean hasText(String value) {
+        return value != null && !value.trim().isBlank();
+    }
+
+    private String trimToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isBlank() ? null : trimmed;
+    }
+
+    private String firstNonBlank(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            String trimmed = trimToNull(value);
+            if (trimmed != null) {
+                return trimmed;
+            }
+        }
+        return null;
+    }
+
     private static class ExtractedPayload {
         public List<String> detailImages;
+    }
+
+    private record SplitGroupSelection(
+            String groupName,
+            List<ProductCollectionSku> skuRows
+    ) {
     }
 
     // list() now uses a native SQL query that includes counts; keep list response mapping in mapRowToResponse.

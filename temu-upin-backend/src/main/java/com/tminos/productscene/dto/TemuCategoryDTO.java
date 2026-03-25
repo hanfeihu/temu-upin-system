@@ -168,4 +168,14 @@ public class TemuCategoryDTO {
         private Integer catLevel;
         private Boolean isHidden;
     }
+
+    @Getter
+    @Setter
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @Builder
+    public static class ParentSpecOption {
+        private Integer parentSpecId;
+        private String parentSpecName;
+    }
 }

@@ -5,7 +5,7 @@
         <div>
           <div class="hero-kicker">Deterministic Mapping</div>
           <h1>规格映射规则中心</h1>
-          <p>把 1688 规格字段如何转成 TEMU 主销售属性和组内 SKU 维度，固化成可复用模板。</p>
+          <p>把 1688 规格字段如何转成 TEMU 父规格、主分组字段和组内 SKU 维度，固化成可复用模板。</p>
         </div>
         <div class="hero-actions">
           <a-button @click="reload" :loading="loading">刷新</a-button>
@@ -52,6 +52,44 @@
       >
         <div class="modal-grid">
           <a-form layout="vertical" :model="editForm">
+            <div v-if="!editForm.id" class="prefill-card">
+              <div class="prefill-head">
+                <div>
+                  <div class="prefill-title">从商品自动带入</div>
+                  <div class="prefill-desc">先选择一个商品，自动填写来源类目、TEMU 类目、规格签名和基础字段映射，你再继续修改。</div>
+                </div>
+                <a-button v-if="selectedProductMeta" @click="clearSelectedProduct">清空</a-button>
+              </div>
+
+              <div class="prefill-actions">
+                <a-select
+                  v-model:value="selectedProductId"
+                  show-search
+                  allow-clear
+                  :filter-option="false"
+                  :options="productOptions"
+                  :loading="productSearchLoading"
+                  placeholder="输入商品名或商品ID搜索"
+                  style="width: 100%"
+                  @search="onProductSearch"
+                  @change="onSelectProduct"
+                />
+                <a-button
+                  type="primary"
+                  :disabled="!selectedProductId"
+                  :loading="prefilling"
+                  @click="fillFromSelectedProduct"
+                >
+                  自动填写
+                </a-button>
+              </div>
+
+              <div v-if="selectedProductMeta" class="prefill-meta">
+                <span>商品：{{ selectedProductMeta.label }}</span>
+                <span>ID：{{ selectedProductMeta.value }}</span>
+              </div>
+            </div>
+
             <a-row :gutter="16">
               <a-col :span="12">
                 <a-form-item label="模板名称" required>
@@ -59,23 +97,23 @@
                 </a-form-item>
               </a-col>
               <a-col :span="12">
-                <a-form-item label="主销售属性名称">
+                <a-form-item label="TEMU 父规格名称">
                   <a-select v-model:value="editForm.targetParentSpecName" :options="parentSpecOptions" />
                 </a-form-item>
               </a-col>
               <a-col :span="12">
-                <a-form-item label="来源类目路径">
-                  <a-input v-model:value="editForm.sourceCategoryPath" placeholder="可选，用于描述适用商品" />
+                <a-form-item label="1688 来源类目路径">
+                  <a-input v-model:value="editForm.sourceCategoryPath" placeholder="例如 饰品 > 发饰 > 发圈" />
                 </a-form-item>
               </a-col>
               <a-col :span="12">
-                <a-form-item label="来源签名">
-                  <a-input v-model:value="editForm.sourceSignature" placeholder="例如 尺寸#37|颜色#1" />
+                <a-form-item label="1688 来源规格签名">
+                  <a-input v-model:value="editForm.sourceSignature" placeholder="例如 尺寸#37|颜色#1，表示字段名与去重值数量" />
                 </a-form-item>
               </a-col>
             </a-row>
 
-            <a-form-item label="候选主字段">
+            <a-form-item label="候选主字段（从 1688 字段里选）">
               <a-select
                 v-model:value="editForm.mainFieldCandidates"
                 mode="tags"
@@ -85,11 +123,12 @@
             </a-form-item>
 
             <div class="section-head">字段映射</div>
+            <div class="section-tip">左侧填 1688 的规格字段，右侧填你希望归一后的目标字段名。</div>
             <div class="mapping-list">
               <div class="mapping-row mapping-head">
                 <span>启用</span>
-                <span>来源字段</span>
-                <span>目标字段</span>
+                <span>1688 规格字段</span>
+                <span>归一后目标字段</span>
                 <span>角色</span>
                 <span>忽略空值</span>
                 <span>忽略 *</span>
@@ -108,14 +147,15 @@
             <a-button class="ghost-btn" @click="addFieldMapping">新增字段映射</a-button>
 
             <div class="section-head">值归并规则</div>
+            <div class="section-tip">例如把 1688 的“30只装”“50只装”统一归并成 TEMU 更稳定的展示值。</div>
             <div class="rule-list">
               <div class="rule-row rule-head">
                 <span>启用</span>
-                <span>来源字段</span>
+                <span>1688 规格字段</span>
                 <span>匹配方式</span>
                 <span>匹配表达式</span>
-                <span>目标字段</span>
-                <span>目标值</span>
+                <span>归一后目标字段</span>
+                <span>TEMU 使用值</span>
                 <span></span>
               </div>
               <div v-for="(item, index) in editForm.valueRules" :key="index" class="rule-row">
@@ -152,23 +192,47 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { message, Modal } from 'ant-design-vue'
 import ProLayout from '@/platform/components/ProLayout.vue'
 import { specMappingApi } from '@/platform/api/specMappings'
+import { productCollectionApi } from '@/platform/api/productCollections'
 
 const loading = ref(false)
 const saving = ref(false)
 const editOpen = ref(false)
 const rows = ref([])
+const productSearchLoading = ref(false)
+const prefilling = ref(false)
+const selectedProductId = ref(undefined)
+const productOptions = ref([])
+const selectedProductMeta = ref(null)
+let productSearchTimer = null
 
-const parentSpecOptions = [
+const fallbackParentSpecOptions = [
   { label: '型号', value: '型号' },
   { label: '规格', value: '规格' },
   { label: '尺码', value: '尺码' },
   { label: '颜色', value: '颜色' },
   { label: '数量', value: '数量' }
 ]
+
+const temuParentSpecs = ref([])
+const selectedProductParentSpecs = ref([])
+
+const parentSpecOptions = computed(() => {
+  const merged = [...(selectedProductParentSpecs.value || []), ...(temuParentSpecs.value || [])]
+  const seen = new Set()
+  const options = merged
+    .filter((item) => item?.parentSpecName)
+    .map((item) => ({ label: item.parentSpecName, value: item.parentSpecName }))
+    .filter((item) => {
+      if (seen.has(item.value)) return false
+      seen.add(item.value)
+      return true
+    })
+  return options.length ? options : fallbackParentSpecOptions
+})
 
 const roleOptions = [
   { label: '主属性候选', value: 'main_candidate' },
@@ -246,6 +310,49 @@ const assignForm = (record = null) => {
   editForm.notes = record?.notes || ''
 }
 
+const buildMappingsFromSourceFields = (sourceFields = []) => {
+  const variableFields = sourceFields.filter((item) => item?.sourceFieldName && item.variable !== false)
+  const firstVariable = variableFields[0]?.sourceFieldName || ''
+  const mappings = sourceFields
+    .filter((item) => item?.sourceFieldName)
+    .map((item, index) => ({
+      ...createEmptyFieldMapping(),
+      sourceFieldName: item.sourceFieldName,
+      targetFieldName: item.sourceFieldName,
+      role: item.variable === false ? 'ignore' : (item.sourceFieldName === firstVariable ? 'main_candidate' : 'sku_dimension'),
+      sortOrder: index
+    }))
+  return mappings.length ? mappings : [createEmptyFieldMapping()]
+}
+
+const applyWorkbenchToForm = (data = {}) => {
+  const sourceFields = Array.isArray(data.sourceFields) ? data.sourceFields : []
+  const variableFieldNames = sourceFields
+    .filter((item) => item?.sourceFieldName && item.variable !== false)
+    .map((item) => item.sourceFieldName)
+
+  if (!String(editForm.name || '').trim() && data.productName) {
+    editForm.name = `${data.productName} 规格映射模板`
+  }
+  editForm.sourceCategoryPath = data.sourceCategoryPath || ''
+  editForm.targetCategoryId = data.targetCategoryId || ''
+  editForm.targetCategoryName = data.targetCategoryName || ''
+  editForm.sourceSignature = data.sourceSignature || ''
+  editForm.mainFieldCandidates = variableFieldNames
+  editForm.fieldMappings = buildMappingsFromSourceFields(sourceFields)
+  editForm.valueRules = []
+  editForm.autoIgnoreConstantFields = true
+  if (data.targetParentSpecOptions?.length) {
+    const candidateNames = data.targetParentSpecOptions.map((item) => item?.parentSpecName).filter(Boolean)
+    if (!candidateNames.includes(editForm.targetParentSpecName)) {
+      editForm.targetParentSpecName = candidateNames[0] || '型号'
+    }
+  }
+  if (data.productName) {
+    editForm.notes = `从商品《${data.productName}》自动带入后生成，可继续调整。`
+  }
+}
+
 const normalizePayload = () => ({
   name: String(editForm.name || '').trim(),
   enabled: !!editForm.enabled,
@@ -299,14 +406,99 @@ const reload = async () => {
   }
 }
 
+const loadTemuParentSpecs = async () => {
+  try {
+    const res = await specMappingApi.listTemuParentSpecs()
+    if (res?.success) {
+      temuParentSpecs.value = Array.isArray(res.data) ? res.data : []
+    }
+  } catch (error) {
+    temuParentSpecs.value = []
+  }
+}
+
 const openCreate = () => {
   assignForm()
+  selectedProductId.value = undefined
+  selectedProductMeta.value = null
+  selectedProductParentSpecs.value = []
   editOpen.value = true
 }
 
 const openEdit = (record) => {
   assignForm(record)
+  selectedProductId.value = undefined
+  selectedProductMeta.value = null
+  selectedProductParentSpecs.value = []
   editOpen.value = true
+}
+
+const fetchProductOptions = async (keyword = '') => {
+  productSearchLoading.value = true
+  try {
+    const res = await productCollectionApi.list({ q: keyword || undefined, page: 0, size: 20 })
+    if (res?.success) {
+      const content = Array.isArray(res.data?.content) ? res.data.content : []
+      productOptions.value = content.map((item) => ({
+        label: `${item.productName || item.title || '未命名商品'} (#${item.id})`,
+        value: String(item.id),
+        raw: item
+      }))
+      return
+    }
+    productOptions.value = []
+  } catch (error) {
+    productOptions.value = []
+  } finally {
+    productSearchLoading.value = false
+  }
+}
+
+const onProductSearch = (keyword) => {
+  if (productSearchTimer) {
+    clearTimeout(productSearchTimer)
+  }
+  productSearchTimer = setTimeout(() => {
+    fetchProductOptions(String(keyword || '').trim())
+  }, 250)
+}
+
+const onSelectProduct = (value, option) => {
+  if (!value) {
+    selectedProductMeta.value = null
+    selectedProductParentSpecs.value = []
+    return
+  }
+  selectedProductMeta.value = option || productOptions.value.find((item) => item.value === value) || null
+}
+
+const clearSelectedProduct = () => {
+  selectedProductId.value = undefined
+  selectedProductMeta.value = null
+  selectedProductParentSpecs.value = []
+}
+
+const fillFromSelectedProduct = async () => {
+  if (!selectedProductId.value) {
+    message.error('请先选择商品')
+    return
+  }
+  prefilling.value = true
+  try {
+    const res = await specMappingApi.getWorkbench(selectedProductId.value)
+    if (res?.success) {
+      const data = res.data || {}
+      selectedProductParentSpecs.value = Array.isArray(data.targetParentSpecOptions) ? data.targetParentSpecOptions : []
+      applyWorkbenchToForm(data)
+      message.success('已自动带入商品规格结构')
+      return
+    }
+    message.error(res?.message || '自动填写失败')
+  } catch (error) {
+    message.error(error.message || '自动填写失败')
+  } finally {
+    prefilling.value = false
+  }
 }
 
 const addFieldMapping = () => {
@@ -372,6 +564,8 @@ const removeProfile = (record) => {
 }
 
 onMounted(() => {
+  loadTemuParentSpecs()
+  fetchProductOptions()
   reload()
 })
 </script>
@@ -414,6 +608,13 @@ onMounted(() => {
   color: #475569;
 }
 
+.section-tip {
+  margin: 8px 0 12px;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
 .hero-actions {
   display: flex;
   align-items: flex-start;
@@ -429,6 +630,49 @@ onMounted(() => {
 .modal-grid {
   max-height: 72vh;
   overflow: auto;
+}
+
+.prefill-card {
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  border: 1px solid #dbeafe;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #f8fbff 0%, #f0f9ff 100%);
+}
+
+.prefill-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+
+.prefill-title {
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.prefill-desc {
+  margin-top: 4px;
+  font-size: 13px;
+  color: #64748b;
+  line-height: 1.6;
+}
+
+.prefill-actions {
+  display: grid;
+  grid-template-columns: 1fr 120px;
+  gap: 12px;
+}
+
+.prefill-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: #475569;
 }
 
 .section-head {
@@ -484,6 +728,12 @@ onMounted(() => {
 @media (max-width: 1100px) {
   .hero-card,
   .form-footer {
+    flex-direction: column;
+  }
+
+  .prefill-head,
+  .prefill-actions {
+    grid-template-columns: 1fr;
     flex-direction: column;
   }
 

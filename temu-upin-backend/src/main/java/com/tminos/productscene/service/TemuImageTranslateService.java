@@ -4,7 +4,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tminos.productscene.config.TemuGoodsConfig;
 import com.tminos.productscene.entity.ProductCollection;
+import com.tminos.productscene.entity.ProductCollectionTemuSku;
 import com.tminos.productscene.repository.ProductCollectionRepository;
+import com.tminos.productscene.repository.ProductCollectionTemuSkuRepository;
 import com.tminos.temu.upin.sdk.v2.common.TemuOpenApiCredentials;
 import com.tminos.temu.upin.sdk.v2.dto.TemuApiResponse;
 import com.tminos.temu.upin.sdk.v2.image.TemuImageV2Client;
@@ -47,6 +49,7 @@ public class TemuImageTranslateService {
     private final Executor globalWorkerExecutor;
     private final AliyunImageTranslateService aliyunImageTranslateService;
     private final TemuOpenApiCredentialService temuOpenApiCredentialService;
+    private final ProductCollectionTemuSkuRepository temuSkuRepository;
 
     public TemuImageTranslateService(TemuGoodsConfig temuGoodsConfig,
                                      OssService ossService,
@@ -57,7 +60,8 @@ public class TemuImageTranslateService {
                                      TemuImageMetaService temuImageMetaService,
                                      @org.springframework.beans.factory.annotation.Qualifier("globalWorkerExecutor") Executor globalWorkerExecutor,
                                      AliyunImageTranslateService aliyunImageTranslateService,
-                                     TemuOpenApiCredentialService temuOpenApiCredentialService) {
+                                     TemuOpenApiCredentialService temuOpenApiCredentialService,
+                                     ProductCollectionTemuSkuRepository temuSkuRepository) {
         this.temuGoodsConfig = temuGoodsConfig;
         this.ossService = ossService;
         this.objectMapper = objectMapper;
@@ -68,6 +72,7 @@ public class TemuImageTranslateService {
         this.globalWorkerExecutor = globalWorkerExecutor;
         this.aliyunImageTranslateService = aliyunImageTranslateService;
         this.temuOpenApiCredentialService = temuOpenApiCredentialService;
+        this.temuSkuRepository = temuSkuRepository;
     }
 
     public Result translateGlobalImage(String imageUrl,
@@ -248,12 +253,30 @@ public class TemuImageTranslateService {
             productCollectionRepository.save(pc);
         }
 
+        // --- SKU images ---
+        int skuChanged = 0;
+        List<ProductCollectionTemuSku> temuSkus = temuSkuRepository.findBySpuIdOrderByIdAsc(spuId);
+        for (ProductCollectionTemuSku sku : temuSkus) {
+            String skuImg = sku.getImage();
+            if (!StringUtils.hasText(skuImg)) continue;
+            String newSkuImg = replaceOneIfNeeded(skuImg, "temuSku[" + sku.getId() + "].image", changes);
+            if (!Objects.equals(skuImg, newSkuImg)) {
+                sku.setImage(newSkuImg);
+                skuChanged++;
+            }
+        }
+        if (skuChanged > 0) {
+            temuSkuRepository.saveAll(temuSkus);
+            changed = true;
+        }
+
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("spuId", spuId);
         out.put("changed", changed);
         out.put("mainImage", pc.getProductMainImage());
         out.put("carouselCount", newCarousel.size());
         out.put("detailCount", newDetail.size());
+        out.put("skuImageChanged", skuChanged);
         out.put("changes", changes);
         return out;
     }
@@ -372,6 +395,131 @@ public class TemuImageTranslateService {
         out.put("detailCount", newDetail.size());
         out.put("changes", changes);
         return out;
+    }
+
+    /**
+     * Normalize ALL product images (main, carousel, detail, SKU) to 800x800 via stretch.
+     * Uses a dedicated 10-thread pool for parallel processing.
+     */
+    public Map<String, Object> normalizeAllImagesToTemu800(Long spuId) throws Exception {
+        if (spuId == null) throw new IllegalArgumentException("spuId is required");
+        ProductCollection pc = productCollectionService.get(spuId);
+        log.info("normalizeAllImagesToTemu800 spuId={} thread={}", spuId, Thread.currentThread().getName());
+
+        String main = pc.getProductMainImage();
+        List<String> carousel = parseJsonStringList(pc.getCarouselImages());
+        List<String> detail = parseJsonStringList(pc.getDetailImages());
+        List<ProductCollectionTemuSku> temuSkus = temuSkuRepository.findBySpuIdOrderByIdAsc(spuId);
+
+        List<Map<String, Object>> changes = Collections.synchronizedList(new ArrayList<>());
+
+        // Collect all image tasks: field -> url
+        Map<String, String> originalByField = new LinkedHashMap<>();
+        if (StringUtils.hasText(main)) {
+            originalByField.put("productMainImage", main);
+        }
+        for (int i = 0; i < carousel.size(); i++) {
+            if (StringUtils.hasText(carousel.get(i))) {
+                originalByField.put("carouselImages[" + i + "]", carousel.get(i));
+            }
+        }
+        for (int i = 0; i < detail.size(); i++) {
+            if (StringUtils.hasText(detail.get(i))) {
+                originalByField.put("detailImages[" + i + "]", detail.get(i));
+            }
+        }
+        // SKU images
+        Map<Long, String> skuImageBySkuId = new LinkedHashMap<>();
+        for (ProductCollectionTemuSku sku : temuSkus) {
+            if (StringUtils.hasText(sku.getImage())) {
+                String field = "temuSku[" + sku.getId() + "].image";
+                originalByField.put(field, sku.getImage());
+                skuImageBySkuId.put(sku.getId(), sku.getImage());
+            }
+        }
+
+        // Use a dedicated 20-thread pool
+        ExecutorService pool = Executors.newFixedThreadPool(20);
+        try {
+            Map<String, CompletableFuture<String>> futures = new LinkedHashMap<>();
+            for (Map.Entry<String, String> e : originalByField.entrySet()) {
+                String field = e.getKey();
+                String url = e.getValue();
+                futures.put(field, CompletableFuture.supplyAsync(() -> {
+                    try {
+                        return normalizeOne800(url, field, changes, true);
+                    } catch (Exception ex) {
+                        log.warn("normalizeAllImagesToTemu800 field={} failed: {}", field, ex.getMessage());
+                        return url;
+                    }
+                }, pool));
+            }
+
+            // Wait for all
+            for (CompletableFuture<String> f : futures.values()) {
+                try {
+                    f.get(10, TimeUnit.MINUTES);
+                } catch (Exception ignored) {
+                }
+            }
+
+            // Rebuild results
+            String newMain = futures.containsKey("productMainImage") ? futures.get("productMainImage").getNow(main) : main;
+            List<String> newCarousel = new ArrayList<>();
+            for (int i = 0; i < carousel.size(); i++) {
+                String field = "carouselImages[" + i + "]";
+                newCarousel.add(futures.containsKey(field) ? futures.get(field).getNow(carousel.get(i)) : carousel.get(i));
+            }
+            List<String> newDetail = new ArrayList<>();
+            for (int i = 0; i < detail.size(); i++) {
+                String field = "detailImages[" + i + "]";
+                newDetail.add(futures.containsKey(field) ? futures.get(field).getNow(detail.get(i)) : detail.get(i));
+            }
+
+            boolean changed = !Objects.equals(main, newMain)
+                    || !Objects.equals(carousel, newCarousel)
+                    || !Objects.equals(detail, newDetail);
+
+            if (!Objects.equals(main, newMain)) {
+                pc.setProductMainImage(newMain);
+            }
+            if (changed) {
+                pc.setCarouselImages(writeJson(newCarousel));
+                pc.setDetailImages(writeJson(newDetail));
+                productCollectionRepository.save(pc);
+            }
+
+            // Update SKU images
+            int skuChanged = 0;
+            for (ProductCollectionTemuSku sku : temuSkus) {
+                String field = "temuSku[" + sku.getId() + "].image";
+                if (futures.containsKey(field)) {
+                    String original = skuImageBySkuId.get(sku.getId());
+                    String newImg = futures.get(field).getNow(original);
+                    if (!Objects.equals(original, newImg)) {
+                        sku.setImage(newImg);
+                        skuChanged++;
+                    }
+                }
+            }
+            if (skuChanged > 0) {
+                temuSkuRepository.saveAll(temuSkus);
+                changed = true;
+            }
+
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("spuId", spuId);
+            out.put("changed", changed);
+            out.put("mainImage", pc.getProductMainImage());
+            out.put("carouselCount", newCarousel.size());
+            out.put("detailCount", newDetail.size());
+            out.put("skuImageChanged", skuChanged);
+            out.put("totalImages", originalByField.size());
+            out.put("changes", changes);
+            return out;
+        } finally {
+            pool.shutdown();
+        }
     }
 
     private String normalizeOne800(String url, String field, List<Map<String, Object>> changes, boolean recordMeta) throws Exception {

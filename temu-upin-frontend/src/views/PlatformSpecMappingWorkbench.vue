@@ -6,9 +6,14 @@
           <div class="banner-kicker">SPU {{ spuId }}</div>
           <h1>{{ workbench.productName || '规格映射工作台' }}</h1>
           <p>{{ workbench.sourceCategoryPath || '未识别原始类目' }}</p>
+          <div class="banner-tags">
+            <a-tag color="blue">TEMU 类目 {{ workbench.targetCategoryName || workbench.targetCategoryId || '未绑定' }}</a-tag>
+            <a-tag color="gold">模板 {{ (workbench.profiles || []).length }}</a-tag>
+          </div>
         </div>
         <div class="banner-actions">
           <a-button @click="goBack">返回商品详情</a-button>
+          <a-button @click="goProfiles">规则中心</a-button>
           <a-button @click="reload" :loading="loading">刷新数据</a-button>
           <a-button type="primary" @click="saveDraft" :loading="saving">保存草案</a-button>
         </div>
@@ -17,8 +22,11 @@
       <div class="panel-grid">
         <section class="panel source-panel">
           <div class="panel-title-row">
-            <h2>源规格结构</h2>
+            <h2>1688 来源规格结构</h2>
             <a-tag color="blue">{{ workbench.sourceSignature || '未生成签名' }}</a-tag>
+          </div>
+          <div class="panel-tip">
+            左侧都是 1688 原始规格。这里的“来源签名”是当前规格结构的指纹，比如 尺寸#12|颜色#3，表示字段名和各自去重值数量。
           </div>
           <div class="field-cards">
             <div v-for="field in workbench.sourceFields || []" :key="field.sourceFieldName" class="field-card">
@@ -32,7 +40,7 @@
 
         <section class="panel config-panel">
           <div class="panel-title-row">
-            <h2>映射配置</h2>
+            <h2>TEMU 目标映射配置</h2>
             <a-space>
               <a-select
                 v-model:value="form.profileId"
@@ -51,33 +59,45 @@
 
           <a-row :gutter="16">
             <a-col :span="8">
-              <a-form-item label="TEMU 主销售属性名称">
+              <a-form-item label="TEMU 父规格名称">
                 <a-select v-model:value="form.targetParentSpecName" :options="parentSpecOptions" />
               </a-form-item>
             </a-col>
             <a-col :span="8">
-              <a-form-item label="主分组字段">
+              <a-form-item label="主分组字段（SKC 维度）">
                 <a-select v-model:value="form.selectedMainField" allow-clear :options="candidateFieldOptions" />
               </a-form-item>
             </a-col>
             <a-col :span="8">
-              <a-form-item label="组内 SKU 维度">
-                <a-select v-model:value="form.selectedSkuFields" mode="multiple" :options="skuFieldOptions" />
+              <a-form-item label="组内 SKU 维度（同一 SKC 下继续区分）">
+                <a-select v-model:value="form.selectedSkuFields" mode="multiple" :options="skuFieldOptions" @change="previewNow" />
+              </a-form-item>
+            </a-col>
+            <a-col :span="24">
+              <a-form-item label="候选主字段池（从 1688 字段里圈定谁可以做主规格）">
+                <a-select
+                  v-model:value="form.mainFieldCandidates"
+                  mode="multiple"
+                  :options="sourceFieldOptions"
+                  placeholder="限制哪些字段可以参与主字段选择"
+                  @change="previewNow"
+                />
               </a-form-item>
             </a-col>
           </a-row>
 
           <div class="switch-line">
             <span>自动忽略恒定字段</span>
-            <a-switch v-model:checked="form.autoIgnoreConstantFields" />
+            <a-switch v-model:checked="form.autoIgnoreConstantFields" @change="previewNow" />
           </div>
 
           <div class="editor-block">
             <div class="editor-title">字段映射</div>
+            <div class="editor-tip">把 1688 规格字段归一成你在 TEMU 映射里要使用的字段名。左边是 1688，右边是归一后的目标字段。</div>
             <div class="edit-grid field-grid header-row">
               <span>启用</span>
-              <span>来源字段</span>
-              <span>目标字段</span>
+              <span>1688 规格字段</span>
+              <span>归一后目标字段</span>
               <span>角色</span>
               <span>忽略空值</span>
               <span>忽略 *</span>
@@ -97,13 +117,14 @@
 
           <div class="editor-block">
             <div class="editor-title">值归并规则</div>
+            <div class="editor-tip">当 1688 原值过碎时，在这里把多个值归并成 TEMU 侧更适合的值。</div>
             <div class="edit-grid rule-grid header-row">
               <span>启用</span>
-              <span>来源字段</span>
+              <span>1688 规格字段</span>
               <span>匹配方式</span>
               <span>匹配表达式</span>
-              <span>目标字段</span>
-              <span>目标值</span>
+              <span>归一后目标字段</span>
+              <span>TEMU 使用值</span>
               <span></span>
             </div>
             <div v-for="(item, index) in form.valueRules" :key="index" class="edit-grid rule-grid">
@@ -173,7 +194,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
 import ProLayout from '@/platform/components/ProLayout.vue'
@@ -190,7 +211,10 @@ const saving = ref(false)
 const workbench = reactive({
   productName: '',
   sourceCategoryPath: '',
+  targetCategoryName: '',
+  targetCategoryId: '',
   sourceSignature: '',
+  targetParentSpecOptions: [],
   sourceFields: [],
   sourceRows: [],
   profiles: [],
@@ -210,7 +234,7 @@ const preview = reactive({
   validations: []
 })
 
-const parentSpecOptions = [
+const fallbackParentSpecOptions = [
   { label: '型号', value: '型号' },
   { label: '规格', value: '规格' },
   { label: '尺码', value: '尺码' },
@@ -262,6 +286,14 @@ const form = reactive({
 })
 
 const candidateFieldOptions = computed(() => (preview.candidateFields || []).map((item) => ({ label: `${item.fieldName} (${item.distinctCount})`, value: item.fieldName })))
+const sourceFieldOptions = computed(() => (workbench.sourceFields || []).map((item) => ({ label: item.sourceFieldName, value: item.sourceFieldName })))
+const parentSpecOptions = computed(() => {
+  const options = (workbench.targetParentSpecOptions || []).map((item) => ({
+    label: item.parentSpecName,
+    value: item.parentSpecName
+  }))
+  return options.length ? options : fallbackParentSpecOptions
+})
 const skuFieldOptions = computed(() => (preview.candidateFields || [])
   .filter((item) => item.fieldName !== form.selectedMainField)
   .map((item) => ({ label: `${item.fieldName} (${item.distinctCount})`, value: item.fieldName })))
@@ -311,6 +343,7 @@ const assignFormFromDraft = (draft) => {
   form.valueRules = Array.isArray(draft?.valueRules)
     ? draft.valueRules.map((item, index) => ({ ...createValueRule(), ...item, sortOrder: index }))
     : []
+  form.mainFieldCandidates = []
   form.autoIgnoreConstantFields = draft?.autoIgnoreConstantFields !== false
 }
 
@@ -349,6 +382,10 @@ const applyProfileById = (profileId) => {
   previewNow()
 }
 
+const syncSelectedSkuFields = () => {
+  form.selectedSkuFields = (form.selectedSkuFields || []).filter((item) => item && item !== form.selectedMainField)
+}
+
 const addFieldMapping = () => {
   form.fieldMappings.push({ ...createFieldMapping(), sortOrder: form.fieldMappings.length })
 }
@@ -370,7 +407,10 @@ const reload = async () => {
     const data = res.data || {}
     workbench.productName = data.productName || ''
     workbench.sourceCategoryPath = data.sourceCategoryPath || ''
+    workbench.targetCategoryName = data.targetCategoryName || ''
+    workbench.targetCategoryId = data.targetCategoryId || ''
     workbench.sourceSignature = data.sourceSignature || ''
+    workbench.targetParentSpecOptions = Array.isArray(data.targetParentSpecOptions) ? data.targetParentSpecOptions : []
     workbench.sourceFields = Array.isArray(data.sourceFields) ? data.sourceFields : []
     workbench.sourceRows = Array.isArray(data.sourceRows) ? data.sourceRows : []
     workbench.profiles = Array.isArray(data.profiles) ? data.profiles : []
@@ -441,6 +481,20 @@ const saveDraft = async () => {
 
 const renderFieldSummary = (fields) => Object.entries(fields || {}).map(([key, value]) => `${key}:${value}`).join(' / ')
 const goBack = () => router.push(`/platform/product-collections/${spuId.value}`)
+const goProfiles = () => router.push('/platform/spec-mappings/profiles')
+
+watch(() => form.selectedMainField, () => {
+  syncSelectedSkuFields()
+  if (spuId.value) {
+    previewNow()
+  }
+})
+
+watch(() => form.targetParentSpecName, () => {
+  if (spuId.value) {
+    previewNow()
+  }
+})
 
 onMounted(() => {
   reload()
@@ -484,6 +538,13 @@ onMounted(() => {
   color: #475569;
 }
 
+.banner-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
 .banner-actions {
   display: flex;
   align-items: flex-start;
@@ -516,6 +577,14 @@ onMounted(() => {
 .panel-title-row h2 {
   margin: 0;
   font-size: 18px;
+}
+
+.panel-tip,
+.editor-tip {
+  margin-bottom: 12px;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 .field-cards,

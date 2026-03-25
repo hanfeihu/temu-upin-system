@@ -3,6 +3,7 @@ package com.tminos.productscene.service;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tminos.productscene.dto.ProductCollectionDTO;
+import com.tminos.productscene.dto.TemuCategoryDTO;
 import com.tminos.productscene.dto.TemuSkuDTO;
 import com.tminos.productscene.dto.TemuSpecMappingDTO;
 import com.tminos.productscene.entity.TemuSpecMappingDraft;
@@ -28,15 +29,18 @@ public class TemuSpecMappingService {
     private final TemuSpecMappingProfileRepository profileRepository;
     private final TemuSpecMappingDraftRepository draftRepository;
     private final ProductCollectionService productCollectionService;
+    private final TemuCategoryService temuCategoryService;
     private final ObjectMapper objectMapper;
 
     public TemuSpecMappingService(TemuSpecMappingProfileRepository profileRepository,
                                   TemuSpecMappingDraftRepository draftRepository,
                                   ProductCollectionService productCollectionService,
+                                  TemuCategoryService temuCategoryService,
                                   ObjectMapper objectMapper) {
         this.profileRepository = profileRepository;
         this.draftRepository = draftRepository;
         this.productCollectionService = productCollectionService;
+        this.temuCategoryService = temuCategoryService;
         this.objectMapper = objectMapper;
     }
 
@@ -84,12 +88,22 @@ public class TemuSpecMappingService {
 
         List<TemuSpecMappingDTO.SourceFieldSummary> sourceFields = buildSourceFieldSummaries(detail);
         List<TemuSpecMappingDTO.SourceRow> sourceRows = buildSourceRows(detail);
+        String sourceSignature = buildSourceSignature(sourceFields);
         response.setSourceFields(sourceFields);
         response.setSourceRows(sourceRows);
-        response.setSourceSignature(buildSourceSignature(sourceFields));
-        response.setProfiles(listProfiles(null));
+        response.setSourceSignature(sourceSignature);
+        response.setTargetParentSpecOptions(loadParentSpecOptions());
+        response.setProfiles(sortProfilesForWorkbench(detail, sourceSignature, listProfiles(true)));
         response.setLatestDraft(draftRepository.findFirstBySpuIdOrderByIdDesc(spuId).map(this::toDraftResponse).orElse(null));
         return response;
+    }
+
+    private List<TemuCategoryDTO.ParentSpecOption> loadParentSpecOptions() {
+        try {
+            return temuCategoryService.listParentSpecs();
+        } catch (Exception ignored) {
+            return List.of();
+        }
     }
 
     @Transactional(readOnly = true)
@@ -420,6 +434,43 @@ public class TemuSpecMappingService {
         return defaults;
     }
 
+    private List<TemuSpecMappingDTO.ProfileResponse> sortProfilesForWorkbench(ProductCollectionDTO.ProductCollectionDetailResponse detail,
+                                                                              String sourceSignature,
+                                                                              List<TemuSpecMappingDTO.ProfileResponse> profiles) {
+        List<TemuSpecMappingDTO.ProfileResponse> sorted = new ArrayList<>(profiles == null ? List.of() : profiles);
+        sorted.sort(Comparator
+                .comparingInt((TemuSpecMappingDTO.ProfileResponse profile) -> scoreProfileMatch(detail, sourceSignature, profile))
+                .reversed()
+                .thenComparing(TemuSpecMappingDTO.ProfileResponse::getUpdatedAt, Comparator.nullsLast(Comparator.reverseOrder()))
+                .thenComparing(TemuSpecMappingDTO.ProfileResponse::getId, Comparator.nullsLast(Comparator.reverseOrder())));
+        return sorted;
+    }
+
+    private int scoreProfileMatch(ProductCollectionDTO.ProductCollectionDetailResponse detail,
+                                  String sourceSignature,
+                                  TemuSpecMappingDTO.ProfileResponse profile) {
+        if (profile == null) {
+            return Integer.MIN_VALUE;
+        }
+        int score = 0;
+        if (equalsIgnoreTrim(profile.getTargetCategoryId(), detail == null ? null : detail.getTemuCatid())) {
+            score += 100;
+        }
+        if (equalsIgnoreTrim(profile.getSourceSignature(), sourceSignature)) {
+            score += 60;
+        }
+        if (containsIgnoreTrim(profile.getSourceCategoryPath(), detail == null ? null : detail.getOriginalCategory())) {
+            score += 20;
+        }
+        if (StringUtils.hasText(profile.getSourceCategoryPath())) {
+            score += 5;
+        }
+        if (StringUtils.hasText(profile.getSourceSignature())) {
+            score += 5;
+        }
+        return score;
+    }
+
     private List<TemuSpecMappingDTO.CandidateFieldSummary> buildCandidateFields(Map<String, LinkedHashSet<String>> fieldValues,
                                                                                 List<String> mainFieldCandidates) {
         List<TemuSpecMappingDTO.CandidateFieldSummary> out = new ArrayList<>();
@@ -642,6 +693,25 @@ public class TemuSpecMappingService {
 
     private String trimToNull(String value) {
         return StringUtils.hasText(value) ? value.trim() : null;
+    }
+
+    private boolean equalsIgnoreTrim(String left, String right) {
+        String normalizedLeft = trimToNull(left);
+        String normalizedRight = trimToNull(right);
+        if (normalizedLeft == null || normalizedRight == null) {
+            return false;
+        }
+        return normalizedLeft.equalsIgnoreCase(normalizedRight);
+    }
+
+    private boolean containsIgnoreTrim(String pattern, String value) {
+        String normalizedPattern = trimToNull(pattern);
+        String normalizedValue = trimToNull(value);
+        if (normalizedPattern == null || normalizedValue == null) {
+            return false;
+        }
+        return normalizedValue.toLowerCase(Locale.ROOT).contains(normalizedPattern.toLowerCase(Locale.ROOT))
+                || normalizedPattern.toLowerCase(Locale.ROOT).contains(normalizedValue.toLowerCase(Locale.ROOT));
     }
 
     private String writeJson(Object value) {

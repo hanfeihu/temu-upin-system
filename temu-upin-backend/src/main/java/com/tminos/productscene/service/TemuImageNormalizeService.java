@@ -25,6 +25,8 @@ public class TemuImageNormalizeService {
 
     private static final int TARGET_W = 800;
     private static final int TARGET_H = 800;
+    private static final int MAX_DOWNLOAD_ATTEMPTS = 3;
+    private static final int MAX_UPLOAD_ATTEMPTS = 3;
 
     private final ObjectMapper objectMapper;
     private final TemuOpenApiCredentialService temuOpenApiCredentialService;
@@ -47,8 +49,7 @@ public class TemuImageNormalizeService {
         boolean isKwcdn = isTemuKwcdn(candidate);
         if (!isKwcdn) {
             TemuOpenApiCredentials creds = temuOpenApiCredentialService.getDefaultTemuOpenApiCredentialsOrThrow();
-            TemuImageV2Client client = new TemuImageV2Client(creds);
-            String uploadedRaw = client.uploadGlobalImageByUrlRaw(candidate, null, null);
+            String uploadedRaw = uploadByUrlWithRetry(creds, candidate);
             String uploadedUrl = parseUploadedImageUrlOrThrow(uploadedRaw);
             candidate = normalizeUrlString(uploadedUrl);
             uploadedByUrlFirst = true;
@@ -116,8 +117,7 @@ public class TemuImageNormalizeService {
         ImageIO.write(out, "jpg", bos);
         String base64 = "data:image/jpeg;base64," + Base64.getEncoder().encodeToString(bos.toByteArray());
         TemuOpenApiCredentials creds = temuOpenApiCredentialService.getDefaultTemuOpenApiCredentialsOrThrow();
-        TemuImageV2Client client = new TemuImageV2Client(creds);
-        String uploadedRaw2 = client.uploadGlobalImageBase64Raw(base64, null, null);
+        String uploadedRaw2 = uploadBase64WithRetry(creds, base64);
         String uploadedUrl2 = parseUploadedImageUrlOrThrow(uploadedRaw2);
 
         Result r = new Result();
@@ -182,6 +182,19 @@ public class TemuImageNormalizeService {
     }
 
     private byte[] downloadBytes(String url) throws Exception {
+        Exception lastError = null;
+        for (int attempt = 1; attempt <= MAX_DOWNLOAD_ATTEMPTS; attempt++) {
+            try {
+                return doDownloadBytes(url);
+            } catch (Exception e) {
+                lastError = e;
+                if (attempt >= MAX_DOWNLOAD_ATTEMPTS) break;
+            }
+        }
+        throw lastError == null ? new IllegalStateException("Download failed") : lastError;
+    }
+
+    private byte[] doDownloadBytes(String url) throws Exception {
         HttpClient client = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(15))
                 .followRedirects(HttpClient.Redirect.NORMAL)
@@ -196,6 +209,34 @@ public class TemuImageNormalizeService {
             throw new IllegalStateException("Download failed: HTTP " + resp.statusCode());
         }
         return resp.body();
+    }
+
+    private String uploadByUrlWithRetry(TemuOpenApiCredentials creds, String imageUrl) throws Exception {
+        Exception lastError = null;
+        for (int attempt = 1; attempt <= MAX_UPLOAD_ATTEMPTS; attempt++) {
+            try {
+                TemuImageV2Client client = new TemuImageV2Client(creds);
+                return client.uploadGlobalImageByUrlRaw(imageUrl, null, null);
+            } catch (Exception e) {
+                lastError = e;
+                if (attempt >= MAX_UPLOAD_ATTEMPTS) break;
+            }
+        }
+        throw lastError == null ? new IllegalStateException("TEMU upload-by-url failed") : lastError;
+    }
+
+    private String uploadBase64WithRetry(TemuOpenApiCredentials creds, String base64) throws Exception {
+        Exception lastError = null;
+        for (int attempt = 1; attempt <= MAX_UPLOAD_ATTEMPTS; attempt++) {
+            try {
+                TemuImageV2Client client = new TemuImageV2Client(creds);
+                return client.uploadGlobalImageBase64Raw(base64, null, null);
+            } catch (Exception e) {
+                lastError = e;
+                if (attempt >= MAX_UPLOAD_ATTEMPTS) break;
+            }
+        }
+        throw lastError == null ? new IllegalStateException("TEMU upload-base64 failed") : lastError;
     }
 
     private URI toSafeUri(String raw) {

@@ -8,5 +8,6 @@ import java.util.Optional;
 
 public interface TemuSpecMappingDraftRepository extends JpaRepository<TemuSpecMappingDraft, Long> {
     Optional<TemuSpecMappingDraft> findFirstBySpuIdOrderByIdDesc(Long spuId);
+    Optional<TemuSpecMappingDraft> findFirstBySpuIdAndActiveTrueOrderByIdDesc(Long spuId);
     List<TemuSpecMappingDraft> findBySpuIdOrderByIdDesc(Long spuId);
 }

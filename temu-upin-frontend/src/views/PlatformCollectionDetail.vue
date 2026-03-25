@@ -8,8 +8,10 @@
         </button>
         <div class="head-right">
           <a-button @click="go(`/platform/spec-mappings/workbench/${id}`)">规格映射工作台</a-button>
+          <a-button @click="openSplitModal" :disabled="!canSplitProduct">商品拆分</a-button>
           <a-button :loading="swappingImages" @click="swapCarouselAndDetail">轮播详情图交换</a-button>
           <a-button :loading="replacingKwcdn" @click="replaceImagesToKwcdn">一键替换图片链接</a-button>
+          <a-button :loading="normalizingImages" @click="normalizeAllImagesTo800">一键规范化图片</a-button>
           <a-button @click="go('/ai')">AI 做图</a-button>
           <a-button @click="openUrl(pc.productUrl)" :disabled="!pc.productUrl">打开链接</a-button>
           <a-button type="primary" @click="openRaw">全部字段</a-button>
@@ -219,6 +221,16 @@
              <div class="detail-images">
                 <div class="detail-img-item" v-for="(img, idx) in detailImagesToShow" :key="img + idx">
                   <img :src="img" alt="detail" loading="lazy" />
+
+                  <button
+                    class="detail-add-carousel"
+                    type="button"
+                    :disabled="addingDetailImage === img"
+                    :title="carouselImagesArr.includes(img) ? '这张图已在轮播图中' : '添加到轮播'"
+                    @click.stop="addDetailImageToCarousel(img)"
+                  >
+                    {{ addingDetailImage === img ? '添加中...' : '添加到轮播' }}
+                  </button>
 
                   <button class="detail-translate" type="button" title="翻译" @click.stop="openTranslate('detail', idx, img)">
                     <GlobalOutlined />
@@ -544,11 +556,66 @@
         </div>
       </div>
     </a-modal>
+
+    <a-modal
+      v-model:open="splitState.open"
+      title="按 SKU 拆分商品"
+      width="1080px"
+      :confirm-loading="splitState.saving"
+      ok-text="保存拆分"
+      cancel-text="取消"
+      @ok="submitSplit"
+    >
+      <div class="split-modal">
+        <div class="split-toolbar">
+          <div>
+            <div class="split-title">新商品分组</div>
+            <div class="split-subtitle">每个 SKU 只能归到一个分组，保存后原商品会被删除并替换为新商品。</div>
+          </div>
+          <a-button type="dashed" @click="addSplitGroup">新增分组</a-button>
+        </div>
+
+        <div class="split-groups">
+          <div v-for="group in splitState.groups" :key="group.key" class="split-group-card">
+            <div class="split-group-head">
+              <a-input v-model:value="group.name" :maxlength="50" placeholder="请输入分组名称" />
+              <a-button danger type="text" @click="removeSplitGroup(group.key)" :disabled="splitState.groups.length <= 2">删除</a-button>
+            </div>
+            <div class="split-group-meta">已分配 {{ splitGroupCount(group.key) }} 个 SKU</div>
+          </div>
+        </div>
+
+        <div class="split-sku-list">
+          <div v-for="row in splitSkuRows" :key="row.id" class="split-sku-item">
+            <div class="split-sku-main">
+              <img v-if="row.image" :src="row.image" alt="sku" class="split-sku-image" />
+              <div v-else class="split-sku-image split-sku-image-empty">无图</div>
+              <div class="split-sku-info">
+                <div class="split-sku-title">{{ row.specLabel || row.skuId || ('SKU ' + row.id) }}</div>
+                <div class="split-sku-meta">SKU ID: {{ row.skuId || '-' }}</div>
+                <div class="split-sku-meta">规格: {{ row.specJsonText || '-' }}</div>
+                <div class="split-sku-meta">库存: {{ row.stock ?? '-' }} | 价格: {{ formatMoney(row.price) }}</div>
+              </div>
+            </div>
+            <a-select
+              class="split-sku-select"
+              :value="splitState.assignments[row.id] || undefined"
+              placeholder="选择分组"
+              @change="value => assignSplitGroup(row.id, value)"
+            >
+              <a-select-option v-for="group in splitState.groups" :key="group.key" :value="group.key">
+                {{ group.name || '未命名分组' }}
+              </a-select-option>
+            </a-select>
+          </div>
+        </div>
+      </div>
+    </a-modal>
   </div>
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, h, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
  import { message, Modal } from 'ant-design-vue'
 import { productCollectionApi } from '@/platform/api/productCollections'
@@ -582,7 +649,15 @@ const id = computed(() => String(route.params.id || ''))
 const pc = reactive({})
 
 const replacingKwcdn = ref(false)
+const normalizingImages = ref(false)
 const swappingImages = ref(false)
+const addingDetailImage = ref('')
+const splitState = reactive({
+  open: false,
+  saving: false,
+  groups: [],
+  assignments: {}
+})
 
 const replaceImagesToKwcdn = async () => {
   if (!id.value) return
@@ -591,7 +666,6 @@ const replaceImagesToKwcdn = async () => {
     const res = await productCollectionApi.replaceImagesToKwcdn(id.value)
     if (res?.success) {
       const data = res.data || {}
-      // re-fetch to sync all image fields
       await load()
       message.success(data.changed ? '已替换并保存到数据库' : '图片已是 kwcdn 域名，无需替换')
       return
@@ -601,6 +675,53 @@ const replaceImagesToKwcdn = async () => {
     message.error(e.message || '替换失败')
   } finally {
     replacingKwcdn.value = false
+  }
+}
+
+const normalizeAllImagesTo800 = async () => {
+  if (!id.value) return
+  normalizingImages.value = true
+  try {
+    const res = await productCollectionApi.normalizeAllImagesTo800(id.value)
+    if (res?.success) {
+      const data = res.data || {}
+      await load()
+      const total = data.totalImages || 0
+      const changedCount = (data.changes || []).length
+      const skuCount = data.skuImageChanged || 0
+      const changes = Array.isArray(data.changes) ? data.changes : []
+      Modal.info({
+        title: '图片规范化结果',
+        width: 820,
+        content: h('div', { class: 'normalize-result' }, [
+          h('div', { class: 'normalize-summary' }, [
+            h('div', null, `总图片数：${total}`),
+            h('div', null, `已处理变更：${changedCount}`),
+            h('div', null, `SKU 图片变更：${skuCount}`),
+            h('div', null, data.changed ? '结果：已写回数据库' : '结果：所有图片已是 800x800，无需处理')
+          ]),
+          changes.length
+            ? h('div', { class: 'normalize-change-list' }, changes.map((item, idx) =>
+                h('div', { key: `${item?.field || 'field'}_${idx}`, class: 'normalize-change-item' }, [
+                  h('div', { class: 'normalize-change-field' }, item?.field || '-'),
+                  h('div', { class: 'normalize-change-meta' }, [
+                    h('span', null, `原尺寸：${item?.width || '-'} x ${item?.height || '-'}`),
+                    h('span', null, `原因：${item?.reason || '-'}`)
+                  ]),
+                  h('div', { class: 'normalize-change-url' }, `原图：${item?.original || '-'}`),
+                  h('div', { class: 'normalize-change-url' }, `结果：${item?.uploaded || '-'}`)
+                ])
+              ))
+            : h('div', { class: 'normalize-empty' }, '没有图片需要变更')
+        ])
+      })
+      return
+    }
+    message.error(res?.message || '规范化失败')
+  } catch (e) {
+    message.error(e.message || '规范化失败')
+  } finally {
+    normalizingImages.value = false
   }
 }
 
@@ -703,6 +824,34 @@ const safeJsonParse = (s) => {
   } catch {
     return null
   }
+}
+
+const trimText = (value) => {
+  if (value == null) return ''
+  return String(value).trim()
+}
+
+const formatMoney = (value) => {
+  const num = Number(value)
+  if (!Number.isFinite(num)) return '-'
+  return `¥${num.toFixed(2)}`
+}
+
+const buildSplitGroupKey = () => `group_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+
+const createSplitGroup = (index) => ({
+  key: buildSplitGroupKey(),
+  name: `拆分商品${index}`
+})
+
+const parseSpecJsonText = (specJson, fallback = '') => {
+  const parsed = safeJsonParse(specJson)
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    return Object.entries(parsed)
+      .map(([key, value]) => `${key}: ${value ?? ''}`)
+      .join(' | ')
+  }
+  return trimText(specJson) || fallback
 }
 
 const isDeletableCarouselImage = (u) => {
@@ -1065,6 +1214,32 @@ const deleteDetailImage = async (u) => {
   })
 }
 
+const addDetailImageToCarousel = async (u) => {
+  if (!u) return
+  if (!id.value) return
+  if (carouselImagesArr.value.includes(u)) {
+    message.info('这张图已经在轮播图里了')
+    return
+  }
+
+  addingDetailImage.value = u
+  try {
+    const next = [...carouselImagesArr.value, u]
+    const json = JSON.stringify(next)
+    const res = await productCollectionApi.update(id.value, { carouselImages: json })
+    if (res?.success) {
+      pc.carouselImages = json
+      message.success('已添加到轮播图')
+      return
+    }
+    message.error(res?.message || '添加失败')
+  } catch (e) {
+    message.error(e.message || '添加失败')
+  } finally {
+    addingDetailImage.value = ''
+  }
+}
+
 const carouselImagesArr = computed(() => {
   const arr = safeJsonParse(pc.carouselImages)
   return Array.isArray(arr) ? arr.filter(Boolean) : []
@@ -1128,6 +1303,7 @@ const videoPoster = computed(() => {
 const skuList = computed(() => {
   if (Array.isArray(pc.skuRows) && pc.skuRows.length) {
     return pc.skuRows.map(row => ({
+      id: row?.id,
       name: row?.specKey || '',
       skuId: row?.skuId || '',
       stock: row?.stock,
@@ -1141,6 +1317,25 @@ const skuList = computed(() => {
   const list = obj?.skus
   return Array.isArray(list) ? list : []
 })
+
+const splitSkuRows = computed(() => {
+  const rows = Array.isArray(pc.skuRows) ? pc.skuRows : []
+  return rows
+    .filter(row => row?.id != null)
+    .map(row => ({
+      id: row.id,
+      skuId: row?.skuId || '',
+      specKey: row?.specKey || '',
+      specJson: row?.specJson || '',
+      specLabel: trimText(row?.specKey),
+      specJsonText: parseSpecJsonText(row?.specJson),
+      stock: row?.stock,
+      price: row?.price,
+      image: row?.image || ''
+    }))
+})
+
+const canSplitProduct = computed(() => splitSkuRows.value.length >= 2)
 
 const skuModel = computed(() => {
   if (Array.isArray(pc.skuPropsExt) && pc.skuPropsExt.length) {
@@ -1351,6 +1546,105 @@ const todayText = computed(() => {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
 })
 
+const resetSplitState = () => {
+  splitState.groups = [createSplitGroup(1), createSplitGroup(2)]
+  splitState.assignments = {}
+}
+
+const openSplitModal = () => {
+  if (!canSplitProduct.value) {
+    message.info('至少需要 2 个 SKU 才能拆分商品')
+    return
+  }
+  resetSplitState()
+  splitState.open = true
+}
+
+const addSplitGroup = () => {
+  splitState.groups.push(createSplitGroup(splitState.groups.length + 1))
+}
+
+const removeSplitGroup = (groupKey) => {
+  if (splitState.groups.length <= 2) {
+    message.warning('至少保留两个分组')
+    return
+  }
+  splitState.groups = splitState.groups.filter(group => group.key !== groupKey)
+  const nextAssignments = {}
+  Object.entries(splitState.assignments || {}).forEach(([rowId, assignedGroupKey]) => {
+    if (assignedGroupKey !== groupKey) {
+      nextAssignments[rowId] = assignedGroupKey
+    }
+  })
+  splitState.assignments = nextAssignments
+}
+
+const assignSplitGroup = (rowId, groupKey) => {
+  splitState.assignments = {
+    ...splitState.assignments,
+    [rowId]: groupKey
+  }
+}
+
+const splitGroupCount = (groupKey) => {
+  return splitSkuRows.value.filter(row => splitState.assignments[row.id] === groupKey).length
+}
+
+const buildSplitPayload = () => {
+  const groups = splitState.groups
+    .map((group, index) => ({
+      name: trimText(group.name) || `拆分商品${index + 1}`,
+      skuRowIds: splitSkuRows.value
+        .filter(row => splitState.assignments[row.id] === group.key)
+        .map(row => row.id)
+    }))
+    .filter(group => group.skuRowIds.length > 0)
+
+  if (groups.length < 2) {
+    throw new Error('至少需要两个有 SKU 的分组')
+  }
+  if (groups.some(group => !group.skuRowIds.length)) {
+    throw new Error('存在空分组，请先删除或分配 SKU')
+  }
+  if (Object.keys(splitState.assignments || {}).length !== splitSkuRows.value.length) {
+    throw new Error('请先为所有 SKU 选择分组')
+  }
+  return { groups }
+}
+
+const submitSplit = async () => {
+  if (!id.value) return
+  let payload
+  try {
+    payload = buildSplitPayload()
+  } catch (error) {
+    message.warning(error.message || '拆分数据不完整')
+    return
+  }
+
+  splitState.saving = true
+  try {
+    const res = await productCollectionApi.split(id.value, payload)
+    if (!res?.success) {
+      message.error(res?.message || '商品拆分失败')
+      return
+    }
+    const products = Array.isArray(res.data?.products) ? res.data.products : []
+    const firstProduct = products[0]
+    splitState.open = false
+    message.success(`拆分完成，已生成 ${products.length} 个商品`)
+    if (firstProduct?.id) {
+      router.replace(`/platform/product-collections/${firstProduct.id}`)
+      return
+    }
+    router.replace('/platform/product-collections')
+  } catch (e) {
+    message.error(e.message || '商品拆分失败')
+  } finally {
+    splitState.saving = false
+  }
+}
+
 const load = async () => {
   if (!id.value) return
   try {
@@ -1413,6 +1707,66 @@ onMounted(load)
   gap: 10px;
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+:deep(.normalize-result) {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+:deep(.normalize-summary) {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 16px;
+  padding: 12px 14px;
+  background: #f8fafc;
+  border-radius: 12px;
+  color: #0f172a;
+}
+
+:deep(.normalize-change-list) {
+  max-height: 420px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+:deep(.normalize-change-item) {
+  padding: 12px 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #fff;
+}
+
+:deep(.normalize-change-field) {
+  font-weight: 700;
+  color: #0f172a;
+  margin-bottom: 6px;
+}
+
+:deep(.normalize-change-meta) {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  color: #475569;
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
+:deep(.normalize-change-url) {
+  color: #334155;
+  font-size: 12px;
+  word-break: break-all;
+  margin-top: 4px;
+}
+
+:deep(.normalize-empty) {
+  padding: 16px;
+  border-radius: 12px;
+  background: #f8fafc;
+  color: #475569;
 }
 
 .product-grid {
@@ -2114,6 +2468,35 @@ onMounted(load)
   position: relative;
 }
 
+.detail-add-carousel {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(15, 23, 42, 0.18);
+  background: rgba(255, 255, 255, 0.94);
+  color: #0f172a;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.detail-add-carousel:hover:not(:disabled) {
+  background: #ffffff;
+  border-color: rgba(37, 99, 235, 0.35);
+  color: #1d4ed8;
+}
+
+.detail-add-carousel:disabled {
+  cursor: not-allowed;
+  color: #64748b;
+}
+
 .detail-translate {
   position: absolute;
   top: 10px;
@@ -2168,6 +2551,139 @@ onMounted(load)
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+.split-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.split-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.split-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.split-subtitle {
+  margin-top: 4px;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.split-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.split-group-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  padding: 12px;
+  background: #f8fafc;
+}
+
+.split-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.split-group-meta {
+  margin-top: 8px;
+  color: #475569;
+  font-size: 12px;
+}
+
+.split-sku-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 520px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.split-sku-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border: 1px solid #e2e8f0;
+  border-radius: 18px;
+  padding: 12px 14px;
+}
+
+.split-sku-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  flex: 1;
+}
+
+.split-sku-image {
+  width: 68px;
+  height: 68px;
+  border-radius: 14px;
+  object-fit: cover;
+  background: #e2e8f0;
+  flex: 0 0 68px;
+}
+
+.split-sku-image-empty {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.split-sku-info {
+  min-width: 0;
+}
+
+.split-sku-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #0f172a;
+  word-break: break-word;
+}
+
+.split-sku-meta {
+  margin-top: 4px;
+  color: #475569;
+  font-size: 12px;
+  word-break: break-word;
+}
+
+.split-sku-select {
+  width: 220px;
+  flex: 0 0 220px;
+}
+
+@media (max-width: 900px) {
+  .split-toolbar {
+    flex-direction: column;
+  }
+
+  .split-sku-item {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .split-sku-select {
+    width: 100%;
+    flex-basis: auto;
+  }
 }
 
 .translate-controls {

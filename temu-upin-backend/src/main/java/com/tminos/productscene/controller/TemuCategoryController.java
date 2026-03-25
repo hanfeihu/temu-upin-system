@@ -7,6 +7,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
+
 @RestController
 @RequestMapping("/api/platform/temu")
 @RequiredArgsConstructor
@@ -20,5 +22,10 @@ public class TemuCategoryController {
     ) {
         String title = req == null ? null : req.getTitle();
         return ResponseEntity.ok(ApiResponse.success(temuCategoryService.matchCategory(title)));
+    }
+
+    @GetMapping("/parent-specs")
+    public ResponseEntity<ApiResponse<List<TemuCategoryDTO.ParentSpecOption>>> listParentSpecs() {
+        return ResponseEntity.ok(ApiResponse.success(temuCategoryService.listParentSpecs()));
     }
 }

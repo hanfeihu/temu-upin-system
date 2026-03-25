@@ -40,6 +40,15 @@
         size="small"
         :scroll="{ x: 1200 }"
       >
+        <template #headerCell="{ column }">
+          <template v-if="isVariantColumn(column)">
+            <div class="spec-header">
+              <span>{{ column.title }}</span>
+              <a-button size="small" type="link" @click="applyVariantPrefix(column)">变种</a-button>
+            </div>
+          </template>
+        </template>
+
         <template #bodyCell="{ column, record, index }">
           <template v-if="column.key === 'image'">
             <button
@@ -57,6 +66,12 @@
 
           <template v-else-if="column.key === 'specKey'">
             <a-input v-model:value="record.specKey" placeholder="颜色>尺码..." allow-clear />
+          </template>
+
+          <template v-else-if="String(column.key || '').startsWith('specJson:')">
+            <span class="spec-json-cell" :title="getSpecJsonValue(record, String(column.key || '').slice(9))">
+              {{ getSpecJsonValue(record, String(column.key || '').slice(9)) || '-' }}
+            </span>
           </template>
 
           <template v-else-if="column.key === 'temuSkuId'">
@@ -152,9 +167,12 @@ const imgPick = reactive({
   uploading: false
 })
 
-const columns = [
+const baseColumns = [
   { title: '图片', key: 'image', width: 120, fixed: 'left' },
   { title: '属性组合', key: 'specKey', width: 220 },
+]
+
+const tailColumns = [
   { title: 'temu skuId', key: 'temuSkuId', width: 140 },
   { title: '原 skuId', key: 'originSkuId', width: 140 },
   { title: '原价', key: 'originPrice', width: 120 },
@@ -163,6 +181,48 @@ const columns = [
   { title: '尺寸(cm)', key: 'dim', width: 320 },
   { title: '操作', key: 'ops', width: 170, fixed: 'right' }
 ]
+
+const parseSpecJson = (value) => {
+  if (!value || typeof value !== 'string') return {}
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+const specJsonColumns = computed(() => {
+  const keys = []
+  for (const row of localSkus.value) {
+    const parsed = parseSpecJson(row?.specJson)
+    for (const key of Object.keys(parsed)) {
+      if (key && !keys.includes(key)) keys.push(key)
+    }
+  }
+  return keys.map((key) => ({
+    title: key,
+    key: `specJson:${key}`,
+    width: 160
+  }))
+})
+
+const columns = computed(() => [
+  ...baseColumns,
+  ...specJsonColumns.value,
+  ...tailColumns
+])
+
+const getSpecJsonValue = (row, key) => {
+  const parsed = parseSpecJson(row?.specJson)
+  const value = parsed?.[key]
+  return value == null ? '' : String(value)
+}
+
+const isVariantColumn = (column) => {
+  const key = String(column?.key || '')
+  return key === 'specKey' || key.startsWith('specJson:')
+}
 
 const loadExisting = async () => {
   const id = props.record?.id
@@ -296,6 +356,43 @@ const recalc = (idx) => {
   r.supplyPrice = Math.round(supply * 100) / 100
 }
 
+const stripVariantPrefix = (value) => {
+  const text = String(value || '').trim()
+  return text.replace(/^G-\d{3}-\s*/i, '')
+}
+
+const applyVariantPrefix = (column) => {
+  if (!localSkus.value.length) {
+    message.info('暂无可处理的 SKU')
+    return
+  }
+
+  const columnKey = String(column?.key || '')
+  if (!isVariantColumn(column)) return
+
+  localSkus.value = localSkus.value.map((row, index) => {
+    const prefix = `G-${String(index + 1).padStart(3, '0')}-`
+    if (columnKey === 'specKey') {
+      const base = stripVariantPrefix(row?.specKey)
+      return {
+        ...row,
+        specKey: `${prefix}${base}`
+      }
+    }
+
+    const specName = columnKey.slice(9)
+    const parsed = parseSpecJson(row?.specJson)
+    const base = stripVariantPrefix(parsed?.[specName])
+    parsed[specName] = `${prefix}${base}`
+    return {
+      ...row,
+      specJson: JSON.stringify(parsed)
+    }
+  })
+
+  message.success(`已批量生成${column?.title || ''}变种编号`)
+}
+
 const save = async () => {
   const id = props.record?.id
   if (!id) return
@@ -400,6 +497,20 @@ const save = async () => {
 .img-pick-actions {
   display: flex;
   justify-content: flex-end;
+}
+
+.spec-json-cell {
+  display: inline-block;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.spec-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .dim {

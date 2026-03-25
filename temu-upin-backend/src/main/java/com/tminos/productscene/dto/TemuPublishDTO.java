@@ -13,9 +13,6 @@ public class TemuPublishDTO {
         private String raw;
         private Map<String, Object> normalized;
         private List<String> warnings;
-        private Long mainSaleSpecTaskId;
-        private Integer mainSaleSpecTaskStatus;
-        private Boolean blockedByMainSaleSpec;
 
         public PublishResponse() {}
 
@@ -27,22 +24,6 @@ public class TemuPublishDTO {
             this.raw = raw;
             this.normalized = normalized;
             this.warnings = warnings;
-        }
-
-        public PublishResponse(Boolean success,
-                               String message,
-                               Long runId,
-                               String goodsId,
-                               String raw,
-                               Map<String, Object> normalized,
-                               List<String> warnings,
-                               Long mainSaleSpecTaskId,
-                               Integer mainSaleSpecTaskStatus,
-                               Boolean blockedByMainSaleSpec) {
-            this(success, message, runId, goodsId, raw, normalized, warnings);
-            this.mainSaleSpecTaskId = mainSaleSpecTaskId;
-            this.mainSaleSpecTaskStatus = mainSaleSpecTaskStatus;
-            this.blockedByMainSaleSpec = blockedByMainSaleSpec;
         }
 
         public Boolean getSuccess() { return success; }
@@ -59,11 +40,5 @@ public class TemuPublishDTO {
         public void setNormalized(Map<String, Object> normalized) { this.normalized = normalized; }
         public List<String> getWarnings() { return warnings; }
         public void setWarnings(List<String> warnings) { this.warnings = warnings; }
-        public Long getMainSaleSpecTaskId() { return mainSaleSpecTaskId; }
-        public void setMainSaleSpecTaskId(Long mainSaleSpecTaskId) { this.mainSaleSpecTaskId = mainSaleSpecTaskId; }
-        public Integer getMainSaleSpecTaskStatus() { return mainSaleSpecTaskStatus; }
-        public void setMainSaleSpecTaskStatus(Integer mainSaleSpecTaskStatus) { this.mainSaleSpecTaskStatus = mainSaleSpecTaskStatus; }
-        public Boolean getBlockedByMainSaleSpec() { return blockedByMainSaleSpec; }
-        public void setBlockedByMainSaleSpec(Boolean blockedByMainSaleSpec) { this.blockedByMainSaleSpec = blockedByMainSaleSpec; }
     }
 }

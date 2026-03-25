@@ -1,16 +1,13 @@
 package com.tminos.productscene.service;
 
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tminos.productscene.dto.TemuPublishDTO;
 import com.tminos.productscene.entity.ProductCollection;
 import com.tminos.productscene.entity.ProductCollectionTemuSku;
-import com.tminos.productscene.entity.TemuMainSaleSpecInferenceTask;
 import com.tminos.productscene.entity.TemuImageMeta;
 import com.tminos.productscene.repository.ProductCollectionRepository;
 import com.tminos.productscene.repository.ProductCollectionTemuSkuRepository;
-import com.tminos.productscene.repository.TemuMainSaleSpecInferenceTaskRepository;
 import com.tminos.productscene.config.AITemuAttrFillerConfig;
 
 import com.tminos.temu.upin.sdk.v2.category.CategoryApiClient;
@@ -29,14 +26,14 @@ import java.time.LocalDateTime;
 import java.util.*;
 
 @Service
+@SuppressWarnings("unused")
 public class TemuPublishService {
 
 
     private final ProductCollectionService productCollectionService;
     private final ProductCollectionRepository productCollectionRepository;
     private final ProductCollectionTemuSkuRepository temuSkuRepository;
-    private final TemuMainSaleSpecInferenceTaskRepository mainSaleSpecInferenceTaskRepository;
-    private final TemuMainSaleSpecInferenceService mainSaleSpecInferenceService;
+    private final TemuSkuPublishDraftConverter temuSkuPublishDraftConverter;
     private final PlatformConfigService platformConfigService;
     private final TemuImageNormalizeService imageNormalizeService;
     private final TemuImageMetaService temuImageMetaService;
@@ -50,8 +47,7 @@ public class TemuPublishService {
     public TemuPublishService(ProductCollectionService productCollectionService,
                              ProductCollectionRepository productCollectionRepository,
                              ProductCollectionTemuSkuRepository temuSkuRepository,
-                             TemuMainSaleSpecInferenceTaskRepository mainSaleSpecInferenceTaskRepository,
-                             TemuMainSaleSpecInferenceService mainSaleSpecInferenceService,
+                             TemuSkuPublishDraftConverter temuSkuPublishDraftConverter,
                              PlatformConfigService platformConfigService,
                              TemuImageNormalizeService imageNormalizeService,
                              TemuImageMetaService temuImageMetaService,
@@ -64,8 +60,7 @@ public class TemuPublishService {
         this.productCollectionService = productCollectionService;
         this.productCollectionRepository = productCollectionRepository;
         this.temuSkuRepository = temuSkuRepository;
-        this.mainSaleSpecInferenceTaskRepository = mainSaleSpecInferenceTaskRepository;
-        this.mainSaleSpecInferenceService = mainSaleSpecInferenceService;
+        this.temuSkuPublishDraftConverter = temuSkuPublishDraftConverter;
         this.platformConfigService = platformConfigService;
         this.imageNormalizeService = imageNormalizeService;
         this.temuImageMetaService = temuImageMetaService;
@@ -146,17 +141,6 @@ public class TemuPublishService {
             return new TemuPublishDTO.PublishResponse(false, "TEMU SKU 为空，请先做 SKU 转换", runId, null, null, null, warnings);
         }
 
-        MainSaleSpecDraftGate draftGate = ensureMainSaleSpecDraftReadyForPublish(spuId, runId, warnings);
-        if (!draftGate.ready()) {
-            String message = draftGate.message();
-            publishLogService.warn(runId, "SPEC_GATE", message);
-            publishLogService.finishFailed(runId, message, null, null);
-            markPublishFailed(pc, runId, message);
-            return blockedByMainSaleSpecResponse(message, runId, warnings, draftGate.task());
-        }
-
-        publishLogService.info(runId, "VALIDATE", "preconditions ok");
-
         // 2) load default config
         Map<String, String> cfg = platformConfigService.getDefaultConfigOrThrow();
         int siteId = parseInt(cfg.get(PlatformConfigService.KEY_DEFAULT_SITE_ID), 100);
@@ -179,6 +163,28 @@ public class TemuPublishService {
         }
 
         CategoryApiClient categoryClient = new CategoryApiClient(creds);
+
+    SpecMappingDraftGate draftGate = ensureSpecMappingDraftReadyForPublish(
+        spuId,
+        runId,
+        warnings,
+        categoryClient,
+        temuSkus,
+        pc,
+        siteId,
+        warehouseId,
+        parseInt(cfg.get(PlatformConfigService.KEY_SKU_DEFAULT_STOCK), 100),
+        parseInt(cfg.get(PlatformConfigService.KEY_SKU_MAX_STOCK), 10842)
+    );
+    if (!draftGate.ready()) {
+        String message = draftGate.message();
+        publishLogService.warn(runId, "SPEC_GATE", message);
+        publishLogService.finishFailed(runId, message, null, null);
+        markPublishFailed(pc, runId, message);
+        return blockedBySpecMappingResponse(message, runId, warnings);
+    }
+
+    publishLogService.info(runId, "VALIDATE", "preconditions ok");
 
         // 3) normalize images (800x800 + kwcdn)
         // Performance: batch fetch cached image meta so we can skip probe/upload when already normalized.
@@ -324,17 +330,17 @@ public class TemuPublishService {
         }
         req.setProductPropertyReqs(props);
 
-        StoredMainSaleSpecDraft storedDraft = draftGate.draft();
+        StoredPublishSpecDraft storedDraft = draftGate.draft();
 
         // build SKU reqs first (spec ids will be assigned after we create specs)
         String fallbackThumb = !carousel.isEmpty() ? carousel.get(0) : mainImage;
         List<AddGloGoodsRequest.ProductSkuReq> skuReqs = new ArrayList<>();
         if (storedDraft == null) {
-            String message = "主销售属性草案缺失，请先生成并确认后再发布";
+            String message = "规格映射草案缺失，请先在规格映射工作台保存并启用草案后再发布";
             publishLogService.error(runId, "SPEC", message, null);
             publishLogService.finishFailed(runId, message, null, null);
             markPublishFailed(pc, runId, message);
-            return blockedByMainSaleSpecResponse(message, runId, warnings, null);
+            return blockedBySpecMappingResponse(message, runId, warnings);
         }
         try {
             StoredMaterializedSpecDraft materialized = materializeStoredDraft(categoryClient, storedDraft);
@@ -352,7 +358,7 @@ public class TemuPublishService {
             data.put("exception", e.getClass().getName());
             publishLogService.error(runId, "SPEC", "materialize stored draft failed", data);
             publishLogService.finishFailed(runId, err, null, null);
-            return new TemuPublishDTO.PublishResponse(false, "主销售属性任务草案无效: " + safeErrMessage(e), runId, null, null, null, warnings);
+            return new TemuPublishDTO.PublishResponse(false, "规格映射草案无效: " + safeErrMessage(e), runId, null, null, null, warnings);
         }
 
         String requestJson = null;
@@ -1279,13 +1285,6 @@ public class TemuPublishService {
         }
     }
 
-    private record StoredMainSaleSpecDraft(
-            List<AddGloGoodsRequest.ProductSpecPropertyReq> productSpecPropertyReqs,
-            List<List<AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq>> mainProductSkuSpecReqGroups,
-            List<List<AddGloGoodsRequest.ProductSkuReq>> productSkuReqGroups
-    ) {
-    }
-
     private record StoredMaterializedSpecDraft(
             List<AddGloGoodsRequest.ProductSpecPropertyReq> productSpecPropertyReqs,
             List<List<AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq>> mainProductSkuSpecReqGroups,
@@ -1294,13 +1293,19 @@ public class TemuPublishService {
     ) {
     }
 
-    private record MainSaleSpecDraftGate(
+        private record SpecMappingDraftGate(
             boolean ready,
-            StoredMainSaleSpecDraft draft,
-            TemuMainSaleSpecInferenceTask task,
+            StoredPublishSpecDraft draft,
             String message
     ) {
     }
+
+        private record PublishDimension(
+            String fieldName,
+            ParentSpec parentSpec,
+            boolean mainDimension
+        ) {
+        }
 
     private record CreatedSpecInfo(
             Integer specId,
@@ -1308,63 +1313,46 @@ public class TemuPublishService {
         ) {
         }
 
-    private MainSaleSpecDraftGate ensureMainSaleSpecDraftReadyForPublish(Long spuId, Long runId, List<String> warnings) {
+    private SpecMappingDraftGate ensureSpecMappingDraftReadyForPublish(Long spuId,
+                                                                       Long runId,
+                                                                       List<String> warnings,
+                                                                       CategoryApiClient categoryClient,
+                                                                       List<ProductCollectionTemuSku> temuSkus,
+                                                                       ProductCollection pc,
+                                                                       int siteId,
+                                                                       String warehouseId,
+                                                                       int defaultStock,
+                                                                       int maxStock) {
         if (spuId == null) {
-            return new MainSaleSpecDraftGate(false, null, null, "spuId 为空，无法检查主销售属性草案");
+            return new SpecMappingDraftGate(false, null, "spuId 为空，无法生成发布规格");
         }
 
-        TemuMainSaleSpecInferenceTask task = mainSaleSpecInferenceTaskRepository.findFirstBySpuIdOrderByIdDesc(spuId).orElse(null);
-        if (task == null) {
-            try {
-                task = mainSaleSpecInferenceService.createTask(spuId);
-                String message = "已自动创建主销售属性任务，请先生成并确认草案后再发布，taskId=" + task.getId();
-                warnings.add(message);
-                publishLogService.info(runId, "SPEC_GATE", message);
-                return new MainSaleSpecDraftGate(false, null, task, message);
-            } catch (Exception e) {
-                String message = "主销售属性任务不存在，且自动创建失败: " + safeErrMessage(e);
-                warnings.add(message);
-                publishLogService.warn(runId, "SPEC_GATE", message);
-                return new MainSaleSpecDraftGate(false, null, null, message);
-            }
-        }
-
-        StoredMainSaleSpecDraft draft = loadStoredMainSaleSpecDraft(spuId, runId, warnings);
+        StoredPublishSpecDraft draft = loadStoredSpecMappingDraft(
+                spuId,
+                runId,
+                warnings,
+                categoryClient,
+                temuSkus,
+                pc,
+                siteId,
+                warehouseId,
+                defaultStock,
+                maxStock
+        );
         if (draft != null) {
-            return new MainSaleSpecDraftGate(true, draft, task, null);
+            return new SpecMappingDraftGate(true, draft, null);
         }
 
-        String message = buildMainSaleSpecBlockedMessage(task);
-        warnings.add(message);
+        String message = warnings.isEmpty()
+            ? "未能根据 TEMU SKU 自动生成可发布规格，请先检查 SKU specJson 与父规格映射配置"
+                : warnings.get(warnings.size() - 1);
         publishLogService.warn(runId, "SPEC_GATE", message);
-        return new MainSaleSpecDraftGate(false, null, task, message);
+        return new SpecMappingDraftGate(false, null, message);
     }
 
-    private String buildMainSaleSpecBlockedMessage(TemuMainSaleSpecInferenceTask task) {
-        if (task == null) {
-            return "主销售属性任务不存在，请先生成并确认草案后再发布";
-        }
-        Long taskId = task.getId();
-        Integer status = task.getStatus();
-        String suffix = taskId == null ? "" : "，taskId=" + taskId;
-        if (Objects.equals(status, TemuMainSaleSpecInferenceService.STATUS_PENDING)) {
-            return "主销售属性任务尚未执行，请先生成并确认草案后再发布" + suffix;
-        }
-        if (Objects.equals(status, TemuMainSaleSpecInferenceService.STATUS_RUNNING)) {
-            return "主销售属性任务执行中，请等待草案生成完成后再发布" + suffix;
-        }
-        if (StringUtils.hasText(task.getErrorMsg())) {
-            return "主销售属性任务执行失败，请先处理草案问题后再发布" + suffix + "，error=" + task.getErrorMsg();
-        }
-        return "主销售属性任务结果不完整，请先确认草案后再发布" + suffix;
-    }
-
-    private TemuPublishDTO.PublishResponse blockedByMainSaleSpecResponse(String message,
+    private TemuPublishDTO.PublishResponse blockedBySpecMappingResponse(String message,
                                                                         Long runId,
-                                                                        List<String> warnings,
-                                                                        TemuMainSaleSpecInferenceTask task) {
-        Long taskId = task == null ? null : task.getId();
-        Integer taskStatus = task == null ? null : task.getStatus();
+                                                                        List<String> warnings) {
         return new TemuPublishDTO.PublishResponse(
                 false,
                 message,
@@ -1372,55 +1360,310 @@ public class TemuPublishService {
                 null,
                 null,
                 null,
-                warnings,
-                taskId,
-                taskStatus,
-                true
+                warnings
         );
     }
 
-    private StoredMainSaleSpecDraft loadStoredMainSaleSpecDraft(Long spuId, Long runId, List<String> warnings) {
+    private StoredPublishSpecDraft loadStoredSpecMappingDraft(Long spuId,
+                                                              Long runId,
+                                                              List<String> warnings,
+                                                              CategoryApiClient categoryClient,
+                                                              List<ProductCollectionTemuSku> temuSkus,
+                                                              ProductCollection pc,
+                                                              int siteId,
+                                                              String warehouseId,
+                                                              int defaultStock,
+                                                              int maxStock) {
         if (spuId == null) {
             return null;
         }
-        TemuMainSaleSpecInferenceTask task = mainSaleSpecInferenceTaskRepository.findFirstBySpuIdOrderByIdDesc(spuId).orElse(null);
-        if (task == null) {
+
+        try {
+            StoredPublishSpecDraft converted = temuSkuPublishDraftConverter.convert(
+                    pc,
+                    temuSkus,
+                    categoryClient,
+                    siteId,
+                    warehouseId,
+                    defaultStock,
+                    maxStock,
+                    warnings
+            );
+            if (converted == null) {
+                return null;
+            }
+            validateNoDuplicateSkuSpecGroups(converted.productSkuReqGroups());
+            publishLogService.info(runId, "SPEC", "using temu sku converter: spuId=" + spuId + ", skuCount=" + (temuSkus == null ? 0 : temuSkus.size()));
+            return converted;
+        } catch (Exception e) {
+            warnings.add("根据 TEMU SKU 自动生成发布规格失败: " + safeErrMessage(e));
+            publishLogService.warn(runId, "SPEC", "temu sku converter failed: spuId=" + spuId + ", error=" + safeErrMessage(e));
             return null;
         }
-        if (!StringUtils.hasText(task.getProductSpecPropertyReqs())
-                || !StringUtils.hasText(task.getMainProductSkuSpecReqs())
-                || !StringUtils.hasText(task.getProductSkuReqs())) {
-            warnings.add("已找到 spuId=" + spuId + " 的主销售属性任务，但结果不完整，当前发布已被前置规则阻断");
+    }
+
+    private ParentSpec matchAllowedParentSpec(String fieldName, List<ParentSpec> allowedParentSpecs) {
+        String target = firstNonBlank(fieldName);
+        if (!StringUtils.hasText(target) || allowedParentSpecs == null || allowedParentSpecs.isEmpty()) {
+            return null;
+        }
+        for (ParentSpec parentSpec : allowedParentSpecs) {
+            if (parentSpec != null && sameSpecDimension(target, parentSpec.parentSpecName)) {
+                return parentSpec;
+            }
+        }
+        return null;
+    }
+
+    private Integer ensureTempSpec(Map<String, AddGloGoodsRequest.ProductSpecPropertyReq> uniqueSpecs,
+                                   Map<String, Integer> tempSpecIdByKey,
+                                   int[] nextTempSpecId,
+                                   ParentSpec parentSpec,
+                                   String specValue) {
+        String key = parentSpec.parentSpecId + "\u0001" + normalizeSpecToken(specValue);
+        Integer tempSpecId = tempSpecIdByKey.get(key);
+        if (tempSpecId != null) {
+            return tempSpecId;
+        }
+        tempSpecId = nextTempSpecId[0]++;
+        tempSpecIdByKey.put(key, tempSpecId);
+
+        AddGloGoodsRequest.ProductSpecPropertyReq top = new AddGloGoodsRequest.ProductSpecPropertyReq();
+        top.setVid(0);
+        top.setSpecId(tempSpecId);
+        top.setValueGroupId(0);
+        top.setParentSpecId(parentSpec.parentSpecId);
+        top.setValueGroupName("");
+        top.setValueUnit("");
+        top.setPid(0);
+        top.setTemplatePid(0);
+        top.setNumberInputValue("");
+        top.setPropValue(specValue);
+        top.setPropName(parentSpec.parentSpecName);
+        top.setRefPid(0);
+        uniqueSpecs.put(key, top);
+        return tempSpecId;
+    }
+
+    private void validateNoDuplicateSkuSpecGroups(List<List<AddGloGoodsRequest.ProductSkuReq>> skuGroups) {
+        if (skuGroups == null || skuGroups.isEmpty()) {
+            return;
+        }
+        for (int groupIndex = 0; groupIndex < skuGroups.size(); groupIndex++) {
+            List<AddGloGoodsRequest.ProductSkuReq> skuReqs = skuGroups.get(groupIndex);
+            if (skuReqs == null || skuReqs.isEmpty()) {
+                continue;
+            }
+            Map<String, String> seen = new LinkedHashMap<>();
+            for (AddGloGoodsRequest.ProductSkuReq skuReq : skuReqs) {
+                String comboKey = buildSkuSpecComboKey(skuReq);
+                if (!StringUtils.hasText(comboKey)) {
+                    continue;
+                }
+                String extCode = firstNonBlank(skuReq.getExtCode(), "UNKNOWN");
+                String existing = seen.putIfAbsent(comboKey, extCode);
+                if (existing != null) {
+                    throw new IllegalStateException("规格映射草案在第 " + (groupIndex + 1) + " 个 SKC 分组下生成了重复 SKU 规格组合: " + comboKey);
+                }
+            }
+        }
+    }
+
+    private String buildSkuSpecComboKey(AddGloGoodsRequest.ProductSkuReq skuReq) {
+        if (skuReq == null || skuReq.getProductSkuSpecReqs() == null || skuReq.getProductSkuSpecReqs().isEmpty()) {
+            return null;
+        }
+        List<String> parts = new ArrayList<>();
+        for (AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq specReq : skuReq.getProductSkuSpecReqs()) {
+            if (specReq == null) {
+                continue;
+            }
+            String parentSpecName = normalizeSpecToken(specReq.getParentSpecName());
+            String specName = normalizeSpecToken(specReq.getSpecName());
+            if (!StringUtils.hasText(parentSpecName) || !StringUtils.hasText(specName)) {
+                continue;
+            }
+            parts.add(parentSpecName + "=" + specName);
+        }
+        Collections.sort(parts);
+        return parts.isEmpty() ? null : String.join("|", parts);
+    }
+
+    private List<String> cleanStringList(List<String> values) {
+        if (values == null || values.isEmpty()) {
+            return List.of();
+        }
+        LinkedHashSet<String> out = new LinkedHashSet<>();
+        for (String value : values) {
+            String normalized = firstNonBlank(value);
+            if (StringUtils.hasText(normalized)) {
+                out.add(normalized);
+            }
+        }
+        return new ArrayList<>(out);
+    }
+
+    private String normalizeMappedSpecValue(String value) {
+        String candidate = firstNonBlank(value);
+        if (!StringUtils.hasText(candidate)) {
+            return null;
+        }
+        candidate = candidate
+                .replace('【', ' ')
+                .replace('】', ' ')
+                .replace('[', ' ')
+                .replace(']', ' ')
+                .replace('（', ' ')
+                .replace('）', ' ')
+                .replace('(', ' ')
+                .replace(')', ' ')
+                .replace('.', ' ')
+                .replace('．', ' ')
+                .replace('。', ' ')
+                .replaceAll("\\s+", " ")
+                .trim();
+        if (candidate.length() > 50) {
+            candidate = candidate.substring(0, 50);
+        }
+        return candidate;
+    }
+
+    private boolean sameSpecDimension(String left, String right) {
+        String normalizedLeft = firstNonBlank(left);
+        String normalizedRight = firstNonBlank(right);
+        if (!StringUtils.hasText(normalizedLeft) || !StringUtils.hasText(normalizedRight)) {
+            return false;
+        }
+        String lowerLeft = normalizedLeft.toLowerCase(Locale.ROOT);
+        String lowerRight = normalizedRight.toLowerCase(Locale.ROOT);
+        return lowerLeft.equals(lowerRight) || lowerLeft.contains(lowerRight) || lowerRight.contains(lowerLeft);
+    }
+
+    private String normalizeSpecToken(String value) {
+        String normalized = firstNonBlank(value);
+        if (!StringUtils.hasText(normalized)) {
+            return null;
+        }
+        return normalized.replaceAll("\\s+", "");
+    }
+
+    private String asText(Object value) {
+        if (value == null) {
+            return null;
+        }
+        return firstNonBlank(String.valueOf(value));
+    }
+
+    private AddGloGoodsRequest.ProductSkuReq buildProductSkuReq(ProductCollection pc,
+                                                                Integer skuIndex,
+                                                                String originSkuId,
+                                                                String temuSkuId,
+                                                                Map<String, Object> originRow,
+                                                                Map<String, Object> temuRow,
+                                                                int siteId,
+                                                                String warehouseId,
+                                                                int defaultStock,
+                                                                int maxStock,
+                                                                List<AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq> skuSpecReqDtos) {
+        AddGloGoodsRequest.ProductSkuReq sku = new AddGloGoodsRequest.ProductSkuReq();
+        sku.setCurrencyType("CNY");
+
+        BigDecimal supplyPrice = toBigDecimal(temuRow == null ? null : temuRow.get("supplyPrice"));
+        BigDecimal originPrice = toBigDecimal(originRow == null ? null : originRow.get("price"));
+        BigDecimal finalPrice = supplyPrice != null ? supplyPrice : originPrice;
+        sku.setSiteSupplierPrices(new ArrayList<>(List.of(
+                new AddGloGoodsRequest.ProductSkuReq.SiteSupplierPrice(siteId, priceToCents(finalPrice))
+        )));
+
+        Integer stock = toInt(originRow == null ? null : originRow.get("stock"));
+        int publishStock = normalizePublishStock(stock, defaultStock, maxStock);
+        AddGloGoodsRequest.ProductSkuReq.ProductSkuStockQuantityReq stockReq = new AddGloGoodsRequest.ProductSkuReq.ProductSkuStockQuantityReq();
+        stockReq.setWarehouseStockQuantityReqs(new ArrayList<>(List.of(
+                new AddGloGoodsRequest.ProductSkuReq.ProductSkuStockQuantityReq.WarehouseStockQuantityReq(
+                        publishStock,
+                        warehouseId,
+                        null
+                )
+        )));
+        sku.setProductSkuStockQuantityReq(stockReq);
+
+        String thumb = firstNonBlank(
+                temuRow == null ? null : asText(temuRow.get("image")),
+                originRow == null ? null : asText(originRow.get("image")),
+                pc == null ? null : pc.getProductMainImage()
+        );
+        sku.setThumbUrl(thumb);
+
+        Integer weightG = toInt(temuRow == null ? null : temuRow.get("weightG"));
+        int weightMg = Math.max(30, weightG == null ? 150 : weightG) * 1000;
+        int lenMm = cmToMmOrDefault(toBigDecimal(temuRow == null ? null : temuRow.get("lengthCm")), 10);
+        int widthMm = cmToMmOrDefault(toBigDecimal(temuRow == null ? null : temuRow.get("widthCm")), 5);
+        int heightMm = cmToMmOrDefault(toBigDecimal(temuRow == null ? null : temuRow.get("heightCm")), 5);
+        int[] dims = new int[]{Math.max(1, lenMm), Math.max(1, widthMm), Math.max(1, heightMm)};
+        Arrays.sort(dims);
+        int longest = dims[2];
+        int middle = dims[1];
+        int shortest = Math.max(2, dims[0]);
+
+        AddGloGoodsRequest.ProductSkuReq.ProductSkuWeightReq weightReq = new AddGloGoodsRequest.ProductSkuReq.ProductSkuWeightReq();
+        weightReq.setValue(weightMg);
+        AddGloGoodsRequest.ProductSkuReq.ProductSkuVolumeReq volReq = new AddGloGoodsRequest.ProductSkuReq.ProductSkuVolumeReq();
+        volReq.setLen(longest);
+        volReq.setWidth(middle);
+        volReq.setHeight(shortest);
+        AddGloGoodsRequest.ProductSkuReq.ProductSkuSensitiveAttrReq senAttr = new AddGloGoodsRequest.ProductSkuReq.ProductSkuSensitiveAttrReq();
+        senAttr.setIsSensitive(0);
+        senAttr.setSensitiveList(new ArrayList<>());
+        senAttr.setSensitiveTypes(new ArrayList<>());
+        AddGloGoodsRequest.ProductSkuReq.ProductSkuSensitiveLimitReq senLimit = new AddGloGoodsRequest.ProductSkuReq.ProductSkuSensitiveLimitReq();
+
+        AddGloGoodsRequest.ProductSkuReq.ProductSkuWhExtAttrReq whExt = new AddGloGoodsRequest.ProductSkuReq.ProductSkuWhExtAttrReq();
+        whExt.setProductSkuWeightReq(weightReq);
+        whExt.setProductSkuVolumeReq(volReq);
+        whExt.setProductSkuSensitiveAttrReq(senAttr);
+        whExt.setProductSkuSensitiveLimitReq(senLimit);
+        sku.setProductSkuWhExtAttrReq(whExt);
+
+        int idx = skuIndex == null ? 0 : skuIndex;
+        sku.setExtCode(safeSkuExtCode(temuSkuId, originSkuId, idx));
+        sku.setProductSkuSpecReqs(skuSpecReqDtos == null ? new ArrayList<>() : skuSpecReqDtos);
+        return sku;
+    }
+
+    private int normalizePublishStock(Integer rawStock, int defaultStock, int maxStock) {
+        int fallbackStock = defaultStock > 0 ? defaultStock : 100;
+        int upperBound = maxStock > 0 ? maxStock : 10842;
+        int candidate = rawStock == null || rawStock <= 0 ? fallbackStock : rawStock;
+        if (candidate <= 0) {
+            candidate = fallbackStock;
+        }
+        return Math.min(candidate, upperBound);
+    }
+
+    private Integer toInt(Object value) {
+        if (value == null) {
             return null;
         }
         try {
-            List<AddGloGoodsRequest.ProductSpecPropertyReq> productSpecPropertyReqs = objectMapper.readValue(
-                    task.getProductSpecPropertyReqs(),
-                    new TypeReference<List<AddGloGoodsRequest.ProductSpecPropertyReq>>() {}
-            );
-            List<List<AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq>> mainGroups = objectMapper.readValue(
-                    task.getMainProductSkuSpecReqs(),
-                    new TypeReference<List<List<AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq>>>() {}
-            );
-            List<List<AddGloGoodsRequest.ProductSkuReq>> skuGroups = objectMapper.readValue(
-                    task.getProductSkuReqs(),
-                    new TypeReference<List<List<AddGloGoodsRequest.ProductSkuReq>>>() {}
-            );
-            if (productSpecPropertyReqs == null || productSpecPropertyReqs.isEmpty() || skuGroups == null || skuGroups.isEmpty()) {
-                warnings.add("主销售属性任务缺少可发布的 SKU 草案，当前发布已被前置规则阻断");
-                return null;
-            }
-            publishLogService.info(runId, "SPEC", "using stored main sale spec draft: spuId=" + spuId + ", taskId=" + task.getId());
-            return new StoredMainSaleSpecDraft(productSpecPropertyReqs, mainGroups, skuGroups);
-        } catch (Exception e) {
-            warnings.add("主销售属性任务结果解析失败，当前发布已被前置规则阻断: " + safeErrMessage(e));
-            publishLogService.warn(runId, "SPEC", "stored main sale spec draft parse failed: spuId=" + spuId + ", error=" + safeErrMessage(e));
+            return Integer.parseInt(String.valueOf(value).trim());
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private BigDecimal toBigDecimal(Object value) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            return new BigDecimal(String.valueOf(value).trim());
+        } catch (Exception ignored) {
             return null;
         }
     }
 
     private StoredMaterializedSpecDraft materializeStoredDraft(CategoryApiClient categoryClient,
-                                                               StoredMainSaleSpecDraft draft) throws Exception {
+                                                               StoredPublishSpecDraft draft) throws Exception {
         Map<String, CreatedSpecInfo> actualSpecInfoMap = new LinkedHashMap<>();
         Map<String, CreatedSpecInfo> tempSpecInfoMap = new LinkedHashMap<>();
         List<AddGloGoodsRequest.ProductSpecPropertyReq> topProps = new ArrayList<>();

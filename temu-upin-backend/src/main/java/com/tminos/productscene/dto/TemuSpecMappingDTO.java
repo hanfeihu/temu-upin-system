@@ -399,6 +399,7 @@ public class TemuSpecMappingDTO {
         private String targetCategoryId;
         private String targetCategoryName;
         private String sourceSignature;
+        private List<TemuCategoryDTO.ParentSpecOption> targetParentSpecOptions;
         private List<SourceFieldSummary> sourceFields;
         private List<SourceRow> sourceRows;
         private List<ProfileResponse> profiles;
@@ -416,6 +417,8 @@ public class TemuSpecMappingDTO {
         public void setTargetCategoryName(String targetCategoryName) { this.targetCategoryName = targetCategoryName; }
         public String getSourceSignature() { return sourceSignature; }
         public void setSourceSignature(String sourceSignature) { this.sourceSignature = sourceSignature; }
+        public List<TemuCategoryDTO.ParentSpecOption> getTargetParentSpecOptions() { return targetParentSpecOptions; }
+        public void setTargetParentSpecOptions(List<TemuCategoryDTO.ParentSpecOption> targetParentSpecOptions) { this.targetParentSpecOptions = targetParentSpecOptions; }
         public List<SourceFieldSummary> getSourceFields() { return sourceFields; }
         public void setSourceFields(List<SourceFieldSummary> sourceFields) { this.sourceFields = sourceFields; }
         public List<SourceRow> getSourceRows() { return sourceRows; }

@@ -17,6 +17,10 @@ export const productCollectionApi = {
     return apiClient.put(`/platform/product-collections/${id}`, data)
   },
 
+  split(id, data) {
+    return apiClient.post(`/platform/product-collections/${id}/split`, data, { timeout: 240000 })
+  },
+
   delete(id) {
     return apiClient.delete(`/platform/product-collections/${id}`)
   },
@@ -69,6 +73,10 @@ export const productCollectionApi = {
 
   replaceImagesToKwcdn(id) {
     return apiClient.post(`/platform/product-collections/${id}/temu/images/kwcdn-replace`, null, { timeout: 600000 })
+  },
+
+  normalizeAllImagesTo800(id) {
+    return apiClient.post(`/platform/product-collections/${id}/temu/images/normalize-800`, null, { timeout: 600000 })
   },
 
   requeuePostImportTask(id, force = false) {
