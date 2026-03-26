@@ -47,6 +47,11 @@ const routes = [
     component: () => import('@/views/PlatformTemuAttrAiFill.vue')
   },
   {
+    path: '/platform/temu-title-optimizer',
+    name: 'PlatformTemuTitleOptimizer',
+    component: () => import('@/views/PlatformTemuTitleOptimizer.vue')
+  },
+  {
     path: '/platform/temu-apps',
     name: 'PlatformTemuApps',
     component: () => import('@/views/PlatformTemuApps.vue')

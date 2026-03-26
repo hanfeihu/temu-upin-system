@@ -6,6 +6,7 @@ import com.tminos.productscene.dto.ProductCollectionDTO.ProductCollectionDetailR
 import com.tminos.productscene.dto.ProductCollectionDTO.ProductCollectionSkuPropResponse;
 import com.tminos.productscene.dto.ProductCollectionDTO.ProductCollectionSkuPropValueResponse;
 import com.tminos.productscene.dto.ProductCollectionDTO.ProductCollectionSkuResponse;
+import com.tminos.productscene.dto.ProductCollectionDTO.TemuTitleOptimizationResponse;
 import com.tminos.productscene.dto.ProductCollectionDTO.UpdateProductCollectionRequest;
 import com.tminos.productscene.entity.ProductCollection;
 import com.tminos.productscene.entity.ProductCollectionSku;
@@ -54,6 +55,7 @@ public class ProductCollectionService {
     private final ProductCollectionSkuPropValueRepository skuPropValueRepo;
     private final TemuCategoryService temuCategoryService;
     private final TemuAttributeAiService temuAttributeAiService;
+    private final TemuTitleOptimizationService temuTitleOptimizationService;
     private final ProductCollectionTemuSkuRepository temuSkuRepo;
     private final ObjectMapper objectMapper;
     private final ImportTitleCleanConfig importTitleCleanConfig;
@@ -67,6 +69,7 @@ public class ProductCollectionService {
             ProductCollectionSkuPropValueRepository skuPropValueRepo,
             TemuCategoryService temuCategoryService,
             TemuAttributeAiService temuAttributeAiService,
+            TemuTitleOptimizationService temuTitleOptimizationService,
             ProductCollectionTemuSkuRepository temuSkuRepo,
             ObjectMapper objectMapper,
             ImportTitleCleanConfig importTitleCleanConfig,
@@ -79,6 +82,7 @@ public class ProductCollectionService {
         this.skuPropValueRepo = skuPropValueRepo;
         this.temuCategoryService = temuCategoryService;
         this.temuAttributeAiService = temuAttributeAiService;
+        this.temuTitleOptimizationService = temuTitleOptimizationService;
         this.temuSkuRepo = temuSkuRepo;
         this.objectMapper = objectMapper;
         this.importTitleCleanConfig = importTitleCleanConfig;
@@ -89,7 +93,8 @@ public class ProductCollectionService {
     @Transactional(readOnly = true)
     public Map<String, Object> aiFillTemuAttributes(Long id) {
         ProductCollection pc = get(id);
-        String template = getTemuCategoryAttributesRaw(id);
+        TemuCategoryAttributesFetchResult templateFetch = getTemuCategoryAttributesFetchResult(id);
+        String template = templateFetch.rawTemplate();
         Map<String, Object> skuSummary = buildSkuSummaryForAi(id);
         TemuAttributeAiService.AiFillResult r = temuAttributeAiService.fill(
                 pc.getProductName(),
@@ -104,6 +109,7 @@ public class ProductCollectionService {
         out.put("properties", r.getProperties() == null ? Collections.emptyList() : r.getProperties());
         out.put("missingRequiredPids", r.getMissingRequiredPids() == null ? Collections.emptyList() : r.getMissingRequiredPids());
         out.put("warnings", r.getWarnings() == null ? Collections.emptyList() : r.getWarnings());
+        out.put("templateFetch", templateFetch.toLogMap());
         return out;
     }
 
@@ -364,6 +370,9 @@ public class ProductCollectionService {
                 .sourcePlatform(pc.getSourcePlatform())
                 .temuCatid(pc.getTemuCatid())
                 .temuCatname(pc.getTemuCatname())
+                .temuOptimizedTitleEn(pc.getTemuOptimizedTitleEn())
+                .temuOptimizedTitleZh(pc.getTemuOptimizedTitleZh())
+                .temuCategoryKeywords(pc.getTemuCategoryKeywords())
                 .carouselThumbImages(pc.getCarouselThumbImages())
                 .carouselVideo(pc.getCarouselVideo())
                 .baseFreight(pc.getBaseFreight())
@@ -389,7 +398,7 @@ public class ProductCollectionService {
                 .spuId(pc.getId())
                 .temuCatid(pc.getTemuCatid())
                 .sourceProductName(pc.getProductName())
-                .translatedProductName(translateTitleForTemuPublish(pc.getProductName()))
+                .translatedProductName(firstNonBlank(pc.getTemuOptimizedTitleEn(), translateTitleForTemuPublish(pc.getProductName())))
                 .carouselImages(parseJsonStringArraySafe(pc.getCarouselImages()))
                 .detailImages(parseJsonStringArraySafe(pc.getDetailImages()))
                 .temuAttributes(parseJsonObjectSafe(pc.getTemuAttributes()))
@@ -464,6 +473,9 @@ public class ProductCollectionService {
         if (req.getOriginalCategory() != null) pc.setOriginalCategory(req.getOriginalCategory());
         if (req.getTemuCatid() != null) pc.setTemuCatid(req.getTemuCatid());
         if (req.getTemuCatname() != null) pc.setTemuCatname(req.getTemuCatname());
+        if (req.getTemuOptimizedTitleEn() != null) pc.setTemuOptimizedTitleEn(req.getTemuOptimizedTitleEn());
+        if (req.getTemuOptimizedTitleZh() != null) pc.setTemuOptimizedTitleZh(req.getTemuOptimizedTitleZh());
+        if (req.getTemuCategoryKeywords() != null) pc.setTemuCategoryKeywords(req.getTemuCategoryKeywords());
 
         if (req.getProductMainImage() != null) pc.setProductMainImage(req.getProductMainImage());
         if (req.getProductUrl() != null) pc.setProductUrl(req.getProductUrl());
@@ -609,16 +621,54 @@ public class ProductCollectionService {
     @Transactional
     public TemuCategoryDTO.MatchCategoryResponse matchTemuCategory(Long id) {
         ProductCollection pc = get(id);
-        return temuCategoryService.matchCategory(pc.getProductName());
+        TemuTitleOptimizationService.TitleOptimizationResult optimization = temuTitleOptimizationService.generateAndMatch(pc);
+        applyTemuTitleOptimization(pc, optimization);
+        repo.save(pc);
+        return toMatchCategoryResponse(optimization);
+    }
+
+    @Transactional
+    public TemuTitleOptimizationResponse generateTemuTitleOptimization(Long id) {
+        ProductCollection pc = get(id);
+        TemuTitleOptimizationService.TitleOptimizationResult optimization = temuTitleOptimizationService.generateAndMatch(pc);
+        applyTemuTitleOptimization(pc, optimization);
+        repo.save(pc);
+        return TemuTitleOptimizationResponse.builder()
+                .spuId(pc.getId())
+                .sourceTitle(pc.getProductName())
+                .optimizedTitleEn(optimization.getOptimizedTitleEn())
+                .optimizedTitleZh(optimization.getOptimizedTitleZh())
+                .categoryKeywords(optimization.getCategoryKeywords())
+                .attemptCount(optimization.getAttemptCount())
+                .matchedKeyword(optimization.getMatchedKeyword())
+                .categoryMatched(Boolean.TRUE.equals(optimization.getCategoryMatched()))
+                .matchedTemuCatid(optimization.getMatchedTemuCatid())
+                .matchedTemuCatname(optimization.getMatchedTemuCatname())
+                .errorMsg(optimization.getErrorMsg())
+                .failedKeywords(optimization.getFailedKeywords())
+                .build();
     }
 
     @Transactional(readOnly = true)
     public String getTemuCategoryAttributesRaw(Long id) {
+        return getTemuCategoryAttributesFetchResult(id).rawTemplate();
+    }
+
+    @Transactional(readOnly = true)
+    public TemuCategoryAttributesFetchResult getTemuCategoryAttributesFetchResult(Long id) {
         ProductCollection pc = get(id);
         String catid = pc.getTemuCatid();
         String leaf = extractLastTemuCatId(catid);
-        if (leaf == null || leaf.isBlank()) return null;
-        return temuCategoryService.getCategoryAttributesRaw(leaf);
+        if (leaf == null || leaf.isBlank()) {
+            return new TemuCategoryAttributesFetchResult(id, catid, null, null, "temuCatid missing or leafCatId parse failed");
+        }
+        TemuCategoryService.CategoryAttributesFetchResult fetch = temuCategoryService.fetchCategoryAttributesRaw(leaf);
+        String raw = fetch == null ? null : fetch.raw();
+        String error = fetch == null ? "fetch result is null" : fetch.errorMsg();
+        if (!StringUtils.hasText(raw)) {
+            log.warn("getTemuCategoryAttributesFetchResult spuId={} temuCatid={} leafCatId={} rawEmpty=true error={}", id, catid, leaf, error);
+        }
+        return new TemuCategoryAttributesFetchResult(id, catid, leaf, raw, error);
     }
 
     @Transactional
@@ -640,28 +690,45 @@ public class ProductCollectionService {
         return parts[parts.length - 1].trim();
     }
 
+    public record TemuCategoryAttributesFetchResult(Long spuId,
+                                                    String temuCatid,
+                                                    String leafCatId,
+                                                    String rawTemplate,
+                                                    String errorMsg) {
+        public Map<String, Object> toLogMap() {
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("spuId", spuId);
+            out.put("temuCatid", temuCatid);
+            out.put("leafCatId", leafCatId);
+            out.put("rawLen", rawTemplate == null ? 0 : rawTemplate.length());
+            out.put("errorMsg", errorMsg);
+            out.put("rawPreview", preview(rawTemplate));
+            return out;
+        }
+
+        private static String preview(String rawTemplate) {
+            if (!StringUtils.hasText(rawTemplate)) {
+                return null;
+            }
+            return rawTemplate.length() <= 500 ? rawTemplate : rawTemplate.substring(0, 500);
+        }
+    }
+
     @Transactional
     public void saveTemuCategory(Long id, String temuCatid, String temuCatname) {
         ProductCollection pc = get(id);
 
         // If caller didn't provide a selection, auto-match by title and pick the first option.
         if (temuCatid == null || temuCatid.isBlank() || temuCatname == null || temuCatname.isBlank()) {
-            String title = pc.getProductName();
-            TemuCategoryDTO.MatchCategoryResponse resp = temuCategoryService.matchCategory(title);
-            if (resp == null || !resp.isSuccess() || resp.getOptions() == null || resp.getOptions().isEmpty()) {
-                String msg = resp == null ? "matchCategory returned null" : resp.getErrorMsg();
-                throw new IllegalStateException("Temu category match failed: " + (msg == null ? "unknown" : msg));
+            TemuTitleOptimizationService.TitleOptimizationResult optimization = temuTitleOptimizationService.generateAndMatch(pc);
+            applyTemuTitleOptimization(pc, optimization);
+            if (!Boolean.TRUE.equals(optimization.getCategoryMatched())
+                    || !StringUtils.hasText(optimization.getMatchedTemuCatid())
+                    || !StringUtils.hasText(optimization.getMatchedTemuCatname())) {
+                throw new IllegalStateException("Temu category match failed: " + firstNonBlank(optimization.getErrorMsg(), "unknown"));
             }
-
-            TemuCategoryDTO.MatchOption first = resp.getOptions().get(0);
-            String autoIds = first == null ? null : first.getPathIds();
-            String autoNames = first == null ? null : first.getPathNames();
-            if (autoIds == null || autoIds.isBlank() || autoNames == null || autoNames.isBlank()) {
-                throw new IllegalStateException("Temu category match returned empty first option");
-            }
-
-            temuCatid = autoIds;
-            temuCatname = autoNames;
+            temuCatid = optimization.getMatchedTemuCatid();
+            temuCatname = optimization.getMatchedTemuCatname();
         }
 
         // Store FULL path:
@@ -827,23 +894,15 @@ public class ProductCollectionService {
             }
         }
 
-        // Auto match TEMU category on import, defaulting to the first suggestion.
-        // This mirrors the manual "匹配 TEMU 类目" flow and gives newly imported items a default selection.
         try {
-            TemuCategoryDTO.MatchCategoryResponse resp = temuCategoryService.matchCategory(pc.getProductName());
-            if (resp != null && resp.isSuccess() && resp.getOptions() != null && !resp.getOptions().isEmpty()) {
-                TemuCategoryDTO.MatchOption first = resp.getOptions().get(0);
-                if (first != null) {
-                    String ids = first.getPathIds();
-                    String names = first.getPathNames();
-                    if (ids != null && !ids.isBlank() && names != null && !names.isBlank()) {
-                        pc.setTemuCatid(ids.trim());
-                        pc.setTemuCatname(names.trim());
-                    }
-                }
+            TemuTitleOptimizationService.TitleOptimizationResult optimization = temuTitleOptimizationService.generateAndMatch(pc);
+            applyTemuTitleOptimization(pc, optimization);
+            if (!Boolean.TRUE.equals(optimization.getCategoryMatched())) {
+                log.warn("importFromHtml temu title optimization no category match productId={} keyword={} error={}",
+                        pc.getProductId(), optimization.getCategoryKeywords(), optimization.getErrorMsg());
             }
-        } catch (Exception ignored) {
-            // best-effort; do not block import
+        } catch (Exception ex) {
+            log.warn("importFromHtml temu title optimization failed productId={} error={}", pc.getProductId(), ex.getMessage());
         }
 
         // Save SPU first to get id
@@ -959,6 +1018,55 @@ public class ProductCollectionService {
     private String translateTitleForTemuPublish(String title) {
         List<String> warnings = new ArrayList<>();
         return sanitizeEnglishName(maybeTranslateTitleToEn(title, warnings), warnings);
+    }
+
+    private void applyTemuTitleOptimization(ProductCollection pc,
+                                            TemuTitleOptimizationService.TitleOptimizationResult optimization) {
+        if (pc == null || optimization == null) {
+            return;
+        }
+        if (StringUtils.hasText(optimization.getOptimizedTitleEn())) {
+            pc.setTemuOptimizedTitleEn(optimization.getOptimizedTitleEn().trim());
+        }
+        if (StringUtils.hasText(optimization.getOptimizedTitleZh())) {
+            pc.setTemuOptimizedTitleZh(optimization.getOptimizedTitleZh().trim());
+        }
+        if (StringUtils.hasText(optimization.getCategoryKeywords())) {
+            pc.setTemuCategoryKeywords(optimization.getCategoryKeywords().trim());
+        }
+        if (Boolean.TRUE.equals(optimization.getCategoryMatched())
+                && StringUtils.hasText(optimization.getMatchedTemuCatid())
+                && StringUtils.hasText(optimization.getMatchedTemuCatname())) {
+            pc.setTemuCatid(optimization.getMatchedTemuCatid().trim());
+            pc.setTemuCatname(optimization.getMatchedTemuCatname().trim());
+        }
+    }
+
+    private TemuCategoryDTO.MatchCategoryResponse toMatchCategoryResponse(TemuTitleOptimizationService.TitleOptimizationResult optimization) {
+        TemuCategoryDTO.MatchCategoryResponse source = optimization == null ? null : optimization.getMatchCategoryResponse();
+        TemuCategoryDTO.MatchCategoryResponse.MatchCategoryResponseBuilder builder = TemuCategoryDTO.MatchCategoryResponse.builder();
+        if (source != null) {
+            builder.requestId(source.getRequestId())
+                    .success(source.isSuccess())
+                    .errorCode(source.getErrorCode())
+                    .errorMsg(source.getErrorMsg())
+                    .categoryPaths(source.getCategoryPaths())
+                    .options(source.getOptions());
+        } else {
+                    builder.success(optimization != null && Boolean.TRUE.equals(optimization.getCategoryMatched()))
+                    .errorMsg(optimization == null ? "optimization result is null" : optimization.getErrorMsg())
+                    .options(Collections.emptyList())
+                    .categoryPaths(Collections.emptyList());
+        }
+        if (optimization != null) {
+            builder.generatedOptimizedTitleEn(optimization.getOptimizedTitleEn())
+                    .generatedOptimizedTitleZh(optimization.getOptimizedTitleZh())
+                    .generatedCategoryKeywords(optimization.getCategoryKeywords())
+                    .matchedKeyword(optimization.getMatchedKeyword())
+                    .attemptCount(optimization.getAttemptCount())
+                    .failedKeywords(optimization.getFailedKeywords());
+        }
+        return builder.build();
     }
 
     private String maybeTranslateTitleToEn(String title, List<String> warnings) {

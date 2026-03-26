@@ -44,7 +44,7 @@
 <script setup>
 import { useRouter } from 'vue-router'
 import ProLayout from '@/platform/components/ProLayout.vue'
-import { AppstoreOutlined, PictureOutlined } from '@ant-design/icons-vue'
+import { AppstoreOutlined, FileSearchOutlined, PictureOutlined } from '@ant-design/icons-vue'
 
 const router = useRouter()
 
@@ -66,6 +66,13 @@ const quickLinks = [
     to: '/ai',
     icon: PictureOutlined,
     bg: 'linear-gradient(135deg, rgba(245,158,11,0.95), rgba(239,68,68,0.95))'
+  },
+  {
+    title: 'TEMU 标题优化',
+    desc: '按 spu 生成中英文标题与类目关键词',
+    to: '/platform/temu-title-optimizer',
+    icon: FileSearchOutlined,
+    bg: 'linear-gradient(135deg, rgba(59,130,246,0.95), rgba(16,185,129,0.95))'
   }
 ]
 </script>

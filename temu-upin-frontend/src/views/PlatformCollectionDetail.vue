@@ -135,6 +135,22 @@
             <span class="cat-value">{{ pc.temuCatname }}</span>
           </div>
 
+          <div v-if="pc.temuOptimizedTitleEn || pc.temuOptimizedTitleZh || pc.temuCategoryKeywords" class="ai-title-card">
+            <div class="ai-title-head">AI 标题与类目关键词</div>
+            <div v-if="pc.temuOptimizedTitleEn" class="ai-title-row">
+              <span class="ai-title-label">英文标题</span>
+              <span class="ai-title-value">{{ pc.temuOptimizedTitleEn }}</span>
+            </div>
+            <div v-if="pc.temuOptimizedTitleZh" class="ai-title-row">
+              <span class="ai-title-label">中文标题</span>
+              <span class="ai-title-value">{{ pc.temuOptimizedTitleZh }}</span>
+            </div>
+            <div v-if="pc.temuCategoryKeywords" class="ai-title-row">
+              <span class="ai-title-label">类目关键词</span>
+              <span class="ai-title-value">{{ pc.temuCategoryKeywords }}</span>
+            </div>
+          </div>
+
           
 
           <div class="price-section">
@@ -2105,6 +2121,43 @@ onMounted(load)
 .cat-value {
   font-size: 13px;
   color: rgba(15, 23, 42, 0.86);
+  font-weight: 700;
+  word-break: break-word;
+}
+
+.ai-title-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  border-radius: 20px;
+  background: linear-gradient(135deg, rgba(239, 246, 255, 0.95), rgba(236, 253, 245, 0.95));
+  border: 1px solid rgba(125, 211, 252, 0.32);
+}
+
+.ai-title-head {
+  font-size: 13px;
+  font-weight: 900;
+  color: #0f172a;
+  letter-spacing: 0.04em;
+}
+
+.ai-title-row {
+  display: grid;
+  grid-template-columns: 72px 1fr;
+  gap: 10px;
+  align-items: start;
+}
+
+.ai-title-label {
+  font-size: 12px;
+  color: rgba(15, 23, 42, 0.55);
+  font-weight: 800;
+}
+
+.ai-title-value {
+  font-size: 13px;
+  color: rgba(15, 23, 42, 0.88);
   font-weight: 700;
   word-break: break-word;
 }

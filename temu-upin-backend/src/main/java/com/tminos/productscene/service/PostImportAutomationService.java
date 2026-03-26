@@ -97,13 +97,11 @@ public class PostImportAutomationService {
                     if (postImportLogService != null && runId != null) {
                         postImportLogService.data(runId, "ATTR", "aiFillTemuAttributes result", ai);
                     }
-                    String templateRaw = productCollectionService.getTemuCategoryAttributesRaw(spuId);
+                    ProductCollectionService.TemuCategoryAttributesFetchResult templateFetch = productCollectionService.getTemuCategoryAttributesFetchResult(spuId);
+                    String templateRaw = templateFetch.rawTemplate();
                     templateRawRef.set(templateRaw);
                     if (postImportLogService != null && runId != null) {
-                        Map<String, Object> meta = new LinkedHashMap<>();
-                        meta.put("len", templateRaw == null ? 0 : templateRaw.length());
-                        // Template raw can be large; keep it in sampleJson, not in row-level logs.
-                        postImportLogService.data(runId, "ATTR", "temuCategoryAttributesRaw", meta);
+                        postImportLogService.data(runId, "ATTR", "temuCategoryAttributesRaw", templateFetch.toLogMap());
                     }
                     String savedJson = buildTemuAttributesJson(spuId, templateRaw, ai);
                     builtJsonRef.set(savedJson);

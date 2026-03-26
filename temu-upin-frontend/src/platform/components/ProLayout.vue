@@ -85,6 +85,13 @@
               类目属性AI填写
             </a-menu-item>
 
+            <a-menu-item key="/platform/temu-title-optimizer">
+              <template #icon>
+                <file-text-outlined />
+              </template>
+              TEMU 标题优化
+            </a-menu-item>
+
             <a-menu-item key="/platform/temu-apps">
               <template #icon>
                 <setting-outlined />
@@ -198,6 +205,7 @@ const selectedKeys = computed(() => {
   if (p.startsWith('/platform/biz-logs')) return ['/platform/biz-logs']
   if (p.startsWith('/platform/temu-attr-rules')) return ['/platform/temu-attr-rules']
   if (p.startsWith('/platform/temu-attr-ai-fill')) return ['/platform/temu-attr-ai-fill']
+  if (p.startsWith('/platform/temu-title-optimizer')) return ['/platform/temu-title-optimizer']
   if (p.startsWith('/platform/temu-apps')) return ['/platform/temu-apps']
   if (p.startsWith('/platform/temu-shops')) return ['/platform/temu-shops']
   if (p.startsWith('/platform/spec-mappings/parent-spec-mappings')) return ['/platform/spec-mappings/parent-spec-mappings']

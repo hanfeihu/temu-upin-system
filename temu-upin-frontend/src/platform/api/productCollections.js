@@ -29,6 +29,10 @@ export const productCollectionApi = {
     return apiClient.post(`/platform/product-collections/${id}/temu-category/match`)
   },
 
+  generateTemuTitleOptimization(id) {
+    return apiClient.post(`/platform/product-collections/${id}/temu-title-optimizer/generate`, null, { timeout: 240000 })
+  },
+
   saveTemuCategory(id, data) {
     return apiClient.post(`/platform/product-collections/${id}/temu-category/save`, data)
   },

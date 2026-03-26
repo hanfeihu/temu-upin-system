@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tminos.productscene.dto.TemuCategoryDTO;
 import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -18,6 +20,8 @@ import java.util.Map;
 @Service
 @RequiredArgsConstructor
 public class TemuCategoryService {
+
+    private static final Logger log = LoggerFactory.getLogger(TemuCategoryService.class);
 
     private final ObjectMapper objectMapper;
     private final TemuOpenApiCredentialService temuOpenApiCredentialService;
@@ -72,16 +76,26 @@ public class TemuCategoryService {
     }
 
     public String getCategoryAttributesRaw(String leafCatId) {
+        return fetchCategoryAttributesRaw(leafCatId).raw();
+    }
+
+    public CategoryAttributesFetchResult fetchCategoryAttributesRaw(String leafCatId) {
         if (leafCatId == null || leafCatId.isBlank()) {
-            return null;
+            return new CategoryAttributesFetchResult(null, "leafCatId is blank");
         }
         try {
             TemuOpenApiCredentials creds = temuOpenApiCredentialService.getDefaultTemuOpenApiCredentialsOrThrow();
             CategoryApiClient client = new CategoryApiClient(creds);
-            return client.getCategoryAttributes(Integer.valueOf(leafCatId.trim()));
+            String raw = client.getCategoryAttributes(Integer.valueOf(leafCatId.trim()));
+            return new CategoryAttributesFetchResult(raw, null);
         } catch (Exception e) {
-            return null;
+            String error = StringUtils.hasText(e.getMessage()) ? e.getClass().getSimpleName() + ": " + e.getMessage() : e.getClass().getSimpleName();
+            log.warn("fetchCategoryAttributesRaw failed leafCatId={} error={}", leafCatId, error);
+            return new CategoryAttributesFetchResult(null, error);
         }
+    }
+
+    public record CategoryAttributesFetchResult(String raw, String errorMsg) {
     }
 
     public List<TemuCategoryDTO.ParentSpecOption> listParentSpecs() {

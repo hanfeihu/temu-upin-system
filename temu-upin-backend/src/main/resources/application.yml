@@ -79,6 +79,15 @@ ai:
     force-empty-pids: [1485, 2172]
     required-input-nonzero-pids: []
     required-input-nonzero-default: "1"
+
+  temu-title-optimizer:
+    enabled: ${TEMU_TITLE_OPTIMIZER_ENABLED:true}
+    base-url: ${TEMU_TITLE_AI_BASE_URL:${TEMU_ATTR_AI_BASE_URL:https://cliapi.tminos.com/v1}}
+    api-key: ${TEMU_TITLE_AI_API_KEY:${TEMU_ATTR_AI_API_KEY:1234}}
+    model: ${TEMU_TITLE_AI_MODEL:${TEMU_ATTR_AI_MODEL:gpt-5.2}}
+    timeout-ms: ${TEMU_TITLE_AI_TIMEOUT_MS:240000}
+    max-tokens: ${TEMU_TITLE_AI_MAX_TOKENS:1600}
+    max-attempts: ${TEMU_TITLE_AI_MAX_ATTEMPTS:3}
     
     default-settings:
       thumbnail:

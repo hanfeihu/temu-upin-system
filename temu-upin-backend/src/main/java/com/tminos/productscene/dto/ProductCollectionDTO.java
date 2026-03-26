@@ -113,6 +113,9 @@ public class ProductCollectionDTO {
         private String sourcePlatform;
         private String temuCatid;
         private String temuCatname;
+        private String temuOptimizedTitleEn;
+        private String temuOptimizedTitleZh;
+        private String temuCategoryKeywords;
 
         private String carouselThumbImages;
         private String carouselVideo;
@@ -180,6 +183,9 @@ public class ProductCollectionDTO {
             public ProductCollectionDetailResponseBuilder sourcePlatform(String v) { o.sourcePlatform = v; return this; }
             public ProductCollectionDetailResponseBuilder temuCatid(String v) { o.temuCatid = v; return this; }
             public ProductCollectionDetailResponseBuilder temuCatname(String v) { o.temuCatname = v; return this; }
+            public ProductCollectionDetailResponseBuilder temuOptimizedTitleEn(String v) { o.temuOptimizedTitleEn = v; return this; }
+            public ProductCollectionDetailResponseBuilder temuOptimizedTitleZh(String v) { o.temuOptimizedTitleZh = v; return this; }
+            public ProductCollectionDetailResponseBuilder temuCategoryKeywords(String v) { o.temuCategoryKeywords = v; return this; }
             public ProductCollectionDetailResponseBuilder carouselThumbImages(String v) { o.carouselThumbImages = v; return this; }
             public ProductCollectionDetailResponseBuilder carouselVideo(String v) { o.carouselVideo = v; return this; }
             public ProductCollectionDetailResponseBuilder baseFreight(BigDecimal v) { o.baseFreight = v; return this; }
@@ -259,6 +265,9 @@ public class ProductCollectionDTO {
         private String originalCategory;
         private String temuCatid;
         private String temuCatname;
+        private String temuOptimizedTitleEn;
+        private String temuOptimizedTitleZh;
+        private String temuCategoryKeywords;
 
         private String productMainImage;
         private String productUrl;
@@ -295,6 +304,26 @@ public class ProductCollectionDTO {
         private String originalHtml;
 
         private String temuAttributes;
+    }
+
+    @Getter
+    @Setter
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @Builder
+    public static class TemuTitleOptimizationResponse {
+        private Long spuId;
+        private String sourceTitle;
+        private String optimizedTitleEn;
+        private String optimizedTitleZh;
+        private String categoryKeywords;
+        private Integer attemptCount;
+        private String matchedKeyword;
+        private Boolean categoryMatched;
+        private String matchedTemuCatid;
+        private String matchedTemuCatname;
+        private String errorMsg;
+        private List<String> failedKeywords;
     }
 
     @Getter

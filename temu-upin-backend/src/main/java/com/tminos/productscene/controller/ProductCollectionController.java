@@ -5,6 +5,7 @@ import com.tminos.productscene.dto.ProductCollectionDTO.ProductCollectionRespons
 import com.tminos.productscene.dto.ProductCollectionDTO.ProductCollectionDetailResponse;
 import com.tminos.productscene.dto.ProductCollectionDTO.SplitProductRequest;
 import com.tminos.productscene.dto.ProductCollectionDTO.SplitProductResponse;
+import com.tminos.productscene.dto.ProductCollectionDTO.TemuTitleOptimizationResponse;
 import com.tminos.productscene.dto.ProductCollectionDTO.TemuPublishPayloadResponse;
 import com.tminos.productscene.dto.ProductCollectionDTO.UpdateProductCollectionRequest;
 import com.tminos.productscene.dto.ProductDTO.ApiResponse;
@@ -189,6 +190,11 @@ public class ProductCollectionController {
     @PostMapping("/{id}/temu-category/match")
     public ResponseEntity<ApiResponse<TemuCategoryDTO.MatchCategoryResponse>> matchTemuCategory(@PathVariable Long id) {
         return ResponseEntity.ok(ApiResponse.success(service.matchTemuCategory(id)));
+    }
+
+    @PostMapping("/{id}/temu-title-optimizer/generate")
+    public ResponseEntity<ApiResponse<TemuTitleOptimizationResponse>> generateTemuTitleOptimization(@PathVariable Long id) {
+        return ResponseEntity.ok(ApiResponse.success(service.generateTemuTitleOptimization(id)));
     }
 
     @PostMapping("/{id}/temu-category/attributes")

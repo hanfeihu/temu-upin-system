@@ -119,6 +119,15 @@ public class ProductCollection {
     private String temuCatname;
 
     @Column(columnDefinition = "TEXT")
+    private String temuOptimizedTitleEn;
+
+    @Column(columnDefinition = "TEXT")
+    private String temuOptimizedTitleZh;
+
+    @Column(columnDefinition = "TEXT")
+    private String temuCategoryKeywords;
+
+    @Column(columnDefinition = "TEXT")
     private String carouselThumbImages;
 
     @Column(length = 2000)

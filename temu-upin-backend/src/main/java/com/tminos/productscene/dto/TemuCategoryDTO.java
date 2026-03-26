@@ -27,6 +27,12 @@ public class TemuCategoryDTO {
         private String errorMsg;
         private List<CategoryPath> categoryPaths;
         private List<MatchOption> options;
+        private String generatedOptimizedTitleEn;
+        private String generatedOptimizedTitleZh;
+        private String generatedCategoryKeywords;
+        private String matchedKeyword;
+        private Integer attemptCount;
+        private List<String> failedKeywords;
     }
 
     @Getter
