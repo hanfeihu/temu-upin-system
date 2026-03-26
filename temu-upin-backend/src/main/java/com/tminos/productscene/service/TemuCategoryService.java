@@ -98,6 +98,16 @@ public class TemuCategoryService {
     public record CategoryAttributesFetchResult(String raw, String errorMsg) {
     }
 
+    public String getCategoryMandatoryRaw(long leafCatId) {
+        try {
+            TemuOpenApiCredentials creds = temuOpenApiCredentialService.getDefaultTemuOpenApiCredentialsOrThrow();
+            CategoryApiClient client = new CategoryApiClient(creds);
+            return client.getCategoryMandatory(leafCatId, null, null);
+        } catch (Exception e) {
+            throw new IllegalStateException("getCategoryMandatory failed: " + e.getMessage(), e);
+        }
+    }
+
     public List<TemuCategoryDTO.ParentSpecOption> listParentSpecs() {
         try {
             TemuOpenApiCredentials creds = temuOpenApiCredentialService.getDefaultTemuOpenApiCredentialsOrThrow();

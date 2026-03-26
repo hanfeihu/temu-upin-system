@@ -364,16 +364,21 @@ public class TemuImageTranslateService {
             pc.setCarouselImages(writeJson(newCarousel));
             pc.setDetailImages(writeJson(newDetail));
 
-            // Diagnostic: compare the detached entity's temuAttributes with the latest DB value
-            // before saving images. This helps detect lost updates when attributes were saved
-            // concurrently by another task.
+            // Before saving, reload latest from DB to avoid overwriting attributes updated concurrently by ATTR task.
+            // This prevents the lost-update scenario where ATTR saves attributes while IMG has a stale detached entity.
             try {
                 ProductCollection latest = productCollectionRepository.findById(spuId).orElse(null);
                 int latestLen = latest == null || latest.getTemuAttributes() == null ? 0 : latest.getTemuAttributes().length();
                 int detachedLen = pc.getTemuAttributes() == null ? 0 : pc.getTemuAttributes().length();
                 log.info("normalizeProductImagesToTemu800 spuId={} beforeSave latest.temuAttributesLen={} detached.temuAttributesLen={}", spuId, latestLen, detachedLen);
+                
+                // Merge: preserve the latest temuAttributes if it's newer
+                if (latest != null && latestLen > 0 && detachedLen == 0) {
+                    pc.setTemuAttributes(latest.getTemuAttributes());
+                    log.info("normalizeProductImagesToTemu800 spuId={} merged temuAttributes from latest to prevent overwrite", spuId);
+                }
             } catch (Exception ex) {
-                log.warn("normalizeProductImagesToTemu800 spuId={} beforeSave compare failed: {}", spuId, ex.getMessage());
+                log.warn("normalizeProductImagesToTemu800 spuId={} beforeSave merge failed: {}", spuId, ex.getMessage());
             }
 
             productCollectionRepository.save(pc);

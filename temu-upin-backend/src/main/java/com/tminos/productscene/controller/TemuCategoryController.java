@@ -8,6 +8,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/platform/temu")
@@ -27,5 +28,16 @@ public class TemuCategoryController {
     @GetMapping("/parent-specs")
     public ResponseEntity<ApiResponse<List<TemuCategoryDTO.ParentSpecOption>>> listParentSpecs() {
         return ResponseEntity.ok(ApiResponse.success(temuCategoryService.listParentSpecs()));
+    }
+
+    @GetMapping("/category-mandatory-raw")
+    public ResponseEntity<Object> getCategoryMandatoryRaw(@RequestParam long leafCatId) {
+        try {
+            String raw = temuCategoryService.getCategoryMandatoryRaw(leafCatId);
+            com.fasterxml.jackson.databind.ObjectMapper om = new com.fasterxml.jackson.databind.ObjectMapper();
+            return ResponseEntity.ok(om.readTree(raw));
+        } catch (Exception e) {
+            return ResponseEntity.ok(Map.of("error", e.getMessage()));
+        }
     }
 }

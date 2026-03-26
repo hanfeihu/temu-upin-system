@@ -1816,7 +1816,13 @@ public class TemuPublishService {
             }
             preview = firstNonBlank(preview, mainImage, fallbackThumb);
             skc.setPreviewImgUrls(StringUtils.hasText(preview) ? new ArrayList<>(List.of(preview)) : new ArrayList<>());
-            skc.setMainProductSkuSpecReqs(new ArrayList<>(List.of(emptyMainProductSkuSpecReq())));
+            // 单SKU时从SKU自身规格提取mainProductSkuSpecReqs，避免全零占位被TEMU拒绝
+            if (mergedSkuGroup.size() == 1) {
+                List<AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq> mainFromSku = buildMainGroupFromSku(mergedSkuGroup.get(0));
+                skc.setMainProductSkuSpecReqs(!mainFromSku.isEmpty() ? mainFromSku : new ArrayList<>(List.of(emptyMainProductSkuSpecReq())));
+            } else {
+                skc.setMainProductSkuSpecReqs(new ArrayList<>(List.of(emptyMainProductSkuSpecReq())));
+            }
             skc.setProductSkuReqs(mergedSkuGroup);
             return new ArrayList<>(List.of(skc));
         }
