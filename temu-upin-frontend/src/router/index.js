@@ -62,19 +62,9 @@ const routes = [
     component: () => import('@/views/PlatformTemuShops.vue')
   },
   {
-    path: '/platform/spec-mappings/profiles',
-    name: 'PlatformSpecMappingProfiles',
-    component: () => import('@/views/PlatformSpecMappingProfiles.vue')
-  },
-  {
     path: '/platform/spec-mappings/parent-spec-mappings',
     name: 'PlatformParentSpecMappings',
     component: () => import('@/views/PlatformParentSpecMappings.vue')
-  },
-  {
-    path: '/platform/spec-mappings/workbench/:spuId',
-    name: 'PlatformSpecMappingWorkbench',
-    component: () => import('@/views/PlatformSpecMappingWorkbench.vue')
   },
   {
     path: '/platform/biz-logs',
