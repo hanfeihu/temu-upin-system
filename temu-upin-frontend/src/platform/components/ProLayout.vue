@@ -113,13 +113,6 @@
               TEMU 店铺管理
             </a-menu-item>
 
-            <a-menu-item key="/platform/spec-mappings/profiles">
-              <template #icon>
-                <setting-outlined />
-              </template>
-              1688 与 TEMU 规格映射
-            </a-menu-item>
-
             <a-menu-item key="/platform/spec-mappings/parent-spec-mappings">
               <template #icon>
                 <setting-outlined />
@@ -217,7 +210,6 @@ const selectedKeys = computed(() => {
   if (p.startsWith('/platform/temu-apps')) return ['/platform/temu-apps']
   if (p.startsWith('/platform/temu-shops')) return ['/platform/temu-shops']
   if (p.startsWith('/platform/spec-mappings/parent-spec-mappings')) return ['/platform/spec-mappings/parent-spec-mappings']
-  if (p.startsWith('/platform/spec-mappings')) return ['/platform/spec-mappings/profiles']
   if (p.startsWith('/platform/ocr-tasks')) return ['/platform/ocr-tasks']
   if (p.startsWith('/platform/ocr-filter-words')) return ['/platform/ocr-filter-words']
   if (p.startsWith('/platform/title-filter-words')) return ['/platform/title-filter-words']
