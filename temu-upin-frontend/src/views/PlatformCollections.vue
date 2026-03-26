@@ -317,7 +317,7 @@
                       allow-clear
                       :placeholder="(p.__rule && (p.__rule.fillMode === 'FORCE_EMPTY' || p.__rule.fillMode === 'FIXED_VALUE'))
                         ? '已锁定'
-                        : (isChildAttr(p) && !childAllowedInfo(p).hasParentSelected ? (childAllowedInfo(p).parentHint || '请先选择父属性') : '请选择')"
+                        : (isConditionalAttr(p) && !attrApplicabilityInfo(p).isActive ? (attrApplicabilityInfo(p).parentHint || '请先选择父属性') : '请选择')"
                       style="width: 100%"
                       :disabled="p.__rule && (p.__rule.fillMode === 'FORCE_EMPTY' || p.__rule.fillMode === 'FIXED_VALUE')"
                       @change="onTemuAttrChanged"
@@ -896,11 +896,18 @@ const isChildAttr = (p) => {
   return Array.isArray(p?.templatePropertyValueParentList) && p.templatePropertyValueParentList.length > 0
 }
 
+const hasShowCondition = (p) => {
+  return Array.isArray(p?.showCondition) && p.showCondition.length > 0
+}
+
+const isConditionalAttr = (p) => {
+  return isChildAttr(p) || hasShowCondition(p)
+}
+
 const shouldShowTemuAttrItem = (p) => {
   if (!p) return false
-  if (!isChildAttr(p)) return true
-  // Child attributes should only appear after a valid parent selection exists.
-  return childAllowedInfo(p).hasParentSelected
+  if (!isConditionalAttr(p)) return true
+  return attrApplicabilityInfo(p).isActive
 }
 
 const collectSelectedVids = () => {
@@ -923,80 +930,145 @@ const findParentPropOfChild = (child) => {
   return (temuAttrGroups.value || []).find(x => String(x?.templatePid ?? '') === String(tp)) || null
 }
 
-const childAllowedInfo = (child) => {
-  const all = (child?.values || []).map(v => ({ value: String(v.vid), label: v.value }))
-  if (!isChildAttr(child)) {
-    return { allowed: all, hasParentSelected: true, parentHint: '' }
-  }
-
-  const selectedParents = collectSelectedVids()
-  const allowed = new Set()
-  let hasParentSelected = false
-  for (const rule of (child.templatePropertyValueParentList || [])) {
-    const parents = Array.isArray(rule?.parentVidList) ? rule.parentVidList : []
-    const vids = Array.isArray(rule?.vidList) ? rule.vidList : []
-    for (const pv of parents) {
-      if (selectedParents.has(String(pv))) {
-        hasParentSelected = true
-        for (const cv of vids) allowed.add(String(cv))
-      }
-    }
-  }
-
-  // When no parent selection, do not allow picking child values.
-  let hint = ''
-  if (!hasParentSelected) {
-    const parentProp = findParentPropOfChild(child)
-    if (parentProp?.values?.length) {
-      const parentEnableVids = new Set()
-      for (const rule of (child.templatePropertyValueParentList || [])) {
-        const parents = Array.isArray(rule?.parentVidList) ? rule.parentVidList : []
-        for (const pv of parents) parentEnableVids.add(String(pv))
-      }
-      const labels = (parentProp.values || [])
-        .filter(v => parentEnableVids.has(String(v.vid)))
-        .map(v => v.value)
-        .filter(Boolean)
-      hint = `请先选择父属性：${parentProp.name || '父属性'}${labels.length ? `（可选：${labels.slice(0, 6).join(' / ')}${labels.length > 6 ? ' ...' : ''}）` : ''}`
-    } else {
-      hint = '请先选择父属性后再填写此项'
-    }
-  }
-
-  const allowedList = hasParentSelected ? all.filter(o => allowed.has(String(o.value))) : []
-  return { allowed: allowedList, hasParentSelected, parentHint: hint }
+const findParentPropByRefPid = (refPid) => {
+  if (refPid == null || refPid === '') return null
+  return (temuAttrGroups.value || []).find(x => String(x?.refPid ?? '') === String(refPid)) || null
 }
 
-const cleanupInvalidChildSelections = () => {
-  const selectedParents = collectSelectedVids()
-  for (const p of (temuAttrGroups.value || [])) {
-    if (!isChildAttr(p)) continue
-    const key = attrKey(p)
-    const rawSel = temuAttrValues[key]
-    if (rawSel === undefined || rawSel === null) continue
+const collectSelectedVidsByRefPid = () => {
+  const selectedByRefPid = new Map()
+  for (const g of (temuAttrGroups.value || [])) {
+    const refPid = g?.refPid
+    if (refPid == null || refPid === '') continue
+    const raw = temuAttrValues[attrKey(g)]
+    const arr = Array.isArray(raw) ? raw : (raw ? [raw] : [])
+    for (const value of arr) {
+      if (value === undefined || value === null) continue
+      const text = String(value).trim()
+      if (!text) continue
+      const key = String(refPid)
+      if (!selectedByRefPid.has(key)) selectedByRefPid.set(key, new Set())
+      selectedByRefPid.get(key).add(text)
+    }
+  }
+  return selectedByRefPid
+}
 
-    const allowed = new Set()
+const buildShowConditionHint = (conditions) => {
+  for (const cond of (conditions || [])) {
+    const parentProp = findParentPropByRefPid(cond?.parentRefPid)
+    const expectVids = new Set((Array.isArray(cond?.parentVids) ? cond.parentVids : []).map(v => String(v)))
+    if (parentProp?.values?.length) {
+      const labels = (parentProp.values || [])
+        .filter(v => expectVids.has(String(v.vid)))
+        .map(v => v.value)
+        .filter(Boolean)
+      return `请先选择父属性：${parentProp.name || '父属性'}${labels.length ? `（可选：${labels.slice(0, 6).join(' / ')}${labels.length > 6 ? ' ...' : ''}）` : ''}`
+    }
+  }
+  return '请先选择父属性后再填写此项'
+}
+
+const attrApplicabilityInfo = (attr) => {
+  const all = (attr?.values || []).map(v => ({ value: String(v.vid), label: v.value }))
+  let allowed = all
+  let parentHint = ''
+  let parentRuleActive = true
+
+  if (isChildAttr(attr)) {
+    const selectedParents = collectSelectedVids()
+    const allowedSet = new Set()
     let hasParentSelected = false
-    for (const rule of (p.templatePropertyValueParentList || [])) {
+    for (const rule of (attr.templatePropertyValueParentList || [])) {
       const parents = Array.isArray(rule?.parentVidList) ? rule.parentVidList : []
       const vids = Array.isArray(rule?.vidList) ? rule.vidList : []
       for (const pv of parents) {
         if (selectedParents.has(String(pv))) {
           hasParentSelected = true
-          for (const cv of vids) allowed.add(String(cv))
+          for (const cv of vids) allowedSet.add(String(cv))
         }
       }
     }
-
+    parentRuleActive = hasParentSelected
+    allowed = hasParentSelected ? all.filter(o => allowedSet.has(String(o.value))) : []
     if (!hasParentSelected) {
+      const parentProp = findParentPropOfChild(attr)
+      if (parentProp?.values?.length) {
+        const parentEnableVids = new Set()
+        for (const rule of (attr.templatePropertyValueParentList || [])) {
+          const parents = Array.isArray(rule?.parentVidList) ? rule.parentVidList : []
+          for (const pv of parents) parentEnableVids.add(String(pv))
+        }
+        const labels = (parentProp.values || [])
+          .filter(v => parentEnableVids.has(String(v.vid)))
+          .map(v => v.value)
+          .filter(Boolean)
+        parentHint = `请先选择父属性：${parentProp.name || '父属性'}${labels.length ? `（可选：${labels.slice(0, 6).join(' / ')}${labels.length > 6 ? ' ...' : ''}）` : ''}`
+      } else {
+        parentHint = '请先选择父属性后再填写此项'
+      }
+    }
+  }
+
+  let showConditionActive = true
+  if (hasShowCondition(attr)) {
+    const selectedByRefPid = collectSelectedVidsByRefPid()
+    for (const cond of (attr.showCondition || [])) {
+      const refPid = String(cond?.parentRefPid ?? '')
+      const expectVids = new Set((Array.isArray(cond?.parentVids) ? cond.parentVids : []).map(v => String(v)))
+      const selected = selectedByRefPid.get(refPid) || new Set()
+      let matched = false
+      for (const vid of selected) {
+        if (expectVids.has(String(vid))) {
+          matched = true
+          break
+        }
+      }
+      if (!matched) {
+        showConditionActive = false
+        if (!parentHint) {
+          parentHint = buildShowConditionHint(attr.showCondition)
+        }
+        break
+      }
+    }
+  }
+
+  return {
+    allowed,
+    isActive: parentRuleActive && showConditionActive,
+    parentHint
+  }
+}
+
+const childAllowedInfo = (child) => {
+  const info = attrApplicabilityInfo(child)
+  return { allowed: info.allowed, hasParentSelected: info.isActive, parentHint: info.parentHint }
+}
+
+const cleanupInvalidChildSelections = () => {
+  for (const p of (temuAttrGroups.value || [])) {
+    if (!isConditionalAttr(p)) continue
+    const key = attrKey(p)
+    const rawSel = temuAttrValues[key]
+    if (rawSel === undefined || rawSel === null) continue
+
+    const info = attrApplicabilityInfo(p)
+    if (!info.isActive) {
       delete temuAttrValues[key]
+      delete temuAttrNumberValues[key]
       continue
     }
+
+    if (!isChildAttr(p)) continue
+
+    const allowed = new Set((info.allowed || []).map(o => String(o.value)))
 
     const arr = Array.isArray(rawSel) ? rawSel.map(x => String(x)) : [String(rawSel)]
     const filtered = arr.filter(v => allowed.has(String(v)))
     if (!filtered.length) {
       delete temuAttrValues[key]
+      delete temuAttrNumberValues[key]
       continue
     }
     temuAttrValues[key] = filtered.length > 1 ? filtered : filtered[0]
@@ -1296,9 +1368,7 @@ const saveTemuAttributes = async () => {
   // validate required
   for (const p of temuAttrGroups.value) {
     if (!p?.required) continue
-    // Conditional required: if this is a child attribute but no matching parent is selected,
-    // the attribute is not applicable and should not block save.
-    if (isChildAttr(p) && !childAllowedInfo(p).hasParentSelected) continue
+    if (isConditionalAttr(p) && !attrApplicabilityInfo(p).isActive) continue
     if (isSkipByRule(p)) continue
     if (isForceEmptyByRule(p)) continue
     const v = temuAttrValues[attrKey(p)]
@@ -1358,6 +1428,10 @@ const saveTemuAttributes = async () => {
       effectiveSel = String(p.__rule?.fixedValue || '')
     }
     let effectiveNumber = temuAttrNumberValues[attrKey(p)]
+
+    if (isConditionalAttr(p) && !attrApplicabilityInfo(p).isActive) {
+      continue
+    }
 
     const isEmpty =
       effectiveSel === undefined ||

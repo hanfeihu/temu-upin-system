@@ -524,19 +524,28 @@ public class PostImportAutomationService {
         @SuppressWarnings("unchecked")
         List<Integer> missing = aiResp.get("missingRequiredPids") instanceof List<?> l2 ? (List<Integer>) l2 : Collections.emptyList();
 
+        filled = pruneInapplicableFilledProps(filled, templateByPid);
+
         // Build helper sets for parent-child applicability checks.
         // Some required attributes are only applicable when their parent vids are selected.
         // The frontend modal uses the same rule: child required should not block save
         // when no matching parent selection exists.
         Set<String> selectedVidsAll = new LinkedHashSet<>();
+        Map<Integer, Set<String>> selectedVidsByRefPid = new LinkedHashMap<>();
         for (Map<String, Object> p : filled) {
             if (p == null) continue;
+            JsonNode tpl = resolveTemplateNode(p, templateByPid);
             Object sv = p.get("selectedVids");
             if (!(sv instanceof List<?> list)) continue;
+            Integer refPid = tpl == null ? null : toInt(tpl.path("refPid").asText(""));
             for (Object o : list) {
                 if (o == null) continue;
                 String s = String.valueOf(o).trim();
-                if (StringUtils.hasText(s)) selectedVidsAll.add(s);
+                if (!StringUtils.hasText(s)) continue;
+                selectedVidsAll.add(s);
+                if (refPid != null && refPid > 0) {
+                    selectedVidsByRefPid.computeIfAbsent(refPid, ignored -> new LinkedHashSet<>()).add(s);
+                }
             }
         }
 
@@ -571,27 +580,8 @@ public class PostImportAutomationService {
             // parent vid is selected, then this required attribute is not applicable.
             // Do not fail automation for such pids.
             JsonNode tpl = templateByPid.get(m);
-            if (tpl != null) {
-                JsonNode parents = tpl.get("templatePropertyValueParentList");
-                if (parents != null && parents.isArray() && parents.size() > 0) {
-                    boolean hasParentSelected = false;
-                    for (JsonNode r : parents) {
-                        JsonNode parentVidList = r == null ? null : r.get("parentVidList");
-                        if (parentVidList == null || !parentVidList.isArray()) continue;
-                        for (JsonNode pv : parentVidList) {
-                            if (pv == null || pv.isNull()) continue;
-                            String s = pv.isTextual() ? pv.asText("") : String.valueOf(pv.asInt(0));
-                            if (StringUtils.hasText(s) && selectedVidsAll.contains(s.trim())) {
-                                hasParentSelected = true;
-                                break;
-                            }
-                        }
-                        if (hasParentSelected) break;
-                    }
-                    if (!hasParentSelected) {
-                        continue;
-                    }
-                }
+            if (tpl != null && !isTemplateApplicable(tpl, selectedVidsAll, selectedVidsByRefPid)) {
+                continue;
             }
             effectiveMissing.add(m);
         }
@@ -612,6 +602,7 @@ public class PostImportAutomationService {
 
             JsonNode tpl = templateByPid.get(pid);
             if (tpl == null) continue;
+            if (!isTemplateApplicable(tpl, selectedVidsAll, selectedVidsByRefPid)) continue;
 
             Map<String, Object> one = new LinkedHashMap<>();
             one.put("pid", pid);
@@ -685,6 +676,112 @@ public class PostImportAutomationService {
         } catch (Exception ignored) {
             return null;
         }
+    }
+
+    private List<Map<String, Object>> pruneInapplicableFilledProps(List<Map<String, Object>> filled,
+                                                                   Map<Integer, JsonNode> templateByPid) {
+        if (filled == null || filled.isEmpty()) {
+            return Collections.emptyList();
+        }
+        List<Map<String, Object>> current = new ArrayList<>(filled);
+        for (int i = 0; i < 5; i++) {
+            Set<String> selectedVidsAll = new LinkedHashSet<>();
+            Map<Integer, Set<String>> selectedVidsByRefPid = new LinkedHashMap<>();
+            for (Map<String, Object> p : current) {
+                if (p == null || !hasAnySelection(p)) continue;
+                JsonNode tpl = resolveTemplateNode(p, templateByPid);
+                Object sv = p.get("selectedVids");
+                if (!(sv instanceof List<?> list)) continue;
+                Integer refPid = tpl == null ? null : toInt(tpl.path("refPid").asText(""));
+                for (Object o : list) {
+                    if (o == null) continue;
+                    String s = String.valueOf(o).trim();
+                    if (!StringUtils.hasText(s)) continue;
+                    selectedVidsAll.add(s);
+                    if (refPid != null && refPid > 0) {
+                        selectedVidsByRefPid.computeIfAbsent(refPid, ignored -> new LinkedHashSet<>()).add(s);
+                    }
+                }
+            }
+
+            List<Map<String, Object>> next = new ArrayList<>();
+            boolean changed = false;
+            for (Map<String, Object> p : current) {
+                if (p == null) continue;
+                JsonNode tpl = resolveTemplateNode(p, templateByPid);
+                if (tpl != null && hasAnySelection(p) && !isTemplateApplicable(tpl, selectedVidsAll, selectedVidsByRefPid)) {
+                    changed = true;
+                    continue;
+                }
+                next.add(p);
+            }
+            current = next;
+            if (!changed) {
+                break;
+            }
+        }
+        return current;
+    }
+
+    private JsonNode resolveTemplateNode(Map<String, Object> property,
+                                         Map<Integer, JsonNode> templateByPid) {
+        if (property == null) return null;
+        Integer pid = toInt(property.get("pid"));
+        if (pid == null || pid <= 0) return null;
+        return templateByPid.get(pid);
+    }
+
+    private boolean isTemplateApplicable(JsonNode tpl,
+                                         Set<String> selectedVidsAll,
+                                         Map<Integer, Set<String>> selectedVidsByRefPid) {
+        if (tpl == null || tpl.isNull()) {
+            return true;
+        }
+        JsonNode parents = tpl.get("templatePropertyValueParentList");
+        if (parents != null && parents.isArray() && parents.size() > 0) {
+            boolean hasParentSelected = false;
+            for (JsonNode rule : parents) {
+                JsonNode parentVidList = rule == null ? null : rule.get("parentVidList");
+                if (parentVidList == null || !parentVidList.isArray()) continue;
+                for (JsonNode pv : parentVidList) {
+                    if (pv == null || pv.isNull()) continue;
+                    String s = pv.isTextual() ? pv.asText("") : String.valueOf(pv.asInt(0));
+                    if (StringUtils.hasText(s) && selectedVidsAll.contains(s.trim())) {
+                        hasParentSelected = true;
+                        break;
+                    }
+                }
+                if (hasParentSelected) break;
+            }
+            if (!hasParentSelected) {
+                return false;
+            }
+        }
+
+        JsonNode showConditions = tpl.get("showCondition");
+        if (showConditions != null && showConditions.isArray() && showConditions.size() > 0) {
+            for (JsonNode cond : showConditions) {
+                if (cond == null || cond.isNull()) continue;
+                Integer parentRefPid = toInt(cond.path("parentRefPid").asText(""));
+                Set<String> selected = parentRefPid == null ? Collections.emptySet() : selectedVidsByRefPid.getOrDefault(parentRefPid, Collections.emptySet());
+                JsonNode parentVids = cond.get("parentVids");
+                boolean matched = false;
+                if (parentVids != null && parentVids.isArray()) {
+                    for (JsonNode pv : parentVids) {
+                        if (pv == null || pv.isNull()) continue;
+                        String s = pv.isTextual() ? pv.asText("") : String.valueOf(pv.asInt(0));
+                        if (StringUtils.hasText(s) && selected.contains(s.trim())) {
+                            matched = true;
+                            break;
+                        }
+                    }
+                }
+                if (!matched) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     private boolean hasAnySelection(Map<String, Object> p) {

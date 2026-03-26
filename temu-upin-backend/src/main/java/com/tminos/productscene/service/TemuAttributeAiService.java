@@ -124,6 +124,23 @@ public class TemuAttributeAiService {
                     }
                     one.put("parentRules", pr);
                 }
+
+                List<ShowConditionRule> showConditions = new ArrayList<>();
+                JsonNode showConditionNode = p.get("showCondition");
+                if (showConditionNode != null && showConditionNode.isArray()) {
+                    List<Map<String, Object>> sc = new ArrayList<>();
+                    for (JsonNode condition : showConditionNode) {
+                        Integer parentRefPid = condition != null && condition.hasNonNull("parentRefPid") ? condition.get("parentRefPid").asInt() : null;
+                        List<Integer> parentVids = readIntList(condition == null ? null : condition.get("parentVids"), 20);
+                        if (parentRefPid != null && parentRefPid > 0 && !parentVids.isEmpty()) {
+                            showConditions.add(new ShowConditionRule(parentRefPid, parentVids));
+                            sc.add(Map.of("parentRefPid", parentRefPid, "parentVids", parentVids));
+                        }
+                    }
+                    if (!sc.isEmpty()) {
+                        one.put("showConditions", sc);
+                    }
+                }
                 templateSimplified.add(one);
 
                 if (templatePid != null && templatePid > 0) {
@@ -132,7 +149,9 @@ public class TemuAttributeAiService {
                     info.pid = pid == null ? 0 : pid;
                     info.name = text(p, "name");
                     info.required = p.path("required").asBoolean(false);
+                    info.refPid = refPid;
                     info.parentRules = parentRules;
+                    info.showConditions = showConditions;
                     info.valueVids = new ArrayList<>();
                     if (vals != null && vals.isArray()) {
                         for (JsonNode v : vals) {
@@ -249,11 +268,13 @@ public class TemuAttributeAiService {
 
             // Post-process: enforce parent-child constraints to avoid TEMU validation errors.
             enforceParentChildConstraints(filled, parentRulesByTemplatePid, warnings);
+            enforceShowConditionConstraints(filled, templateByTemplatePid, warnings);
 
             // After enforcing constraints, required children may have been removed. Backfill again (best-effort)
             // by selecting an appropriate parent and then a valid child value.
             ensureRequiredAttributesFilled(filled, templateByTemplatePid, vidToOwnerTemplatePid, warnings);
             enforceParentChildConstraints(filled, parentRulesByTemplatePid, warnings);
+            enforceShowConditionConstraints(filled, templateByTemplatePid, warnings);
 
             // Final trim: keep required attributes + any selected parent attributes required to satisfy
             // required child constraints. This is critical because a child can be required while its parent
@@ -411,6 +432,7 @@ public class TemuAttributeAiService {
 
         // Applicability depends on selected parent vids.
         Set<Integer> selectedVids = collectSelectedVids(filled);
+        Map<Integer, Set<Integer>> selectedVidsByRefPid = collectSelectedVidsByRefPid(filled, templateByTemplatePid);
 
         Map<Integer, Map<String, Object>> filledByTp = new LinkedHashMap<>();
         if (filled != null) {
@@ -425,7 +447,7 @@ public class TemuAttributeAiService {
             if (info == null || !info.required) continue;
 
             // Required children are only required when applicable under selected parents.
-            if (!isApplicableByParentRules(info, selectedVids)) {
+            if (!isApplicable(info, selectedVids, selectedVidsByRefPid)) {
                 continue;
             }
 
@@ -437,19 +459,40 @@ public class TemuAttributeAiService {
         return out;
     }
 
-    private boolean isApplicableByParentRules(TemplatePropInfo info, Set<Integer> selectedVids) {
+    private boolean isApplicable(TemplatePropInfo info,
+                                 Set<Integer> selectedVids,
+                                 Map<Integer, Set<Integer>> selectedVidsByRefPid) {
         if (info == null) return true;
-        if (info.parentRules == null || info.parentRules.isEmpty()) return true;
-        if (selectedVids == null || selectedVids.isEmpty()) return false;
-        for (ParentRule r : info.parentRules) {
-            if (r == null || r.parentVidList == null || r.parentVidList.isEmpty()) continue;
-            for (Integer pv : r.parentVidList) {
-                if (pv != null && selectedVids.contains(pv)) {
-                    return true;
+        if (info.parentRules != null && !info.parentRules.isEmpty()) {
+            if (selectedVids == null || selectedVids.isEmpty()) return false;
+            boolean parentMatched = false;
+            for (ParentRule r : info.parentRules) {
+                if (r == null || r.parentVidList == null || r.parentVidList.isEmpty()) continue;
+                for (Integer pv : r.parentVidList) {
+                    if (pv != null && selectedVids.contains(pv)) {
+                        parentMatched = true;
+                        break;
+                    }
                 }
+                if (parentMatched) break;
+            }
+            if (!parentMatched) return false;
+        }
+        if (info.showConditions != null && !info.showConditions.isEmpty()) {
+            for (ShowConditionRule condition : info.showConditions) {
+                if (condition == null || condition.parentRefPid == null || condition.parentVids == null || condition.parentVids.isEmpty()) continue;
+                Set<Integer> selected = selectedVidsByRefPid == null ? Collections.emptySet() : selectedVidsByRefPid.getOrDefault(condition.parentRefPid, Collections.emptySet());
+                boolean matched = false;
+                for (Integer pv : condition.parentVids) {
+                    if (pv != null && selected.contains(pv)) {
+                        matched = true;
+                        break;
+                    }
+                }
+                if (!matched) return false;
             }
         }
-        return false;
+        return true;
     }
 
     private boolean isZeroNumber(String s) {
@@ -490,11 +533,56 @@ public class TemuAttributeAiService {
                 "If a brand-related attribute is REQUIRED, do NOT fill it; add its pid to missingRequiredPids and add a warning (all products are no-brand).",
                 "POWER RULE (strict default): Most products are NOT powered. Unless product data clearly indicates an electrical product (keywords like USB/充电/电池/插电/电动/电压/V/W/LED/灯/风扇/加热/温度/电器/智能), you MUST choose non-powered options for power/battery related attributes when such options exist (e.g. choose '无需接电使用', '不带电池', '无需电池'). Avoid selecting any parent option that would make voltage/plug/battery-chemistry child attributes applicable.",
                 "PARENT-CHILD RULE: Some attributes have parentRules. If you fill a child attribute, you MUST only choose a vid that is allowed by at least one parentRule given the parent vids you selected elsewhere. If parent isn't selected/known, leave the child empty.",
+                "SHOW-CONDITION RULE: Some attributes have showConditions with parentRefPid and parentVids. You MUST fill these attributes only when all referenced parent attributes already select one of the required vids. Otherwise leave them empty and do not include them in missingRequiredPids.",
                 "APPLICABILITY RULE: If a child attribute is required but it is NOT applicable under the selected parent options (no matching parent vid selected), then you should NOT fill it and should NOT list it in missingRequiredPids.",
                 "When an attribute has predefined values (vid/value), pick ONLY from those values and return selectedVids.",
                 "For free-text attributes (no values), return freeText in English.",
                 "Output schema:",
                 "{\"properties\":[{\"templatePid\":<int|null>,\"pid\":<int>,\"selectedVids\":[<string>...],\"freeText\":<string|null>}],\"missingRequiredPids\":[<int>...],\"warnings\":[<string>...]}");
+    }
+
+    private void enforceShowConditionConstraints(List<Map<String, Object>> filled,
+                                                 Map<Integer, TemplatePropInfo> templateByTemplatePid,
+                                                 List<String> warnings) {
+        if (filled == null || filled.isEmpty()) return;
+        if (templateByTemplatePid == null || templateByTemplatePid.isEmpty()) return;
+
+        Map<Integer, Set<Integer>> selectedVidsByRefPid = collectSelectedVidsByRefPid(filled, templateByTemplatePid);
+        List<Map<String, Object>> kept = new ArrayList<>();
+        for (Map<String, Object> p : filled) {
+            if (p == null) continue;
+            Integer templatePid = toInt(p.get("templatePid"));
+            TemplatePropInfo info = templatePid == null ? null : templateByTemplatePid.get(templatePid);
+            if (info == null || info.showConditions == null || info.showConditions.isEmpty() || !hasAnySelection(p)) {
+                kept.add(p);
+                continue;
+            }
+
+            boolean applicable = true;
+            for (ShowConditionRule condition : info.showConditions) {
+                if (condition == null || condition.parentRefPid == null || condition.parentVids == null || condition.parentVids.isEmpty()) continue;
+                Set<Integer> selected = selectedVidsByRefPid.getOrDefault(condition.parentRefPid, Collections.emptySet());
+                boolean matched = false;
+                for (Integer vid : condition.parentVids) {
+                    if (vid != null && selected.contains(vid)) {
+                        matched = true;
+                        break;
+                    }
+                }
+                if (!matched) {
+                    applicable = false;
+                    break;
+                }
+            }
+
+            if (!applicable) {
+                warnings.add("AI removed attr by showCondition: templatePid=" + templatePid);
+                continue;
+            }
+            kept.add(p);
+        }
+        filled.clear();
+        filled.addAll(kept);
     }
 
     private void enforceParentChildConstraints(List<Map<String, Object>> filled,
@@ -631,6 +719,7 @@ public class TemuAttributeAiService {
 
         // Collect selected vids for parent inference
         Set<Integer> selectedVids = collectSelectedVids(filled);
+        Map<Integer, Set<Integer>> selectedVidsByRefPid = collectSelectedVidsByRefPid(filled, templateByTemplatePid);
 
         // Iterate a few times to resolve chains (e.g. 2231 depends on 2230 depends on material)
         for (int iter = 0; iter < 3; iter++) {
@@ -644,7 +733,7 @@ public class TemuAttributeAiService {
 
                 // Required children should NOT force-select a parent when parent isn't selected.
                 // If no matching parent is currently selected, treat it as non-applicable.
-                if (!isApplicableByParentRules(info, selectedVids)) {
+                if (!isApplicable(info, selectedVids, selectedVidsByRefPid)) {
                     continue;
                 }
 
@@ -680,6 +769,9 @@ public class TemuAttributeAiService {
                 m.put("selectedVids", List.of(String.valueOf(chosenVid)));
                 m.put("freeText", null);
                 selectedVids.add(chosenVid);
+                if (info.refPid != null && info.refPid > 0) {
+                    selectedVidsByRefPid.computeIfAbsent(info.refPid, ignored -> new LinkedHashSet<>()).add(chosenVid);
+                }
                 changed = true;
             }
             if (!changed) break;
@@ -757,6 +849,29 @@ public class TemuAttributeAiService {
         return out;
     }
 
+    private Map<Integer, Set<Integer>> collectSelectedVidsByRefPid(List<Map<String, Object>> filled,
+                                                                   Map<Integer, TemplatePropInfo> templateByTemplatePid) {
+        Map<Integer, Set<Integer>> out = new LinkedHashMap<>();
+        if (filled == null || filled.isEmpty()) return out;
+        for (Map<String, Object> p : filled) {
+            if (p == null) continue;
+            Integer templatePid = toInt(p.get("templatePid"));
+            TemplatePropInfo info = templatePid == null ? null : templateByTemplatePid.get(templatePid);
+            Integer refPid = info == null ? null : info.refPid;
+            if (refPid == null || refPid <= 0) continue;
+            Object sv = p.get("selectedVids");
+            if (!(sv instanceof List<?> list)) continue;
+            for (Object o : list) {
+                try {
+                    if (o == null) continue;
+                    out.computeIfAbsent(refPid, ignored -> new LinkedHashSet<>()).add(Integer.parseInt(String.valueOf(o).trim()));
+                } catch (Exception ignored) {
+                }
+            }
+        }
+        return out;
+    }
+
     private Integer toInt(Object o) {
         try {
             if (o == null) return null;
@@ -771,10 +886,12 @@ public class TemuAttributeAiService {
     private static class TemplatePropInfo {
         Integer templatePid;
         int pid;
+        Integer refPid;
         String name;
         boolean required;
         List<Integer> valueVids;
         List<ParentRule> parentRules;
+        List<ShowConditionRule> showConditions;
     }
 
     private static class ParentRule {
@@ -784,6 +901,16 @@ public class TemuAttributeAiService {
         ParentRule(List<Integer> parentVidList, List<Integer> vidList) {
             this.parentVidList = parentVidList;
             this.vidList = vidList;
+        }
+    }
+
+    private static class ShowConditionRule {
+        final Integer parentRefPid;
+        final List<Integer> parentVids;
+
+        ShowConditionRule(Integer parentRefPid, List<Integer> parentVids) {
+            this.parentRefPid = parentRefPid;
+            this.parentVids = parentVids;
         }
     }
 
@@ -810,7 +937,7 @@ public class TemuAttributeAiService {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("product", productCtx);
         payload.put("template", templateSimplified);
-        return "Fill TEMU category attributes based on product data and template.\n\nINPUT_JSON=\n" +
+        return "Fill TEMU category attributes based on product data and template. Pay attention to parentRules and showConditions, and only fill attributes that are currently applicable.\n\nINPUT_JSON=\n" +
                 objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(payload);
     }
 

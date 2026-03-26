@@ -16,7 +16,16 @@ public class ThreadPoolConfig {
      */
     private Integer workers = 2;
 
+    /**
+     * Dedicated threads for batch image translation tasks.
+     */
+    private Integer imageTranslateWorkers = 10;
+
     public Integer getWorkers() {
         return workers;
+    }
+
+    public Integer getImageTranslateWorkers() {
+        return imageTranslateWorkers;
     }
 }

@@ -71,6 +71,13 @@
              业务日志
            </a-menu-item>
 
+           <a-menu-item key="/platform/image-translate-records">
+             <template #icon>
+               <file-text-outlined />
+             </template>
+             翻译记录
+           </a-menu-item>
+
            <a-menu-item key="/platform/temu-attr-rules">
               <template #icon>
                 <setting-outlined />
@@ -203,6 +210,7 @@ const selectedKeys = computed(() => {
   if (p.startsWith('/platform/temu-auto-publish-logs')) return ['/platform/temu-auto-publish-logs']
   if (p.startsWith('/platform/post-import-logs')) return ['/platform/post-import-logs']
   if (p.startsWith('/platform/biz-logs')) return ['/platform/biz-logs']
+  if (p.startsWith('/platform/image-translate-records')) return ['/platform/image-translate-records']
   if (p.startsWith('/platform/temu-attr-rules')) return ['/platform/temu-attr-rules']
   if (p.startsWith('/platform/temu-attr-ai-fill')) return ['/platform/temu-attr-ai-fill']
   if (p.startsWith('/platform/temu-title-optimizer')) return ['/platform/temu-title-optimizer']

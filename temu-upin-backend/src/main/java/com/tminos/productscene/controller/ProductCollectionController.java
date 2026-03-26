@@ -14,6 +14,7 @@ import com.tminos.productscene.dto.TemuImageDTO;
 import com.tminos.productscene.dto.TemuCategoryDTO;
 import com.tminos.productscene.dto.TemuSkuDTO;
 import com.tminos.productscene.entity.ProductCollection;
+import com.tminos.productscene.service.BatchImageTranslateService;
 import com.tminos.productscene.service.ProductCollectionService;
 import com.tminos.productscene.service.PostImportAutomationService;
 import com.tminos.productscene.service.AliyunImageTranslateService;
@@ -38,6 +39,7 @@ public class ProductCollectionController {
     private final PostImportAutomationService postImportAutomationService;
     private final TemuImageTranslateService temuImageTranslateService;
     private final AliyunImageTranslateService aliyunImageTranslateService;
+    private final BatchImageTranslateService batchImageTranslateService;
     private final ImageGenerationService imageGenerationService;
     private final TemuSkuService temuSkuService;
     private final TemuPublishService temuPublishService;
@@ -48,6 +50,7 @@ public class ProductCollectionController {
                                        PostImportAutomationService postImportAutomationService,
                                        TemuImageTranslateService temuImageTranslateService,
                                        AliyunImageTranslateService aliyunImageTranslateService,
+                                       BatchImageTranslateService batchImageTranslateService,
                                        ImageGenerationService imageGenerationService,
                                        TemuSkuService temuSkuService,
                                        TemuPublishService temuPublishService,
@@ -56,6 +59,7 @@ public class ProductCollectionController {
         this.postImportAutomationService = postImportAutomationService;
         this.temuImageTranslateService = temuImageTranslateService;
         this.aliyunImageTranslateService = aliyunImageTranslateService;
+        this.batchImageTranslateService = batchImageTranslateService;
         this.imageGenerationService = imageGenerationService;
         this.temuSkuService = temuSkuService;
         this.temuPublishService = temuPublishService;
@@ -302,6 +306,23 @@ public class ProductCollectionController {
             return ResponseEntity.ok(ApiResponse.success(out));
         } catch (Exception e) {
             return ResponseEntity.ok(ApiResponse.error("Normalize failed: " + e.getMessage()));
+        }
+    }
+
+    @PostMapping("/{id}/images/translate-all")
+    public ResponseEntity<ApiResponse<java.util.Map<String, Object>>> translateAllImages(
+            @PathVariable Long id,
+            @RequestBody(required = false) java.util.Map<String, Object> payload
+    ) {
+        service.get(id);
+        try {
+            String provider = payload == null || payload.get("provider") == null
+                    ? null
+                    : String.valueOf(payload.get("provider"));
+            java.util.Map<String, Object> out = batchImageTranslateService.translateAllImages(id, provider);
+            return ResponseEntity.ok(ApiResponse.success(out));
+        } catch (Exception e) {
+            return ResponseEntity.ok(ApiResponse.error("Batch translate failed: " + e.getMessage()));
         }
     }
 

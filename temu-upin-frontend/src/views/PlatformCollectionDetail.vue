@@ -11,6 +11,7 @@
           <a-button @click="openSplitModal" :disabled="!canSplitProduct">商品拆分</a-button>
           <a-button :loading="swappingImages" @click="swapCarouselAndDetail">轮播详情图交换</a-button>
           <a-button :loading="replacingKwcdn" @click="replaceImagesToKwcdn">一键替换图片链接</a-button>
+          <a-button :loading="batchTranslatingImages" @click="translateAllImages">一键翻译所有图片</a-button>
           <a-button :loading="normalizingImages" @click="normalizeAllImagesTo800">一键规范化图片</a-button>
           <a-button @click="go('/ai')">AI 做图</a-button>
           <a-button @click="openUrl(pc.productUrl)" :disabled="!pc.productUrl">打开链接</a-button>
@@ -666,6 +667,7 @@ const pc = reactive({})
 
 const replacingKwcdn = ref(false)
 const normalizingImages = ref(false)
+const batchTranslatingImages = ref(false)
 const swappingImages = ref(false)
 const addingDetailImage = ref('')
 const splitState = reactive({
@@ -738,6 +740,55 @@ const normalizeAllImagesTo800 = async () => {
     message.error(e.message || '规范化失败')
   } finally {
     normalizingImages.value = false
+  }
+}
+
+const translateAllImages = async () => {
+  if (!id.value) return
+  batchTranslatingImages.value = true
+  try {
+    const res = await productCollectionApi.translateAllImages(id.value, { provider: 'aliyun' })
+    if (res?.success) {
+      const data = res.data || {}
+      await load()
+      Modal.info({
+        title: '批量翻译结果',
+        width: 860,
+        content: h('div', { class: 'normalize-result' }, [
+          h('div', { class: 'normalize-summary' }, [
+            h('div', null, `翻译通道：${data.provider || 'aliyun'}`),
+            h('div', null, `字段数：${data.totalFields || 0}`),
+            h('div', null, `去重后图片数：${data.uniqueImages || 0}`),
+            h('div', null, `成功：${data.successCount || 0}`),
+            h('div', null, `失败：${data.failedCount || 0}`),
+            h('div', null, `SKU 图片变更：${data.skuChanged || 0}`),
+            h('div', null, data.changed ? '结果：已写回数据库' : '结果：没有可更新的图片')
+          ]),
+          Array.isArray(data.changes) && data.changes.length
+            ? h('div', { class: 'normalize-change-list' }, data.changes.map((item, idx) =>
+                h('div', { key: `${item?.sourceUrl || 'source'}_${idx}`, class: 'normalize-change-item' }, [
+                  h('div', { class: 'normalize-change-field' }, Array.isArray(item?.fieldRefs) ? item.fieldRefs.join(' , ') : '-'),
+                  h('div', { class: 'normalize-change-meta' }, [
+                    h('span', null, `状态：${item?.status || '-'}`),
+                    h('span', null, `通道：${item?.provider || '-'}`)
+                  ]),
+                  h('div', { class: 'normalize-change-url' }, `原图：${item?.sourceUrl || '-'}`),
+                  h('div', { class: 'normalize-change-url' }, `译图：${item?.translatedUrl || '-'}`),
+                  item?.errorMsg
+                    ? h('div', { class: 'normalize-change-url' }, `错误：${item.errorMsg}`)
+                    : null
+                ].filter(Boolean))
+              ))
+            : h('div', { class: 'normalize-empty' }, '没有可翻译图片')
+        ])
+      })
+      return
+    }
+    message.error(res?.message || '批量翻译失败')
+  } catch (e) {
+    message.error(e.message || '批量翻译失败')
+  } finally {
+    batchTranslatingImages.value = false
   }
 }
 

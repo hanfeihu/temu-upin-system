@@ -259,7 +259,7 @@ public class TemuPublishService {
         // 4) build request body (DTO form: AddGloGoodsRequest)
 
         AddGloGoodsRequest req = new AddGloGoodsRequest();
-        String enTitle = sanitizeEnglishName(maybeTranslateTitleToEn(pc.getProductName(), warnings), warnings);
+        String enTitle = sanitizeEnglishName(firstNonBlank(pc.getTemuOptimizedTitleEn(), pc.getProductName()), warnings);
         req.setProductName(enTitle);
         req.setProductI18nReqs(new ArrayList<>(List.of(new AddGloGoodsRequest.ProductI18nReq("en", enTitle))));
         req.setIsRecommendedTag(true);

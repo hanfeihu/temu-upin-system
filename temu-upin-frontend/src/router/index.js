@@ -82,6 +82,11 @@ const routes = [
     component: () => import('@/views/PlatformBizLogs.vue')
   },
   {
+    path: '/platform/image-translate-records',
+    name: 'PlatformImageTranslateRecords',
+    component: () => import('@/views/PlatformImageTranslateRecords.vue')
+  },
+  {
     path: '/platform/temu-attr-rules',
     name: 'PlatformTemuAttrRules',
     component: () => import('@/views/PlatformTemuAttrRules.vue')

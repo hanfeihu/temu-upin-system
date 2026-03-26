@@ -47,4 +47,24 @@ public class AsyncConfig {
         ex.initialize();
         return ex;
     }
+
+    @Bean(name = "batchImageTranslateExecutor")
+    public Executor batchImageTranslateExecutor() {
+        int n = 10;
+        try {
+            if (threadPoolConfig != null
+                    && threadPoolConfig.getImageTranslateWorkers() != null
+                    && threadPoolConfig.getImageTranslateWorkers() > 0) {
+                n = threadPoolConfig.getImageTranslateWorkers();
+            }
+        } catch (Exception ignored) {
+        }
+        ThreadPoolTaskExecutor ex = new ThreadPoolTaskExecutor();
+        ex.setCorePoolSize(n);
+        ex.setMaxPoolSize(n);
+        ex.setQueueCapacity(500);
+        ex.setThreadNamePrefix("img-translate-");
+        ex.initialize();
+        return ex;
+    }
 }

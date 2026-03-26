@@ -55,6 +55,10 @@ export const productCollectionApi = {
     return apiClient.post(`/platform/product-collections/${id}/image/translate`, payload, { timeout: 240000 })
   },
 
+  translateAllImages(id, payload = {}) {
+    return apiClient.post(`/platform/product-collections/${id}/images/translate-all`, payload, { timeout: 600000 })
+  },
+
   listTemuSkus(id) {
     return apiClient.get(`/platform/product-collections/${id}/temu/skus`)
   },
