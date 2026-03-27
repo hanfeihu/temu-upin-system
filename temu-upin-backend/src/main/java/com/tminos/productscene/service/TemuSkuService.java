@@ -287,7 +287,9 @@ public class TemuSkuService {
                 if (val instanceof String sv && StringUtils.hasText(sv)
                         && !"*".equals(sv.trim()) && containsCjk(sv)) {
                     String tr = translateToEnBestEffort(sv);
-                    translated.put(entry.getKey(), StringUtils.hasText(tr) ? tr.trim() : sv);
+                    translated.put(entry.getKey(), sanitizeSpecValue(StringUtils.hasText(tr) ? tr.trim() : sv));
+                } else if (val instanceof String sv) {
+                    translated.put(entry.getKey(), sanitizeSpecValue(sv));
                 } else {
                     translated.put(entry.getKey(), val);
                 }
@@ -296,6 +298,27 @@ public class TemuSkuService {
         } catch (Exception e) {
             return specJson;
         }
+    }
+
+    /**
+     * Remove brackets and other special characters that TEMU rejects from spec values.
+     */
+    private String sanitizeSpecValue(String value) {
+        if (!StringUtils.hasText(value)) return value;
+        String s = value
+                .replace('[', ' ')
+                .replace(']', ' ')
+                .replace('【', ' ')
+                .replace('】', ' ')
+                .replace('（', ' ')
+                .replace('）', ' ')
+                .replace('「', ' ')
+                .replace('」', ' ')
+                .replace('『', ' ')
+                .replace('』', ' ')
+                .replaceAll("\\s+", " ")
+                .trim();
+        return StringUtils.hasText(s) ? s : value.trim();
     }
 
     private boolean containsCjk(String s) {

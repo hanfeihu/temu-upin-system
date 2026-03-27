@@ -69,9 +69,12 @@
           </template>
 
           <template v-else-if="String(column.key || '').startsWith('specJson:')">
-            <span class="spec-json-cell" :title="getSpecJsonValue(record, String(column.key || '').slice(9))">
-              {{ getSpecJsonValue(record, String(column.key || '').slice(9)) || '-' }}
-            </span>
+            <a-input
+              :value="getSpecJsonValue(record, String(column.key || '').slice(9))"
+              @update:value="(val) => setSpecJsonValue(record, String(column.key || '').slice(9), val)"
+              placeholder="规格值..."
+              allow-clear
+            />
           </template>
 
           <template v-else-if="column.key === 'temuSkuId'">
@@ -217,6 +220,12 @@ const getSpecJsonValue = (row, key) => {
   const parsed = parseSpecJson(row?.specJson)
   const value = parsed?.[key]
   return value == null ? '' : String(value)
+}
+
+const setSpecJsonValue = (row, key, newValue) => {
+  const parsed = parseSpecJson(row?.specJson)
+  parsed[key] = newValue ?? ''
+  row.specJson = JSON.stringify(parsed)
 }
 
 const isVariantColumn = (column) => {

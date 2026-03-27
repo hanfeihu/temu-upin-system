@@ -23,8 +23,9 @@ aliyun:
     # https://<bucket>.<endpoint>/<key>
     public-domain: ""
     # Fill locally via application-local.yml or env vars
-    access-key-id: "${OSS_ACCESS_KEY_ID:}"
-    access-key-secret: "${OSS_ACCESS_KEY_SECRET:}"
+    access-key-id: "${OSS_ACCESS_KEY_ID:LTAI5tDfNGajfkttFe3uvN1g}"
+    access-key-secret: "${OSS_ACCESS_KEY_SECRET:Hobr0GBQg02mERUxyT8RJ8Ff919nCE}"
+
 # 如果你希望提示词优化也走本地配置，可在此覆盖：
 # ai:
 #   image:
