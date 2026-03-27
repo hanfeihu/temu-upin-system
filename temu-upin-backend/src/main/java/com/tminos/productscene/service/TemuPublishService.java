@@ -11,6 +11,9 @@ import com.tminos.productscene.repository.ProductCollectionTemuSkuRepository;
 import com.tminos.productscene.config.AITemuAttrFillerConfig;
 
 import com.tminos.temu.upin.sdk.v2.category.CategoryApiClient;
+import com.tminos.temu.upin.sdk.v2.category.CategoryAttributesResult;
+import com.tminos.temu.upin.sdk.v2.category.CategoryMandatoryRequest;
+import com.tminos.temu.upin.sdk.v2.category.CategoryMandatoryResult;
 import com.tminos.temu.upin.sdk.v2.common.TemuOpenApiCredentials;
 import com.tminos.temu.upin.sdk.v2.dto.AddGloGoodsRequest;
 import com.tminos.temu.upin.sdk.v2.dto.AddGloGoodsResponse;
@@ -164,27 +167,7 @@ public class TemuPublishService {
 
         CategoryApiClient categoryClient = new CategoryApiClient(creds);
 
-    SpecMappingDraftGate draftGate = ensureSpecMappingDraftReadyForPublish(
-        spuId,
-        runId,
-        warnings,
-        categoryClient,
-        temuSkus,
-        pc,
-        siteId,
-        warehouseId,
-        parseInt(cfg.get(PlatformConfigService.KEY_SKU_DEFAULT_STOCK), 100),
-        parseInt(cfg.get(PlatformConfigService.KEY_SKU_MAX_STOCK), 10842)
-    );
-    if (!draftGate.ready()) {
-        String message = draftGate.message();
-        publishLogService.warn(runId, "SPEC_GATE", message);
-        publishLogService.finishFailed(runId, message, null, null);
-        markPublishFailed(pc, runId, message);
-        return blockedBySpecMappingResponse(message, runId, warnings);
-    }
-
-    publishLogService.info(runId, "VALIDATE", "preconditions ok");
+        publishLogService.info(runId, "VALIDATE", "preconditions ok");
 
         // 3) normalize images (800x800 + kwcdn)
         // Performance: batch fetch cached image meta so we can skip probe/upload when already normalized.
@@ -256,13 +239,33 @@ public class TemuPublishService {
             publishLogService.info(runId, "IMAGES", "images updated in DB");
         }
 
+        SpecMappingDraftGate draftGate = ensureSpecMappingDraftReadyForPublish(
+                spuId,
+                runId,
+                warnings,
+                categoryClient,
+                temuSkus,
+                pc,
+                siteId,
+                warehouseId,
+                parseInt(cfg.get(PlatformConfigService.KEY_SKU_DEFAULT_STOCK), 100),
+                parseInt(cfg.get(PlatformConfigService.KEY_SKU_MAX_STOCK), 10842)
+        );
+        if (!draftGate.ready()) {
+            String message = draftGate.message();
+            publishLogService.warn(runId, "SPEC_GATE", message);
+            publishLogService.finishFailed(runId, message, null, null);
+            markPublishFailed(pc, runId, message);
+            return blockedBySpecMappingResponse(message, runId, warnings);
+        }
+
         // 4) build request body (DTO form: AddGloGoodsRequest)
 
         AddGloGoodsRequest req = new AddGloGoodsRequest();
         String enTitle = sanitizeEnglishName(firstNonBlank(pc.getTemuOptimizedTitleEn(), pc.getProductName()), warnings);
         req.setProductName(enTitle);
         req.setProductI18nReqs(new ArrayList<>(List.of(new AddGloGoodsRequest.ProductI18nReq("en", enTitle))));
-        req.setIsRecommendedTag(true);
+        req.setProductCustomReq(new AddGloGoodsRequest.ProductCustomReq(null, Boolean.TRUE, null));
 
         String materialImg = firstNonBlank(mainImage, (carousel.isEmpty() ? null : carousel.get(0)));
         if (!StringUtils.hasText(materialImg)) {
@@ -345,7 +348,9 @@ public class TemuPublishService {
         try {
             StoredMaterializedSpecDraft materialized = materializeStoredDraft(categoryClient, storedDraft);
             req.setProductSpecPropertyReqs(materialized.productSpecPropertyReqs());
-            req.setProductSkcReqs(buildProductSkcReqsFromStoredDraft(spuId, pc, mainImage, fallbackThumb, materialized));
+            long leafCatId = leafCatId(catIds);
+            boolean leafHasMainSaleAttr = hasLeafMainSaleAttribute(leafCatId, categoryClient, props);
+            req.setProductSkcReqs(buildProductSkcReqsFromStoredDraft(runId, spuId, pc, mainImage, fallbackThumb, materialized, leafHasMainSaleAttr));
             for (AddGloGoodsRequest.ProductSkcReq skc : req.getProductSkcReqs()) {
                 if (skc != null && skc.getProductSkuReqs() != null) {
                     skuReqs.addAll(skc.getProductSkuReqs());
@@ -1008,30 +1013,31 @@ public class TemuPublishService {
         }
 
         try {
-            List<Map<String, Object>> propMaps = new ArrayList<>();
+            List<CategoryMandatoryRequest.ProductPropertyReq> propMaps = new ArrayList<>();
             if (productPropertyReqs != null) {
                 for (AddGloGoodsRequest.ProductPropertyReq p : productPropertyReqs) {
                     if (p == null) continue;
-                    Map<String, Object> m = new LinkedHashMap<>();
-                    m.put("pid", p.getPid());
-                    m.put("templatePid", p.getTemplatePid());
-                    m.put("refPid", p.getRefPid());
-                    m.put("vid", p.getVid());
-                    m.put("propName", p.getPropName());
-                    m.put("propValue", p.getPropValue());
-                    m.put("valueUnit", p.getValueUnit());
-                    m.put("numberInputValue", p.getNumberInputValue());
-                    propMaps.add(m);
+                    propMaps.add(new CategoryMandatoryRequest.ProductPropertyReq(
+                            p.getVid(),
+                            p.getValueUnit(),
+                            p.getPid(),
+                            p.getTemplatePid(),
+                            p.getNumberInputValue(),
+                            p.getPropValue(),
+                            p.getPropName(),
+                            p.getRefPid()
+                    ));
                 }
             }
 
-            String raw = categoryClient.getCategoryMandatory(leafCatId, null, propMaps);
-            JsonNode root = objectMapper.readTree(raw);
-            if (!root.path("success").asBoolean(false)) {
+            TemuApiResponse<CategoryMandatoryResult> mandatoryResp = categoryClient.getCategoryMandatory(
+                    new CategoryMandatoryRequest(propMaps, null, leafCatId)
+            );
+            if (mandatoryResp == null || !mandatoryResp.isSuccess()) {
                 return fallback;
             }
 
-            List<ParentSpec> allowed = collectParentSpecs(root.path("result"));
+            List<ParentSpec> allowed = collectParentSpecsFromMandatoryResponse(mandatoryResp.getResult());
             if (allowed.isEmpty()) {
                 return fallback;
             }
@@ -1757,11 +1763,13 @@ public class TemuPublishService {
         return new StoredMaterializedSpecDraft(topProps, mainGroups, skuGroups, tempSpecInfoMap);
     }
 
-    private List<AddGloGoodsRequest.ProductSkcReq> buildProductSkcReqsFromStoredDraft(Long spuId,
+    private List<AddGloGoodsRequest.ProductSkcReq> buildProductSkcReqsFromStoredDraft(Long runId,
+                                                                                       Long spuId,
                                                                                        ProductCollection pc,
                                                                                        String mainImage,
                                                                                        String fallbackThumb,
-                                                                                       StoredMaterializedSpecDraft materialized) {
+                                                                                       StoredMaterializedSpecDraft materialized,
+                                                                                       boolean leafHasMainSaleAttr) {
         int groupCount = Math.max(materialized.mainProductSkuSpecReqGroups().size(), materialized.productSkuReqGroups().size());
         if (groupCount <= 0) {
             throw new IllegalStateException("stored SKU groups is empty");
@@ -1816,10 +1824,15 @@ public class TemuPublishService {
             }
             preview = firstNonBlank(preview, mainImage, fallbackThumb);
             skc.setPreviewImgUrls(StringUtils.hasText(preview) ? new ArrayList<>(List.of(preview)) : new ArrayList<>());
-            // 单SKU时从SKU自身规格提取mainProductSkuSpecReqs，避免全零占位被TEMU拒绝
             if (mergedSkuGroup.size() == 1) {
-                List<AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq> mainFromSku = buildMainGroupFromSku(mergedSkuGroup.get(0));
-                skc.setMainProductSkuSpecReqs(!mainFromSku.isEmpty() ? mainFromSku : new ArrayList<>(List.of(emptyMainProductSkuSpecReq())));
+                AddGloGoodsRequest.ProductSkuReq singleSku = mergedSkuGroup.get(0);
+                if (leafHasMainSaleAttr) {
+                    List<AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq> mainFromSku = buildMainGroupFromSku(singleSku);
+                    skc.setMainProductSkuSpecReqs(!mainFromSku.isEmpty() ? mainFromSku : new ArrayList<>(List.of(emptyMainProductSkuSpecReq())));
+                } else {
+                    skc.setMainProductSkuSpecReqs(new ArrayList<>(List.of(emptyMainProductSkuSpecReq())));
+                    ensureSingleSkuMultiPack(singleSku);
+                }
             } else {
                 skc.setMainProductSkuSpecReqs(new ArrayList<>(List.of(emptyMainProductSkuSpecReq())));
             }
@@ -1852,6 +1865,10 @@ public class TemuPublishService {
             preview = firstNonBlank(preview, mainImage, fallbackThumb);
             skc.setPreviewImgUrls(StringUtils.hasText(preview) ? new ArrayList<>(List.of(preview)) : new ArrayList<>());
             skc.setMainProductSkuSpecReqs(new ArrayList<>(mainGroup));
+            if (!leafHasMainSaleAttr && skuGroup.size() == 1) {
+                AddGloGoodsRequest.ProductSkuReq singleSku = skuGroup.get(0);
+                ensureSingleSkuMultiPack(singleSku);
+            }
             skc.setProductSkuReqs(new ArrayList<>(skuGroup));
             out.add(skc);
         }
@@ -1906,6 +1923,76 @@ public class TemuPublishService {
             }
         }
         return parentSpecId != null;
+    }
+
+    private boolean hasLeafMainSaleAttribute(long leafCatId,
+                                             CategoryApiClient categoryClient,
+                                             List<AddGloGoodsRequest.ProductPropertyReq> productPropertyReqs) {
+        if (leafCatId <= 0 || categoryClient == null) {
+            return false;
+        }
+        try {
+            TemuApiResponse<CategoryAttributesResult> attrsResp = categoryClient.getCategoryAttributesResult((int) leafCatId);
+            if (attrsResp == null || !attrsResp.isSuccess() || attrsResp.getResult() == null) {
+                return false;
+            }
+            List<CategoryAttributesResult.Property> properties = attrsResp.getResult().getProperties();
+            if (properties == null || properties.isEmpty()) {
+                return false;
+            }
+            for (CategoryAttributesResult.Property property : properties) {
+                if (property != null && Boolean.TRUE.equals(property.getMainSale())) {
+                    return true;
+                }
+            }
+            return false;
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private List<ParentSpec> collectParentSpecsFromMandatoryResponse(CategoryMandatoryResult result) {
+        if (result == null) {
+            return List.of();
+        }
+        List<ParentSpec> direct = new ArrayList<>();
+        if (result.getParentSpecOptions() != null) {
+            for (CategoryMandatoryResult.ParentSpecOption option : result.getParentSpecOptions()) {
+                if (option == null) {
+                    continue;
+                }
+                Integer id = option.getParentSpecId();
+                String name = option.getParentSpecName();
+                if (id != null && id > 0 && StringUtils.hasText(name)) {
+                    direct.add(new ParentSpec(id, name.trim()));
+                }
+            }
+        }
+        if (!direct.isEmpty()) {
+            return direct;
+        }
+        try {
+            JsonNode node = objectMapper.valueToTree(result);
+            return collectParentSpecs(node);
+        } catch (Exception ignored) {
+            return List.of();
+        }
+    }
+
+    private void ensureSingleSkuMultiPack(AddGloGoodsRequest.ProductSkuReq skuReq) {
+        if (skuReq == null) {
+            return;
+        }
+        AddGloGoodsRequest.ProductSkuReq.ProductSkuMultiPackReq multiPackReq = skuReq.getProductSkuMultiPackReq();
+        if (multiPackReq == null) {
+            multiPackReq = new AddGloGoodsRequest.ProductSkuReq.ProductSkuMultiPackReq();
+            skuReq.setProductSkuMultiPackReq(multiPackReq);
+        }
+        multiPackReq.setSkuClassification(1);
+        multiPackReq.setNumberOfPieces(1);
+        multiPackReq.setNumberOfPiecesNew(1);
+        multiPackReq.setPieceUnitCode(1);
+        multiPackReq.setPieceNewUnitCode(1);
     }
 
     private AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq emptyMainProductSkuSpecReq() {

@@ -57,6 +57,12 @@ public class CategoryApiClient {
         return postRaw(TemuOpenApiEndpoints.API_BASE_URL_PA, params);
     }
 
+    public TemuApiResponse<CategoryAttributesResult> getCategoryAttributesResult(Integer catId) throws Exception {
+        Map<String, Object> params = baseParams(API_ATTRS_GET);
+        params.put("catId", catId);
+        return post(TemuOpenApiEndpoints.API_BASE_URL_PA, params, CategoryAttributesResult.class);
+    }
+
     public String getParentSpecList() throws Exception {
         Map<String, Object> params = baseParams(API_PARENTSPEC_GET);
         return postRaw(TemuOpenApiEndpoints.API_BASE_URL, params);
@@ -79,6 +85,25 @@ public class CategoryApiClient {
             params.put("productPropertyReqs", productPropertyReqs);
         }
         return postRaw(TemuOpenApiEndpoints.API_BASE_URL, params);
+    }
+
+    public TemuApiResponse<CategoryMandatoryResult> getCategoryMandatory(CategoryMandatoryRequest request) throws Exception {
+        Map<String, Object> params = baseParams(API_CATSMANDATORY_GET);
+        if (request != null) {
+            if (request.getLeafCatId() != null) {
+                params.put("leafCatId", request.getLeafCatId());
+            }
+            if (request.getConfigItems() != null && !request.getConfigItems().isEmpty()) {
+                params.put("configItems", request.getConfigItems());
+            }
+            if (request.getProductPropertyReqs() != null && !request.getProductPropertyReqs().isEmpty()) {
+                Gson gson = new Gson();
+                Type mapType = new TypeToken<List<Map<String, Object>>>() {}.getType();
+                List<Map<String, Object>> propMaps = gson.fromJson(gson.toJson(request.getProductPropertyReqs()), mapType);
+                params.put("productPropertyReqs", propMaps);
+            }
+        }
+        return post(TemuOpenApiEndpoints.API_BASE_URL, params, CategoryMandatoryResult.class);
     }
 
     public String matchCategory(String searchText) throws Exception {
@@ -165,6 +190,14 @@ public class CategoryApiClient {
         params.put("sign", SignatureUtil.generateSignature(params, creds.getAppSecret()));
         String json = JsonUtil.toJson(params);
         return HttpClient.sendPostRequest(routerUrl.trim(), json);
+    }
+
+    private <T> TemuApiResponse<T> post(String routerUrl, Map<String, Object> params, Class<T> resultType) throws Exception {
+        if (isBlank(routerUrl)) throw new IllegalArgumentException("routerUrl is required");
+        sanitizeParams(params);
+        params.put("sign", SignatureUtil.generateSignature(params, creds.getAppSecret()));
+        String json = JsonUtil.toJson(params);
+        return parseResponse(HttpClient.sendPostRequest(routerUrl.trim(), json), resultType);
     }
 
     private Map<String, Object> baseParams(String api) {

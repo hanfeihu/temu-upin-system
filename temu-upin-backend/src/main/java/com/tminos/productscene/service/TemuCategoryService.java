@@ -3,6 +3,9 @@ package com.tminos.productscene.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tminos.productscene.dto.TemuCategoryDTO;
+import com.tminos.temu.upin.sdk.v2.category.CategoryAttributesResult;
+import com.tminos.temu.upin.sdk.v2.category.CategoryMandatoryRequest;
+import com.tminos.temu.upin.sdk.v2.category.CategoryMandatoryResult;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -11,6 +14,7 @@ import org.springframework.util.StringUtils;
 
 import com.tminos.temu.upin.sdk.v2.category.CategoryApiClient;
 import com.tminos.temu.upin.sdk.v2.common.TemuOpenApiCredentials;
+import com.tminos.temu.upin.sdk.v2.dto.TemuApiResponse;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -98,11 +102,48 @@ public class TemuCategoryService {
     public record CategoryAttributesFetchResult(String raw, String errorMsg) {
     }
 
+    public TypedCategoryAttributesFetchResult fetchCategoryAttributes(String leafCatId) {
+        if (leafCatId == null || leafCatId.isBlank()) {
+            return new TypedCategoryAttributesFetchResult(null, "leafCatId is blank");
+        }
+        try {
+            TemuOpenApiCredentials creds = temuOpenApiCredentialService.getDefaultTemuOpenApiCredentialsOrThrow();
+            CategoryApiClient client = new CategoryApiClient(creds);
+            TemuApiResponse<CategoryAttributesResult> resp = client.getCategoryAttributesResult(Integer.valueOf(leafCatId.trim()));
+            if (resp == null) {
+                return new TypedCategoryAttributesFetchResult(null, "response is null");
+            }
+            if (!resp.isSuccess()) {
+                return new TypedCategoryAttributesFetchResult(null, resp.getErrorMsg());
+            }
+            return new TypedCategoryAttributesFetchResult(resp.getResult(), null);
+        } catch (Exception e) {
+            String error = StringUtils.hasText(e.getMessage()) ? e.getClass().getSimpleName() + ": " + e.getMessage() : e.getClass().getSimpleName();
+            log.warn("fetchCategoryAttributes failed leafCatId={} error={}", leafCatId, error);
+            return new TypedCategoryAttributesFetchResult(null, error);
+        }
+    }
+
+    public record TypedCategoryAttributesFetchResult(CategoryAttributesResult result, String errorMsg) {
+    }
+
     public String getCategoryMandatoryRaw(long leafCatId) {
         try {
             TemuOpenApiCredentials creds = temuOpenApiCredentialService.getDefaultTemuOpenApiCredentialsOrThrow();
             CategoryApiClient client = new CategoryApiClient(creds);
             return client.getCategoryMandatory(leafCatId, null, null);
+        } catch (Exception e) {
+            throw new IllegalStateException("getCategoryMandatory failed: " + e.getMessage(), e);
+        }
+    }
+
+    public TemuApiResponse<CategoryMandatoryResult> getCategoryMandatory(long leafCatId,
+                                                                         List<Integer> configItems,
+                                                                         List<CategoryMandatoryRequest.ProductPropertyReq> productPropertyReqs) {
+        try {
+            TemuOpenApiCredentials creds = temuOpenApiCredentialService.getDefaultTemuOpenApiCredentialsOrThrow();
+            CategoryApiClient client = new CategoryApiClient(creds);
+            return client.getCategoryMandatory(new CategoryMandatoryRequest(productPropertyReqs, configItems, leafCatId));
         } catch (Exception e) {
             throw new IllegalStateException("getCategoryMandatory failed: " + e.getMessage(), e);
         }
