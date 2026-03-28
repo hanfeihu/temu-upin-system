@@ -22,6 +22,7 @@ import com.tminos.productscene.repository.ImportTitleFilterWordRepository;
 import com.tminos.productscene.dto.TemuCategoryDTO;
 import com.tminos.productscene.config.ImportTitleCleanConfig;
 import com.tminos.productscene.service.pull.parser.Alibaba1688HtmlParser;
+import com.tminos.productscene.service.pull.parser.TemuHtmlParser;
 import jakarta.persistence.EntityNotFoundException;
 import org.springframework.data.domain.*;
 import org.springframework.util.StringUtils;
@@ -817,7 +818,15 @@ public class ProductCollectionService {
 
     @Transactional
     public ProductCollection importFromHtml(String htmlContent, String extractedJson) throws Exception {
-        Alibaba1688HtmlParser.ParsedProduct parsed = new Alibaba1688HtmlParser(objectMapper).parse(htmlContent);
+        Alibaba1688HtmlParser.ParsedProduct parsed;
+        String sourcePlatform;
+        if (TemuHtmlParser.looksLikeTemuHtml(htmlContent)) {
+            parsed = new TemuHtmlParser(objectMapper).parse(htmlContent);
+            sourcePlatform = "TEMU";
+        } else {
+            parsed = new Alibaba1688HtmlParser(objectMapper).parse(htmlContent);
+            sourcePlatform = "1688";
+        }
 
         String cleanedTitle = cleanImportedTitle(parsed == null ? null : parsed.getProductName());
 
@@ -874,7 +883,7 @@ public class ProductCollectionService {
                 .baseFreight(parsed.getBaseFreight())
                 .originalContent(parsed.getOriginalContent())
                 .originalHtml(parsed.getOriginalHtml())
-                .sourcePlatform("1688")
+                .sourcePlatform(sourcePlatform)
                 // collectionStatus is used as publish status:
                 // 0 未发布, 1 发布中, 2 发布失败
                 .collectionStatus(0)

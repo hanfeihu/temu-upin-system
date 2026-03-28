@@ -797,6 +797,10 @@ public class Alibaba1688HtmlParser {
         // and the actual description images are hosted on itemcdn.tmall.com. In this case the HTML snapshot
         // often does not contain the real <img> tags we need. Use window.context detailUrl as a hint.
         if (urls.isEmpty() && rawHtml != null && !rawHtml.isBlank()) {
+            urls.addAll(extractDetailImagesFromWindowContext(rawHtml));
+        }
+
+        if (urls.isEmpty() && rawHtml != null && !rawHtml.isBlank()) {
             String detailUrl = extractDetailUrlFromWindowContext(rawHtml);
             if (detailUrl != null && !detailUrl.isBlank()) {
                 urls.addAll(extractDetailImagesFromItemCdn(detailUrl));
@@ -808,6 +812,28 @@ public class Alibaba1688HtmlParser {
         }
 
         return postProcessDetailImageUrls(new ArrayList<>(urls));
+    }
+
+    private List<String> extractDetailImagesFromWindowContext(String html) {
+        if (html == null || html.isBlank()) return Collections.emptyList();
+        try {
+            String json = extractWindowContextJson(html);
+            if (json == null || json.isBlank()) return Collections.emptyList();
+            json = quoteNumericObjectKeys(json);
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> root = objectMapper.readValue(json, Map.class);
+            if (root == null) return Collections.emptyList();
+
+            Object result = root.get("result");
+            if (!(result instanceof Map<?, ?> resultMap)) return Collections.emptyList();
+
+            LinkedHashSet<String> urls = new LinkedHashSet<>();
+            collectImageUrlsRecursively(resultMap, urls, 0);
+            return postProcessDetailImageUrls(new ArrayList<>(urls));
+        } catch (Exception ignored) {
+            return Collections.emptyList();
+        }
     }
 
     private String extractDetailUrlFromWindowContext(String html) {
@@ -865,6 +891,42 @@ public class Alibaba1688HtmlParser {
             cur = m.get(k);
         }
         return cur;
+    }
+
+    private void collectImageUrlsRecursively(Object node, Set<String> out, int depth) {
+        if (node == null || out == null || depth > 12) return;
+
+        if (node instanceof Map<?, ?> map) {
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                Object value = entry.getValue();
+                String key = entry.getKey() == null ? "" : String.valueOf(entry.getKey()).toLowerCase(Locale.ROOT);
+                if (value instanceof String s) {
+                    String normalized = normalizeImageUrl(normalizeUrl(s));
+                    if (normalized != null && isImageUrl(normalized)) {
+                        if (key.contains("detail") || key.contains("desc") || key.contains("image") || key.contains("url") || key.contains("content")) {
+                            out.add(normalized);
+                        }
+                    }
+                } else {
+                    collectImageUrlsRecursively(value, out, depth + 1);
+                }
+            }
+            return;
+        }
+
+        if (node instanceof Iterable<?> iterable) {
+            for (Object item : iterable) {
+                collectImageUrlsRecursively(item, out, depth + 1);
+            }
+            return;
+        }
+
+        if (node instanceof String s) {
+            String normalized = normalizeImageUrl(normalizeUrl(s));
+            if (normalized != null && isImageUrl(normalized)) {
+                out.add(normalized);
+            }
+        }
     }
 
     private List<String> extractDetailImagesFromRawHtml(String rawHtml) {
