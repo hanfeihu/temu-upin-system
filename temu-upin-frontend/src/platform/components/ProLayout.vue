@@ -29,6 +29,13 @@
             采集商品库
           </a-menu-item>
 
+          <a-menu-item key="/platform/product-drafts">
+            <template #icon>
+              <file-text-outlined />
+            </template>
+            商品草稿库
+          </a-menu-item>
+
           <a-menu-item key="/platform/config">
             <template #icon>
               <setting-outlined />
@@ -204,6 +211,7 @@ const collapsed = ref(false)
 const selectedKeys = computed(() => {
   const p = route.path || ''
   if (p.startsWith('/platform/product-collections')) return ['/platform/product-collections']
+  if (p.startsWith('/platform/product-drafts')) return ['/platform/product-drafts']
   if (p.startsWith('/platform/config')) return ['/platform/config']
   if (p.startsWith('/platform/publish-logs')) return ['/platform/publish-logs']
   if (p.startsWith('/platform/publish-success-cases')) return ['/platform/publish-success-cases']

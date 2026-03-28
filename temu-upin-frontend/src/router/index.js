@@ -102,6 +102,11 @@ const routes = [
     component: () => import('@/views/PlatformParserTest.vue')
   },
   {
+    path: '/platform/product-drafts',
+    name: 'PlatformProductDrafts',
+    component: () => import('@/views/PlatformProductDrafts.vue')
+  },
+  {
     path: '/platform/product-collections/:id',
     name: 'PlatformCollectionDetail',
     component: () => import('@/views/PlatformCollectionDetail.vue')
