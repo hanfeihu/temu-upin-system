@@ -135,16 +135,23 @@
            </a-menu-item>
 
            <a-menu-item key="/platform/title-filter-words">
-             <template #icon>
-               <setting-outlined />
-             </template>
-             标题过滤词
-           </a-menu-item>
+              <template #icon>
+                <setting-outlined />
+              </template>
+              标题过滤词
+            </a-menu-item>
 
-           <a-menu-item key="/platform/ai-channels">
-             <template #icon>
-               <setting-outlined />
-             </template>
+            <a-menu-item key="/platform/parser-test">
+              <template #icon>
+                <file-text-outlined />
+              </template>
+              解析器测试
+            </a-menu-item>
+
+            <a-menu-item key="/platform/ai-channels">
+              <template #icon>
+                <setting-outlined />
+              </template>
              AI 渠道管理
            </a-menu-item>
         </a-menu>
@@ -213,6 +220,7 @@ const selectedKeys = computed(() => {
   if (p.startsWith('/platform/ocr-tasks')) return ['/platform/ocr-tasks']
   if (p.startsWith('/platform/ocr-filter-words')) return ['/platform/ocr-filter-words']
   if (p.startsWith('/platform/title-filter-words')) return ['/platform/title-filter-words']
+  if (p.startsWith('/platform/parser-test')) return ['/platform/parser-test']
   if (p.startsWith('/platform/ai-channels')) return ['/platform/ai-channels']
   return []
 })

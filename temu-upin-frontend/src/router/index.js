@@ -97,6 +97,11 @@ const routes = [
     component: () => import('@/views/PlatformTitleFilterWords.vue')
   },
   {
+    path: '/platform/parser-test',
+    name: 'PlatformParserTest',
+    component: () => import('@/views/PlatformParserTest.vue')
+  },
+  {
     path: '/platform/product-collections/:id',
     name: 'PlatformCollectionDetail',
     component: () => import('@/views/PlatformCollectionDetail.vue')
