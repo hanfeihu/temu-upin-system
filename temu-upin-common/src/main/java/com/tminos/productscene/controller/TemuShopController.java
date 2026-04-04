@@ -1,6 +1,6 @@
 package com.tminos.productscene.controller;
 
-import com.tminos.productscene.dto.ProductDTO.ApiResponse;
+import com.tminos.productscene.dto.ApiResponse;
 import com.tminos.productscene.dto.TemuShopDTO;
 import com.tminos.productscene.service.TemuShopService;
 import jakarta.validation.Valid;

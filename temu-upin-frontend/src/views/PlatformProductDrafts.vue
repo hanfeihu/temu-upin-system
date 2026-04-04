@@ -9,12 +9,24 @@
           <a-form-item label="来源平台">
             <a-select v-model:value="filters.sourcePlatform" :options="platformOptions" allow-clear placeholder="全部" style="width: 160px" />
           </a-form-item>
+          <a-form-item label="推送状态">
+            <a-select v-model:value="filters.pushedToCollection" :options="pushStatusOptions" placeholder="全部" style="width: 160px" />
+          </a-form-item>
           <a-form-item>
             <a-checkbox v-model:checked="filters.showDeleted">显示已删除</a-checkbox>
           </a-form-item>
           <a-form-item>
             <a-space>
               <a-button type="primary" @click="openImport">导入草稿</a-button>
+              <a-button
+                type="primary"
+                ghost
+                :loading="batchPushing"
+                :disabled="!selectedRowKeys.length || !!pushingDraftId"
+                @click="pushSelectedDrafts"
+              >
+                批量推送商品库（{{ selectedRowKeys.length }}）
+              </a-button>
               <a-button :loading="loading" @click="reload">查询</a-button>
               <a-button @click="reset">重置</a-button>
             </a-space>
@@ -29,6 +41,7 @@
           :data-source="rows"
           :loading="loading"
           :pagination="pagination"
+          :row-selection="rowSelection"
           :scroll="{ x: 1380 }"
           @change="onTableChange"
         >
@@ -59,7 +72,7 @@
                   size="small"
                   class="action-button action-button-primary"
                   :loading="pushingDraftId === record.id"
-                  :disabled="!!pushingDraftId && pushingDraftId !== record.id"
+                  :disabled="batchPushing || (!!pushingDraftId && pushingDraftId !== record.id)"
                   @click="pushDraft(record)"
                 >
                   推送商品库
@@ -101,6 +114,7 @@
           <a-form-item label="原始类目"><a-input v-model:value="editForm.originalCategory" /></a-form-item>
           <a-form-item label="主图 URL"><a-input v-model:value="editForm.productMainImage" /></a-form-item>
           <a-form-item label="商品 URL"><a-input v-model:value="editForm.productUrl" /></a-form-item>
+          <a-form-item label="货源链接"><a-input v-model:value="editForm.sourceUrl" /></a-form-item>
           <a-form-item label="销量"><a-input v-model:value="editForm.monthlySales" /></a-form-item>
           <a-form-item label="评论数"><a-input-number v-model:value="editForm.reviewCount" :min="0" style="width: 100%" /></a-form-item>
           <a-form-item label="店铺/公司名"><a-input v-model:value="editForm.companyName" /></a-form-item>
@@ -115,6 +129,7 @@
             <a-descriptions-item label="商品名" :span="2">{{ detail.productName || '-' }}</a-descriptions-item>
             <a-descriptions-item label="类目">{{ detail.productCategory || '-' }}</a-descriptions-item>
             <a-descriptions-item label="原始类目">{{ detail.originalCategory || '-' }}</a-descriptions-item>
+            <a-descriptions-item label="货源链接" :span="2">{{ detail.sourceUrl || '-' }}</a-descriptions-item>
             <a-descriptions-item label="销量">{{ detail.monthlySales || '-' }}</a-descriptions-item>
             <a-descriptions-item label="评论数">{{ detail.reviewCount ?? '-' }}</a-descriptions-item>
             <a-descriptions-item label="推送状态">{{ detail.pushedToCollection ? `已推送（${detail.pushedCollectionId || '-'}）` : '未推送' }}</a-descriptions-item>
@@ -136,7 +151,7 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { message, Modal } from 'ant-design-vue'
 import ProLayout from '@/platform/components/ProLayout.vue'
 import { productDraftApi } from '@/platform/api/productDrafts'
@@ -146,10 +161,12 @@ const importing = ref(false)
 const saving = ref(false)
 const pushingDraftId = ref(null)
 const pendingPushDraftId = ref(null)
+const batchPushing = ref(false)
 const rows = ref([])
 const total = ref(0)
 const page = ref(1)
 const pageSize = ref(20)
+const selectedRowKeys = ref([])
 
 const importOpen = ref(false)
 const editOpen = ref(false)
@@ -159,6 +176,7 @@ const detail = ref(null)
 const filters = reactive({
   q: '',
   sourcePlatform: undefined,
+  pushedToCollection: false,
   showDeleted: false
 })
 
@@ -174,6 +192,7 @@ const editForm = reactive({
   originalCategory: '',
   productMainImage: '',
   productUrl: '',
+  sourceUrl: '',
   monthlySales: '',
   reviewCount: null,
   companyName: ''
@@ -182,6 +201,12 @@ const editForm = reactive({
 const platformOptions = [
   { label: 'TEMU', value: 'TEMU' },
   { label: '1688', value: '1688' }
+]
+
+const pushStatusOptions = [
+  { label: '未推送', value: false },
+  { label: '已推送', value: true },
+  { label: '全部', value: undefined }
 ]
 
 const columns = [
@@ -205,6 +230,16 @@ const pagination = reactive({
   showTotal: (t) => `共 ${t} 条`
 })
 
+const rowSelection = computed(() => ({
+  selectedRowKeys: selectedRowKeys.value,
+  onChange: (keys) => {
+    selectedRowKeys.value = Array.isArray(keys) ? keys : []
+  },
+  getCheckboxProps: (record) => ({
+    disabled: batchPushing.value || !!pushingDraftId.value || !record?.id
+  })
+}))
+
 const syncPagination = () => {
   pagination.current = page.value
   pagination.pageSize = pageSize.value
@@ -217,12 +252,14 @@ const reload = async () => {
     const res = await productDraftApi.list({
       q: filters.q || undefined,
       sourcePlatform: filters.sourcePlatform || undefined,
+      pushedToCollection: filters.pushedToCollection,
       showDeleted: filters.showDeleted || undefined,
       page: page.value - 1,
       size: pageSize.value
     })
     if (!res?.success) throw new Error(res?.message || '加载失败')
     rows.value = Array.isArray(res.data?.content) ? res.data.content : []
+    selectedRowKeys.value = selectedRowKeys.value.filter((key) => rows.value.some((row) => row.id === key))
     total.value = Number(res.data?.totalElements || 0)
     syncPagination()
   } catch (e) {
@@ -235,12 +272,15 @@ const reload = async () => {
 const reset = () => {
   filters.q = ''
   filters.sourcePlatform = undefined
+  filters.pushedToCollection = false
   filters.showDeleted = false
+  selectedRowKeys.value = []
   page.value = 1
   reload()
 }
 
 const onTableChange = (pager) => {
+  selectedRowKeys.value = []
   page.value = pager.current || 1
   pageSize.value = pager.pageSize || 20
   reload()
@@ -278,6 +318,7 @@ const openEdit = (record) => {
   editForm.originalCategory = record?.originalCategory || ''
   editForm.productMainImage = record?.productMainImage || ''
   editForm.productUrl = record?.productUrl || ''
+  editForm.sourceUrl = record?.sourceUrl || ''
   editForm.monthlySales = record?.monthlySales || ''
   editForm.reviewCount = record?.reviewCount ?? null
   editForm.companyName = record?.companyName || ''
@@ -294,6 +335,7 @@ const saveEdit = async () => {
       originalCategory: editForm.originalCategory,
       productMainImage: editForm.productMainImage,
       productUrl: editForm.productUrl,
+      sourceUrl: editForm.sourceUrl,
       monthlySales: editForm.monthlySales,
       reviewCount: editForm.reviewCount,
       companyName: editForm.companyName
@@ -322,7 +364,7 @@ const openDetail = async (record) => {
 }
 
 const pushDraft = async (record) => {
-  if (!record?.id || pushingDraftId.value || pendingPushDraftId.value) return
+  if (!record?.id || batchPushing.value || pushingDraftId.value || pendingPushDraftId.value) return
   pendingPushDraftId.value = record.id
   Modal.confirm({
     title: '推送商品库',
@@ -350,6 +392,69 @@ const pushDraft = async (record) => {
         throw e
       } finally {
         pushingDraftId.value = null
+      }
+    }
+  })
+}
+
+const pushSelectedDrafts = () => {
+  if (batchPushing.value || pushingDraftId.value) return
+  const selectedRows = rows.value.filter((row) => selectedRowKeys.value.includes(row.id))
+  if (!selectedRows.length) {
+    message.warning('请先选择要推送的草稿')
+    return
+  }
+
+  const pendingRows = selectedRows.filter((row) => !row.pushedToCollection)
+  if (!pendingRows.length) {
+    message.warning('选中的草稿都已推送，无需重复操作')
+    return
+  }
+
+  const skippedCount = selectedRows.length - pendingRows.length
+  Modal.confirm({
+    title: '批量推送商品库',
+    content: skippedCount > 0
+      ? `本次将推送 ${pendingRows.length} 条未推送草稿，跳过 ${skippedCount} 条已推送草稿，确认继续吗？`
+      : `确认将选中的 ${pendingRows.length} 条草稿批量推送到商品库吗？`,
+    okText: '确认推送',
+    cancelText: '取消',
+    okType: 'primary',
+    async onOk() {
+      batchPushing.value = true
+      const loadingKey = 'product-draft-batch-push'
+      const failures = []
+      let successCount = 0
+      message.loading({ content: `正在批量推送 ${pendingRows.length} 条草稿...`, key: loadingKey, duration: 0 })
+      try {
+        for (let index = 0; index < pendingRows.length; index++) {
+          const record = pendingRows[index]
+          try {
+            const res = await productDraftApi.pushToCollection(record.id)
+            if (!res?.success) throw new Error(res?.message || '推送失败')
+            successCount++
+            message.loading({ content: `批量推送中 ${successCount}/${pendingRows.length}`, key: loadingKey, duration: 0 })
+          } catch (e) {
+            failures.push(`${record.productName || record.productId || `ID=${record.id}`}: ${e.message || '推送失败'}`)
+          }
+        }
+
+        await reload()
+        selectedRowKeys.value = []
+
+        if (!failures.length) {
+          message.success({ content: `批量推送完成，共成功 ${successCount} 条`, key: loadingKey })
+          return
+        }
+
+        message.warning({ content: `批量推送完成，成功 ${successCount} 条，失败 ${failures.length} 条`, key: loadingKey, duration: 3 })
+        Modal.info({
+          title: '部分草稿推送失败',
+          width: 720,
+          content: failures.join('；')
+        })
+      } finally {
+        batchPushing.value = false
       }
     }
   })

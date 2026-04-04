@@ -15,6 +15,7 @@
 
 # Secrets (local only)
 **/.secrets.env
+.deploy.env
 
 # Local-only OSS secrets
 **/oss-secrets.yml

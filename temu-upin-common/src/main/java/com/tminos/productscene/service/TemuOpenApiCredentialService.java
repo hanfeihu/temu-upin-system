@@ -38,6 +38,45 @@ public class TemuOpenApiCredentialService {
             throw new IllegalStateException("TEMU 店铺配置为空");
         }
 
+        return toCredentials(shop);
+    }
+
+    @Transactional(readOnly = true)
+    public TemuOpenApiCredentials getTemuOpenApiCredentialsByShopIdOrThrow(String shopId) {
+        if (!StringUtils.hasText(shopId)) {
+            return getDefaultTemuOpenApiCredentialsOrThrow();
+        }
+        TemuShop shop = shopRepository.findByShopId(shopId.trim())
+                .orElseThrow(() -> new IllegalStateException("未找到对应的 TEMU 店铺: " + shopId));
+        if (!Boolean.TRUE.equals(shop.getEnabled())) {
+            throw new IllegalStateException("TEMU 店铺未启用: " + shopId);
+        }
+        return toCredentials(shop);
+    }
+
+    private TemuShop resolveConfiguredShop() {
+        Map<String, String> cfg = platformConfigService.getDefaultConfigOrThrow();
+        String shopRefId = cfg.get(PlatformConfigService.KEY_TEMU_SHOP_REF_ID);
+        if (!StringUtils.hasText(shopRefId)) {
+            return null;
+        }
+
+        Long shopDbId;
+        try {
+            shopDbId = Long.parseLong(shopRefId.trim());
+        } catch (Exception e) {
+            throw new IllegalStateException("平台配置中的默认 TEMU 店铺无效，请重新选择店铺");
+        }
+
+        TemuShop shop = shopRepository.findById(shopDbId)
+                .orElseThrow(() -> new IllegalStateException("平台配置关联的 TEMU 店铺不存在，请重新选择店铺"));
+        if (!Boolean.TRUE.equals(shop.getEnabled())) {
+            throw new IllegalStateException("平台配置关联的 TEMU 店铺未启用，请先启用该店铺或重新绑定默认店铺");
+        }
+        return shop;
+    }
+
+    private TemuOpenApiCredentials toCredentials(TemuShop shop) {
         TemuSelfApp app = null;
         try {
             app = shop.getApp();
@@ -70,27 +109,5 @@ public class TemuOpenApiCredentialService {
         creds.setAppKey(normalizedAppKey);
         creds.setAppSecret(normalizedAppSecret);
         return creds;
-    }
-
-    private TemuShop resolveConfiguredShop() {
-        Map<String, String> cfg = platformConfigService.getDefaultConfigOrThrow();
-        String shopRefId = cfg.get(PlatformConfigService.KEY_TEMU_SHOP_REF_ID);
-        if (!StringUtils.hasText(shopRefId)) {
-            return null;
-        }
-
-        Long shopDbId;
-        try {
-            shopDbId = Long.parseLong(shopRefId.trim());
-        } catch (Exception e) {
-            throw new IllegalStateException("平台配置中的默认 TEMU 店铺无效，请重新选择店铺");
-        }
-
-        TemuShop shop = shopRepository.findById(shopDbId)
-                .orElseThrow(() -> new IllegalStateException("平台配置关联的 TEMU 店铺不存在，请重新选择店铺"));
-        if (!Boolean.TRUE.equals(shop.getEnabled())) {
-            throw new IllegalStateException("平台配置关联的 TEMU 店铺未启用，请先启用该店铺或重新绑定默认店铺");
-        }
-        return shop;
     }
 }

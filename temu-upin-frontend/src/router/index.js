@@ -117,6 +117,36 @@ const routes = [
     component: () => import('@/views/PlatformCollectionDetail.vue')
   },
   {
+    path: '/platform/sync-config',
+    name: 'PlatformSyncConfig',
+    component: () => import('@/views/PlatformSyncConfig.vue')
+  },
+  {
+    path: '/platform/sync-tasks',
+    name: 'PlatformSyncTasks',
+    component: () => import('@/views/PlatformSyncTasks.vue')
+  },
+  {
+    path: '/platform/sync-goods',
+    name: 'PlatformSyncGoods',
+    component: () => import('@/views/PlatformSyncGoods.vue')
+  },
+  {
+    path: '/platform/sync-price-review',
+    name: 'PlatformSyncPriceReview',
+    component: () => import('@/views/PlatformSyncPriceReview.vue')
+  },
+  {
+    path: '/platform/sync-price-adjust',
+    name: 'PlatformSyncPriceAdjust',
+    component: () => import('@/views/PlatformSyncPriceAdjust.vue')
+  },
+  {
+    path: '/platform/sync-activity',
+    name: 'PlatformSyncActivity',
+    component: () => import('@/views/PlatformSyncActivity.vue')
+  },
+  {
     path: '/ai',
     name: 'AIHome',
     component: () => import('@/views/HomePage.vue')

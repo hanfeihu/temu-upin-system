@@ -55,6 +55,9 @@ public class ProductDraft {
     private String productUrl;
 
     @Column(length = 2000)
+    private String sourceUrl;
+
+    @Column(length = 2000)
     private String productCategory;
 
     @Column(columnDefinition = "TEXT")

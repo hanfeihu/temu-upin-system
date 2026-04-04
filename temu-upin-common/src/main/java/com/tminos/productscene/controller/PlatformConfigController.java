@@ -1,7 +1,7 @@
 package com.tminos.productscene.controller;
 
 import com.tminos.productscene.dto.PlatformConfigDTO;
-import com.tminos.productscene.dto.ProductDTO.ApiResponse;
+import com.tminos.productscene.dto.ApiResponse;
 import com.tminos.productscene.service.PlatformConfigService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;

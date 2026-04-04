@@ -29,6 +29,7 @@ public class ProductDraftDTO {
         private String originalCategory;
         private String productMainImage;
         private String productUrl;
+        private String sourceUrl;
         private String monthlySales;
         private Integer reviewCount;
         private String companyName;
@@ -48,6 +49,7 @@ public class ProductDraftDTO {
         private String originalCategory;
         private String productMainImage;
         private String productUrl;
+        private String sourceUrl;
         private String monthlySales;
         private Integer reviewCount;
         private String companyName;
@@ -73,6 +75,7 @@ public class ProductDraftDTO {
         private String originalCategory;
         private String productMainImage;
         private String productUrl;
+        private String sourceUrl;
         private String monthlySales;
         private Integer reviewCount;
         private String companyName;

@@ -32,9 +32,18 @@
             <artifactId>spring-boot-starter-data-jpa</artifactId>
         </dependency>
 
-        <!-- TEMU SDK jar is checked into ./lib/ and installed to ~/.m2 via maven-install-plugin.
-             Keep it as provided to avoid putting it on the Spring Boot runtime classpath;
-             TemuSdkInvoker loads it in an isolated URLClassLoader to prevent conflicts. -->
+        <!-- TEMU Common + Sync modules -->
+        <dependency>
+            <groupId>com.tminos</groupId>
+            <artifactId>temu-upin-common</artifactId>
+            <version>1.0.0</version>
+        </dependency>
+        <dependency>
+            <groupId>com.tminos</groupId>
+            <artifactId>temu-upin-sync</artifactId>
+            <version>1.0.0</version>
+        </dependency>
+
         <dependency>
             <groupId>com.tminos</groupId>
             <artifactId>temu-upin-sdk</artifactId>

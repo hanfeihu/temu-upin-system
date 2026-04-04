@@ -41,7 +41,7 @@ public class ProductDraftService {
     }
 
     @Transactional(readOnly = true)
-    public Page<ProductDraftDTO.ListItem> list(String q, String sourcePlatform, Boolean showDeleted, int page, int size) {
+    public Page<ProductDraftDTO.ListItem> list(String q, String sourcePlatform, Boolean pushedToCollection, Boolean showDeleted, int page, int size) {
         Pageable pageable = PageRequest.of(Math.max(page, 0), Math.min(Math.max(size, 1), 100), Sort.by(Sort.Direction.DESC, "updatedAt"));
         boolean includeDeleted = Boolean.TRUE.equals(showDeleted);
         Specification<ProductDraft> spec = (root, query, cb) -> {
@@ -51,6 +51,9 @@ public class ProductDraftService {
             }
             if (StringUtils.hasText(sourcePlatform)) {
                 p = cb.and(p, cb.equal(root.get("sourcePlatform"), sourcePlatform.trim().toUpperCase()));
+            }
+            if (pushedToCollection != null) {
+                p = cb.and(p, cb.equal(root.get("pushedToCollection"), pushedToCollection));
             }
             if (StringUtils.hasText(q)) {
                 String like = "%" + q.trim() + "%";
@@ -70,6 +73,7 @@ public class ProductDraftService {
     }
 
     @Transactional
+    @SuppressWarnings("null")
     public ProductDraftDTO.Detail importDraft(ProductDraftDTO.ImportRequest request) {
         if (request == null || !StringUtils.hasText(request.getHtml())) {
             throw new IllegalArgumentException("HTML content is required");
@@ -83,6 +87,7 @@ public class ProductDraftService {
                 .originalCategory(trim(snapshot.parsed.getOriginalCategory()))
                 .productMainImage(trim(snapshot.parsed.getProductMainImage()))
                 .productUrl(trim(snapshot.parsed.getProductUrl()))
+            .sourceUrl(trim(snapshot.parsed.getProductUrl()))
                 .monthlySales(trim(snapshot.parsed.getMonthlySales()))
                 .reviewCount(snapshot.parsed.getReviewCount())
                 .companyName(trim(snapshot.parsed.getCompanyName()))
@@ -93,10 +98,12 @@ public class ProductDraftService {
                 .version(0)
                 .pushedToCollection(false)
                 .build();
-        return toDetail(repo.save(draft));
+            ProductDraft saved = java.util.Objects.requireNonNull(repo.save(draft));
+            return toDetail(saved);
     }
 
     @Transactional
+    @SuppressWarnings("null")
     public ProductDraftDTO.Detail update(Long id, ProductDraftDTO.UpdateRequest request) {
         ProductDraft draft = require(id);
         if (request == null) {
@@ -107,10 +114,12 @@ public class ProductDraftService {
         if (request.getOriginalCategory() != null) draft.setOriginalCategory(trimToNull(request.getOriginalCategory()));
         if (request.getProductMainImage() != null) draft.setProductMainImage(trimToNull(request.getProductMainImage()));
         if (request.getProductUrl() != null) draft.setProductUrl(trimToNull(request.getProductUrl()));
+        if (request.getSourceUrl() != null) draft.setSourceUrl(trimToNull(request.getSourceUrl()));
         if (request.getMonthlySales() != null) draft.setMonthlySales(trimToNull(request.getMonthlySales()));
         if (request.getReviewCount() != null) draft.setReviewCount(request.getReviewCount());
         if (request.getCompanyName() != null) draft.setCompanyName(trimToNull(request.getCompanyName()));
-        return toDetail(repo.save(draft));
+        ProductDraft saved = java.util.Objects.requireNonNull(repo.save(draft));
+        return toDetail(saved);
     }
 
     @Transactional
@@ -140,8 +149,10 @@ public class ProductDraftService {
                 .build();
     }
 
+    @SuppressWarnings("null")
     private ProductDraft require(Long id) {
-        return repo.findById(id).orElseThrow(() -> new EntityNotFoundException("draft not found: " + id));
+        Long safeId = java.util.Objects.requireNonNull(id, "draft id is required");
+        return repo.findById(safeId).orElseThrow(() -> new EntityNotFoundException("draft not found: " + safeId));
     }
 
     private ProductDraftDTO.ListItem toListItem(ProductDraft e) {
@@ -154,6 +165,7 @@ public class ProductDraftService {
                 .originalCategory(e.getOriginalCategory())
                 .productMainImage(e.getProductMainImage())
                 .productUrl(e.getProductUrl())
+                .sourceUrl(e.getSourceUrl())
                 .monthlySales(e.getMonthlySales())
                 .reviewCount(e.getReviewCount())
                 .companyName(e.getCompanyName())
@@ -176,6 +188,7 @@ public class ProductDraftService {
                 .originalCategory(e.getOriginalCategory())
                 .productMainImage(e.getProductMainImage())
                 .productUrl(e.getProductUrl())
+                .sourceUrl(e.getSourceUrl())
                 .monthlySales(e.getMonthlySales())
                 .reviewCount(e.getReviewCount())
                 .companyName(e.getCompanyName())

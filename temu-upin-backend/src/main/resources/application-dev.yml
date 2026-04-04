@@ -12,6 +12,12 @@ spring:
     url: jdbc:postgresql://127.0.0.1:5432/tminos
     username: postgres
     password: "Han123..."
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      password:
+      database: 0
 
 aliyun:
   oss:

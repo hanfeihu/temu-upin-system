@@ -828,7 +828,10 @@ public class ProductCollectionService {
             sourcePlatform = "1688";
         }
 
-        String cleanedTitle = cleanImportedTitle(parsed == null ? null : parsed.getProductName());
+        parsed = Objects.requireNonNull(parsed, "解析导入 HTML 失败");
+        boolean skipOcrForTemu = isTemuSourcePlatform(sourcePlatform);
+
+        String cleanedTitle = cleanImportedTitle(parsed.getProductName());
 
         String detailImagesJsonOverride = null;
         if (extractedJson != null && !extractedJson.isBlank()) {
@@ -890,7 +893,7 @@ public class ProductCollectionService {
                 .execStatus(0)
                 .execResult(null)
                 .lastPublishRunId(null)
-                .ocrStatus(0)
+                .ocrStatus(skipOcrForTemu ? 2 : 0)
                 .build();
 
         // Backfill packagingWeight from originalContent.packaging.weightG when missing.
@@ -918,10 +921,12 @@ public class ProductCollectionService {
 
         pc = repo.save(pc);
 
-        // Enqueue OCR tasks (carousel + detail images), best-effort.
-        try {
-            enqueueOcrTasksForImportedProduct(pc);
-        } catch (Exception ignored) {
+        // TEMU 来源默认跳过 OCR；1688 维持原有 OCR 入队逻辑。
+        if (!skipOcrForTemu) {
+            try {
+                enqueueOcrTasksForImportedProduct(pc);
+            } catch (Exception ignored) {
+            }
         }
 
         // Rebuild SKU tables for this SPU (tests only; no history concerns)
@@ -992,6 +997,10 @@ public class ProductCollectionService {
         pc.setOcrStatus(0);
         pc.setUpdatedAt(LocalDateTime.now());
         repo.save(pc);
+    }
+
+    private boolean isTemuSourcePlatform(String sourcePlatform) {
+        return sourcePlatform != null && "TEMU".equalsIgnoreCase(sourcePlatform.trim());
     }
 
     private List<String> parseJsonStringArraySafe(String json) {
