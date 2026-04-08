@@ -2,15 +2,13 @@ package com.tminos.productscene.sync.executor;
 
 import com.tminos.productscene.sync.entity.TemuGoodsSku;
 import com.tminos.productscene.sync.entity.TemuGoodsSkuPrice;
-import com.tminos.productscene.sync.entity.TemuGoodsSkuSitePrice;
 import com.tminos.productscene.sync.entity.TemuSyncTask;
 import com.tminos.productscene.sync.repository.TemuGoodsSkuRepository;
 import com.tminos.productscene.sync.repository.TemuGoodsSkuPriceRepository;
-import com.tminos.productscene.sync.repository.TemuGoodsSkuSitePriceRepository;
+import com.tminos.productscene.sync.service.TemuPriceSyncTransactionalService;
 import com.tminos.temu.upin.sdk.v2.client.TemuOpenApiClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -28,8 +26,7 @@ import java.util.stream.Collectors;
 public class PriceSyncExecutor extends AbstractSyncExecutor<Map<String, Object>> {
 
     @Autowired private TemuGoodsSkuRepository skuRepo;
-    @Autowired private TemuGoodsSkuPriceRepository skuPriceRepo;
-    @Autowired private TemuGoodsSkuSitePriceRepository skuSitePriceRepo;
+    @Autowired private TemuPriceSyncTransactionalService priceSyncTransactionalService;
 
     private static final int API_BATCH_SIZE = 50;
 
@@ -123,41 +120,12 @@ public class PriceSyncExecutor extends AbstractSyncExecutor<Map<String, Object>>
     }
 
     @Override
-    @Transactional
-    @SuppressWarnings("null")
     protected void doPersistBatch(TemuSyncTask task, List<Map<String, Object>> batch, int batchIndex) {
-        for (Map<String, Object> raw : batch) {
-            Long productSkuId = toLong(raw.get("productSkuId"));
-            if (productSkuId == null) continue;
-
-            TemuGoodsSkuPrice price = skuPriceRepo.findByShopIdAndProductSkuId(task.getShopId(), productSkuId)
-                    .orElse(new TemuGoodsSkuPrice());
-
-            price.setShopId(task.getShopId());
-            price.setProductId(toLong(raw.get("productId")));
-            price.setProductSkcId(toLong(raw.get("productSkcId")));
-            price.setProductSkuId(productSkuId);
-            price.setSupplierPrice(toInt(raw.get("supplierPrice")));
-            price.setCurrencyType(toStr(raw.get("currencyType")));
-            price.setSyncedAt(LocalDateTime.now());
-
-            price = skuPriceRepo.save(price);
-
-            skuSitePriceRepo.deleteBySkuPriceId(price.getId());
-            List<Map<String, Object>> siteSupplierPrices = extractSiteSupplierPrices(raw.get("siteSupplierPrices"));
-            for (Map<String, Object> siteRaw : siteSupplierPrices) {
-                Integer siteId = toInt(siteRaw.get("siteId"));
-                if (siteId == null) continue;
-
-                TemuGoodsSkuSitePrice sitePrice = TemuGoodsSkuSitePrice.builder()
-                        .skuPriceId(price.getId())
-                        .siteId(siteId)
-                        .supplierPrice(toInt(siteRaw.get("supplierPrice")))
-                        .priceReviewStatus(toInt(siteRaw.get("priceReviewStatus")))
-                        .build();
-                skuSitePriceRepo.save(sitePrice);
-            }
-        }
+        priceSyncTransactionalService.persistBatch(task, batch,
+                AbstractSyncExecutor::toLong,
+                AbstractSyncExecutor::toInt,
+                AbstractSyncExecutor::toStr,
+                this::extractSiteSupplierPrices);
     }
 
     private List<Map<String, Object>> extractSiteSupplierPrices(Object rawSitePrices) {

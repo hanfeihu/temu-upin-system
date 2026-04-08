@@ -1,5 +1,6 @@
 package com.tminos.productscene.sync.service;
 
+import com.tminos.productscene.sync.repository.TemuGoodsSkuPriceChangeRepository;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import jakarta.persistence.TypedQuery;
@@ -22,9 +23,12 @@ public class SyncDataCleanupService {
     private EntityManager entityManager;
 
     private final TemuGoodsRepairJobService goodsRepairJobService;
+    private final TemuGoodsSkuPriceChangeRepository skuPriceChangeRepository;
 
-    public SyncDataCleanupService(TemuGoodsRepairJobService goodsRepairJobService) {
+    public SyncDataCleanupService(TemuGoodsRepairJobService goodsRepairJobService,
+                                  TemuGoodsSkuPriceChangeRepository skuPriceChangeRepository) {
         this.goodsRepairJobService = goodsRepairJobService;
+        this.skuPriceChangeRepository = skuPriceChangeRepository;
     }
 
     @Transactional
@@ -50,6 +54,7 @@ public class SyncDataCleanupService {
         deleted.put("goodsProperties", deleteByIds("delete from TemuGoodsProperty p where p.goodsId in :ids", "ids", goodsIds));
         deleted.put("goodsDecorations", deleteByIds("delete from TemuGoodsDecoration d where d.goodsId in :ids", "ids", goodsIds));
         deleted.put("goodsSkuSitePrices", deleteByIds("delete from TemuGoodsSkuSitePrice sp where sp.skuPriceId in :ids", "ids", skuPriceIds));
+        deleted.put("goodsSkuPriceChanges", Math.toIntExact(skuPriceChangeRepository.deleteByShopId(safeShopId)));
         deleted.put("goodsSkuPrices", deleteByShopId("delete from TemuGoodsSkuPrice p where p.shopId = :shopId", safeShopId));
         deleted.put("goodsSkus", deleteByIds("delete from TemuGoodsSku s where s.goodsId in :ids", "ids", goodsIds));
         deleted.put("goodsLifecycles", deleteByShopId("delete from TemuGoodsLifecycle l where l.shopId = :shopId", safeShopId));

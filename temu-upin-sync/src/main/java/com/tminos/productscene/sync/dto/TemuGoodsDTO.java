@@ -67,6 +67,7 @@ public class TemuGoodsDTO {
         private List<SkuItem> skuList;
         private List<SiteItem> siteList;
         private List<PropertyItem> propertyList;
+        private List<SkuPriceChangeItem> priceChangeList;
     }
 
     @Data
@@ -74,6 +75,7 @@ public class TemuGoodsDTO {
         private Long id;
         private Long productSkuId;
         private String extCode;
+        private String imageUrl;
         private Integer virtualStock;
         private Integer weightMg;
         private Integer lengthMm;
@@ -106,6 +108,18 @@ public class TemuGoodsDTO {
         private Integer siteId;
         private Integer supplierPrice;
         private Integer priceReviewStatus;
+    }
+
+    @Data
+    public static class SkuPriceChangeItem {
+        private Long id;
+        private Long productSkuId;
+        private String imageUrl;
+        private Integer siteId;
+        private String siteName;
+        private Integer oldSupplierPrice;
+        private Integer newSupplierPrice;
+        private LocalDateTime changedAt;
     }
 
     @Data

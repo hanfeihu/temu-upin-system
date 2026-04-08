@@ -40,6 +40,7 @@ public class TemuGoodsService {
     private final TemuGoodsSkuRepository skuRepository;
     private final TemuGoodsSkuSpecRepository skuSpecRepository;
     private final TemuGoodsSkuPriceRepository skuPriceRepository;
+    private final TemuGoodsSkuPriceChangeRepository skuPriceChangeRepository;
     private final TemuGoodsSkuSitePriceRepository skuSitePriceRepository;
     private final TemuGoodsLifecycleRepository lifecycleRepository;
     @SuppressWarnings("unused")
@@ -52,10 +53,11 @@ public class TemuGoodsService {
                             TemuGoodsPropertyRepository propertyRepository,
                             TemuGoodsSiteRepository siteRepository,
                             TemuGoodsSkuRepository skuRepository,
-                            TemuGoodsSkuSpecRepository skuSpecRepository,
-                            TemuGoodsSkuPriceRepository skuPriceRepository,
-                            TemuGoodsSkuSitePriceRepository skuSitePriceRepository,
-                            TemuGoodsLifecycleRepository lifecycleRepository,
+                             TemuGoodsSkuSpecRepository skuSpecRepository,
+                             TemuGoodsSkuPriceRepository skuPriceRepository,
+                             TemuGoodsSkuPriceChangeRepository skuPriceChangeRepository,
+                             TemuGoodsSkuSitePriceRepository skuSitePriceRepository,
+                             TemuGoodsLifecycleRepository lifecycleRepository,
                             TemuGoodsDecorationRepository decorationRepository,
                             TemuFreightTemplateRepository freightTemplateRepository,
                             TemuWarehouseRepository warehouseRepository) {
@@ -65,6 +67,7 @@ public class TemuGoodsService {
         this.skuRepository = skuRepository;
         this.skuSpecRepository = skuSpecRepository;
         this.skuPriceRepository = skuPriceRepository;
+        this.skuPriceChangeRepository = skuPriceChangeRepository;
         this.skuSitePriceRepository = skuSitePriceRepository;
         this.lifecycleRepository = lifecycleRepository;
         this.decorationRepository = decorationRepository;
@@ -249,6 +252,13 @@ public class TemuGoodsService {
             si.setSiteName(s.getSiteName());
             return si;
         }).collect(Collectors.toList()));
+        Map<Integer, String> siteNameMap = sites.stream()
+                .filter(site -> site.getSiteId() != null)
+                .collect(Collectors.toMap(
+                        TemuGoodsSite::getSiteId,
+                        site -> site.getSiteName() == null || site.getSiteName().isBlank() ? String.valueOf(site.getSiteId()) : site.getSiteName(),
+                        (left, right) -> left,
+                        LinkedHashMap::new));
 
         // 属性
         List<TemuGoodsProperty> properties = propertyRepository.findByGoodsId(safeGoodsId);
@@ -270,6 +280,7 @@ public class TemuGoodsService {
             si.setId(sku.getId());
             si.setProductSkuId(sku.getProductSkuId());
             si.setExtCode(sku.getExtCode());
+            si.setImageUrl(goods.getMainImageUrl());
             si.setVirtualStock(sku.getVirtualStock());
             si.setWeightMg(sku.getWeightMg());
             si.setLengthMm(sku.getLengthMm());
@@ -310,6 +321,26 @@ public class TemuGoodsService {
             skuItems.add(si);
         }
         detail.setSkuList(skuItems);
+
+        Map<Long, String> skuImageMap = skuItems.stream()
+                .filter(item -> item.getProductSkuId() != null)
+                .collect(Collectors.toMap(TemuGoodsDTO.SkuItem::getProductSkuId, TemuGoodsDTO.SkuItem::getImageUrl, (left, right) -> left, LinkedHashMap::new));
+        List<Long> productSkuIds = skuItems.stream().map(TemuGoodsDTO.SkuItem::getProductSkuId).filter(Objects::nonNull).distinct().toList();
+        List<TemuGoodsSkuPriceChange> priceChanges = productSkuIds.isEmpty()
+                ? List.of()
+                : skuPriceChangeRepository.findTop200ByShopIdAndProductSkuIdInOrderByChangedAtDesc(goods.getShopId(), productSkuIds);
+        detail.setPriceChangeList(priceChanges.stream().map(change -> {
+            TemuGoodsDTO.SkuPriceChangeItem item = new TemuGoodsDTO.SkuPriceChangeItem();
+            item.setId(change.getId());
+            item.setProductSkuId(change.getProductSkuId());
+            item.setImageUrl(skuImageMap.get(change.getProductSkuId()));
+            item.setSiteId(change.getSiteId());
+            item.setSiteName(change.getSiteId() == null ? "默认" : siteNameMap.getOrDefault(change.getSiteId(), String.valueOf(change.getSiteId())));
+            item.setOldSupplierPrice(change.getOldSupplierPrice());
+            item.setNewSupplierPrice(change.getNewSupplierPrice());
+            item.setChangedAt(change.getChangedAt());
+            return item;
+        }).collect(Collectors.toList()));
 
         return detail;
     }
