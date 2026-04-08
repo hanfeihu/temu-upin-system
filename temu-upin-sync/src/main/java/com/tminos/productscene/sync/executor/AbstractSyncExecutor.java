@@ -52,6 +52,18 @@ public abstract class AbstractSyncExecutor<T> {
         return syncConfigService.getIntConfig(task.getShopId(), getThreadCountConfigKey(), 5);
     }
 
+    protected int getDownloadConcurrency(TemuSyncTask task) {
+        return getConcurrency(task);
+    }
+
+    protected int getPageDownloadMaxRetries() {
+        return 1;
+    }
+
+    protected long getPageDownloadRetryDelayMillis(int attempt, String apiType, int pageNum, String errorMsg) {
+        return 0L;
+    }
+
     public void execute(TemuSyncTask task) {
         task.setStartedAt(LocalDateTime.now());
         taskRepo.save(task);
@@ -208,7 +220,7 @@ public abstract class AbstractSyncExecutor<T> {
     protected List<Map<String, Object>> doPagedDownload(TemuSyncTask task, TemuOpenApiClient client,
                                                          String apiType, Map<String, Object> bizParams,
                                                          int pageSize, String... listKeys) throws Exception {
-        int concurrency = getConcurrency(task);
+        int concurrency = Math.max(1, getDownloadConcurrency(task));
         String pageParamName = getPageParamName();
 
         // 构建请求参数（合并业务参数 + 分页参数）
@@ -218,7 +230,7 @@ public abstract class AbstractSyncExecutor<T> {
         Map<String, Object> firstParams = new HashMap<>(baseParams);
         firstParams.put(pageParamName, 1);
         firstParams.put("pageSize", pageSize);
-        TemuOpenApiClient.ApiResult firstResult = client.callApiParsed(apiType, firstParams);
+        TemuOpenApiClient.ApiResult firstResult = callPagedApiWithRetry(client, apiType, firstParams, 1);
         if (!firstResult.success) {
             throw new RuntimeException("API " + apiType + " 第1页失败: " + firstResult.errorMsg);
         }
@@ -270,10 +282,10 @@ public abstract class AbstractSyncExecutor<T> {
                     Map<String, Object> reqParams = new HashMap<>(baseParams);
                     reqParams.put(pageParamName, pageNum);
                     reqParams.put("pageSize", pageSize);
-                    TemuOpenApiClient.ApiResult result = client.callApiParsed(apiType, reqParams);
-                    if (!result.success) {
-                        throw new RuntimeException("API " + apiType + " 第" + pageNum + "页失败: " + result.errorMsg);
-                    }
+                     TemuOpenApiClient.ApiResult result = callPagedApiWithRetry(client, apiType, reqParams, pageNum);
+                     if (!result.success) {
+                         throw new RuntimeException("API " + apiType + " 第" + pageNum + "页失败: " + result.errorMsg);
+                     }
 
                     Map<String, Object> resultMap = result.resultAsMap();
                     if (resultMap != null) {
@@ -321,6 +333,44 @@ public abstract class AbstractSyncExecutor<T> {
         task.setDownloadCompleted(allData.size());
         taskRepo.save(task);
         return allData;
+    }
+
+    protected TemuOpenApiClient.ApiResult callPagedApiWithRetry(TemuOpenApiClient client,
+                                                                String apiType,
+                                                                Map<String, Object> reqParams,
+                                                                int pageNum) throws Exception {
+        Exception lastException = null;
+        int maxRetries = Math.max(1, getPageDownloadMaxRetries());
+        for (int attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                TemuOpenApiClient.ApiResult result = client.callApiParsed(apiType, reqParams);
+                if (result.success) {
+                    return result;
+                }
+                String errorMsg = result.errorMsg == null || result.errorMsg.isBlank() ? "UNKNOWN_ERROR" : result.errorMsg;
+                if (attempt >= maxRetries) {
+                    throw new RuntimeException("API " + apiType + " 第" + pageNum + "页失败: " + errorMsg);
+                }
+                sleepBeforePageRetry(attempt, apiType, pageNum, errorMsg);
+            } catch (Exception e) {
+                lastException = e;
+                if (attempt >= maxRetries) {
+                    throw e;
+                }
+                sleepBeforePageRetry(attempt, apiType, pageNum, e.getMessage());
+            }
+        }
+        throw lastException == null
+                ? new RuntimeException("API " + apiType + " 第" + pageNum + "页失败")
+                : lastException;
+    }
+
+    protected void sleepBeforePageRetry(int attempt, String apiType, int pageNum, String errorMsg) throws InterruptedException {
+        long waitMillis = Math.max(0L, getPageDownloadRetryDelayMillis(attempt, apiType, pageNum, errorMsg));
+        if (waitMillis > 0) {
+            log.warn("接口 {} 第{}页第{}次重试，等待 {}ms，原因: {}", apiType, pageNum, attempt, waitMillis, errorMsg);
+            Thread.sleep(waitMillis);
+        }
     }
 
     // ==================== Single-call download helper ====================

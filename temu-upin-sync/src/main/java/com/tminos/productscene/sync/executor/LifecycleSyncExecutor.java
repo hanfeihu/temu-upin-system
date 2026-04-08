@@ -21,6 +21,24 @@ public class LifecycleSyncExecutor extends AbstractSyncExecutor<Map<String, Obje
     protected String getSyncType() { return "LIFECYCLE"; }
 
     @Override
+    protected String getPageParamName() { return "pageNum"; }
+
+    @Override
+    protected int getDownloadConcurrency(TemuSyncTask task) {
+        return 1;
+    }
+
+    @Override
+    protected int getPageDownloadMaxRetries() {
+        return 3;
+    }
+
+    @Override
+    protected long getPageDownloadRetryDelayMillis(int attempt, String apiType, int pageNum, String errorMsg) {
+        return 1200L * attempt;
+    }
+
+    @Override
     protected List<Map<String, Object>> doDownload(TemuSyncTask task, TemuOpenApiClient client) throws Exception {
         return doPagedDownload(task, client, TemuOpenApiClient.API_PRODUCT_SEARCH, 50, "goodsProductList", "productList");
     }
