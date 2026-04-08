@@ -48,6 +48,7 @@ public class ImageOcrTaskService {
                                   Integer imageType,
                                   Integer execStatus,
                                   Boolean filtered,
+                                  Boolean containsChinese,
                                   int page,
                                   int size) {
         Pageable pageable = PageRequest.of(Math.max(page, 0), Math.min(Math.max(size, 1), 100), Sort.by(Sort.Direction.DESC, "updatedAt"));
@@ -69,6 +70,9 @@ public class ImageOcrTaskService {
             if (filtered != null) {
                 p = cb.and(p, cb.equal(root.get("filtered"), filtered));
             }
+            if (containsChinese != null) {
+                p = cb.and(p, cb.equal(root.get("containsChinese"), containsChinese));
+            }
             return p;
         };
 
@@ -83,7 +87,8 @@ public class ImageOcrTaskService {
     public java.util.Map<String, Long> stats(Long spuId,
                                             String productId,
                                             Integer imageType,
-                                            Boolean filtered) {
+                                            Boolean filtered,
+                                            Boolean containsChinese) {
         Specification<ImageOcrTask> base = (root, query, cb) -> {
             var p = cb.conjunction();
             if (spuId != null) {
@@ -97,6 +102,9 @@ public class ImageOcrTaskService {
             }
             if (filtered != null) {
                 p = cb.and(p, cb.equal(root.get("filtered"), filtered));
+            }
+            if (containsChinese != null) {
+                p = cb.and(p, cb.equal(root.get("containsChinese"), containsChinese));
             }
             return p;
         };
@@ -129,6 +137,7 @@ public class ImageOcrTaskService {
         t.setFailReason(req.getFailReason());
         t.setExecutorPublicIp(req.getExecutorPublicIp());
         t.setFiltered(req.getFiltered() != null && req.getFiltered());
+        t.setContainsChinese(req.getContainsChinese());
         return repo.save(t);
     }
 
@@ -145,6 +154,7 @@ public class ImageOcrTaskService {
         t.setFailReason(req.getFailReason());
         t.setExecutorPublicIp(req.getExecutorPublicIp());
         if (req.getFiltered() != null) t.setFiltered(req.getFiltered());
+        t.setContainsChinese(req.getContainsChinese());
         return repo.save(t);
     }
 
@@ -178,6 +188,7 @@ public class ImageOcrTaskService {
         // Reset previous failure / previous result when re-claiming
         t.setFailReason(null);
         t.setExecResult(null);
+        t.setContainsChinese(null);
         t.setExecutorPublicIp(StringUtils.hasText(publicIp) ? publicIp.trim() : t.getExecutorPublicIp());
         t.setTaskStartedAt(LocalDateTime.now());
         t.setUpdatedAt(LocalDateTime.now());
@@ -218,6 +229,7 @@ public class ImageOcrTaskService {
             t.setExecStatus(ImageOcrTask.STATUS_SUCCESS);
             t.setExecResult(ocrText);
             t.setFailReason(null);
+            t.setContainsChinese(containsChinese(ocrText));
             // Filter word hit -> filtered=true
             if (containsAnyFilterWord(ocrText)) {
                 t.setFiltered(true);
@@ -225,6 +237,7 @@ public class ImageOcrTaskService {
         } else {
             t.setExecStatus(ImageOcrTask.STATUS_FAILED);
             t.setFailReason(fail);
+            t.setContainsChinese(null);
         }
         t.setTaskFinishedAt(LocalDateTime.now());
         t.setUpdatedAt(LocalDateTime.now());
@@ -251,6 +264,15 @@ public class ImageOcrTaskService {
             if (text.contains(k)) return true;
             // best effort: ASCII/case-insensitive
             if (lower.contains(k.toLowerCase())) return true;
+        }
+        return false;
+    }
+
+    private boolean containsChinese(String text) {
+        if (!StringUtils.hasText(text)) return false;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c >= '\u4E00' && c <= '\u9FFF') return true;
         }
         return false;
     }

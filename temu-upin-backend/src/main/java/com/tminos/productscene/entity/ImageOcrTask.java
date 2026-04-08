@@ -13,7 +13,8 @@ import java.time.LocalDateTime;
                 @Index(name = "idx_ocr_task_product_id", columnList = "product_id"),
                 @Index(name = "idx_ocr_task_status", columnList = "exec_status"),
                 @Index(name = "idx_ocr_task_type", columnList = "image_type"),
-                @Index(name = "idx_ocr_task_filtered", columnList = "filtered")
+                @Index(name = "idx_ocr_task_filtered", columnList = "filtered"),
+                @Index(name = "idx_ocr_task_contains_chinese", columnList = "contains_chinese")
         }
 )
 @Getter
@@ -79,6 +80,9 @@ public class ImageOcrTask {
     @Column(nullable = false)
     private Boolean filtered = false;
 
+    @Column(name = "contains_chinese")
+    private Boolean containsChinese;
+
     @Column(nullable = false)
     private LocalDateTime createdAt;
 
@@ -124,6 +128,8 @@ public class ImageOcrTask {
     public void setTaskFinishedAt(LocalDateTime taskFinishedAt) { this.taskFinishedAt = taskFinishedAt; }
     public Boolean getFiltered() { return filtered; }
     public void setFiltered(Boolean filtered) { this.filtered = filtered; }
+    public Boolean getContainsChinese() { return containsChinese; }
+    public void setContainsChinese(Boolean containsChinese) { this.containsChinese = containsChinese; }
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
     public LocalDateTime getUpdatedAt() { return updatedAt; }

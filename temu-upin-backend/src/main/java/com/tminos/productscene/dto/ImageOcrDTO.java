@@ -26,6 +26,7 @@ public class ImageOcrDTO {
         private LocalDateTime taskStartedAt;
         private LocalDateTime taskFinishedAt;
         private Boolean filtered;
+        private Boolean containsChinese;
         private LocalDateTime createdAt;
         private LocalDateTime updatedAt;
     }
@@ -48,6 +49,7 @@ public class ImageOcrDTO {
         private String failReason;
         private String executorPublicIp;
         private Boolean filtered;
+        private Boolean containsChinese;
     }
 
     @Getter

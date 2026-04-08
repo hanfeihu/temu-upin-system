@@ -26,10 +26,11 @@ public class ImageOcrTaskController {
             @RequestParam(value = "imageType", required = false) Integer imageType,
             @RequestParam(value = "execStatus", required = false) Integer execStatus,
             @RequestParam(value = "filtered", required = false) Boolean filtered,
+            @RequestParam(value = "containsChinese", required = false) Boolean containsChinese,
             @RequestParam(value = "page", defaultValue = "0") int page,
             @RequestParam(value = "size", defaultValue = "20") int size
     ) {
-        return ResponseEntity.ok(ApiResponse.success(service.list(spuId, productId, imageType, execStatus, filtered, page, size)));
+        return ResponseEntity.ok(ApiResponse.success(service.list(spuId, productId, imageType, execStatus, filtered, containsChinese, page, size)));
     }
 
     @GetMapping("/stats")
@@ -37,9 +38,10 @@ public class ImageOcrTaskController {
             @RequestParam(value = "spuId", required = false) Long spuId,
             @RequestParam(value = "productId", required = false) String productId,
             @RequestParam(value = "imageType", required = false) Integer imageType,
-            @RequestParam(value = "filtered", required = false) Boolean filtered
+            @RequestParam(value = "filtered", required = false) Boolean filtered,
+            @RequestParam(value = "containsChinese", required = false) Boolean containsChinese
     ) {
-        return ResponseEntity.ok(ApiResponse.success(service.stats(spuId, productId, imageType, filtered)));
+        return ResponseEntity.ok(ApiResponse.success(service.stats(spuId, productId, imageType, filtered, containsChinese)));
     }
 
     @PostMapping
