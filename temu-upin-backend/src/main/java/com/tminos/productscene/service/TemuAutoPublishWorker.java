@@ -204,7 +204,7 @@ public class TemuAutoPublishWorker {
                 }
             } catch (Exception ignored) {
             }
-            log.info("TemuAutoPublishWorker skip spuId={} reasons={} debug={}", spuId, r.reasons(), r.debug());
+            log.debug("TemuAutoPublishWorker skip spuId={} reasons={} debug={}", spuId, r.reasons(), r.debug());
             try {
                 if (status != null) status.onWorkDone();
             } catch (Exception ignored) {

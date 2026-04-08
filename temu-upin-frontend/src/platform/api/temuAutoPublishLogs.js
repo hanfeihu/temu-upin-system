@@ -15,6 +15,9 @@ export const temuAutoPublishLogsApi = {
   listLogs(runId) {
     return apiClient.get('/platform/temu-auto-publish/logs', { params: { runId } })
   },
+  clearAllLogs() {
+    return apiClient.delete('/platform/temu-auto-publish/logs')
+  },
   sample(runId) {
     return apiClient.get('/platform/temu-auto-publish/sample', { params: { runId } })
   },

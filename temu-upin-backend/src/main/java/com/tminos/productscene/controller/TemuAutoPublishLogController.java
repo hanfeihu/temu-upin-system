@@ -50,6 +50,12 @@ public class TemuAutoPublishLogController {
         return ResponseEntity.ok(ApiResponse.success(logService.listLogs(runId)));
     }
 
+    @DeleteMapping("/logs")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> clearLogs() {
+        Map<String, Object> result = logService.clearAllLogs();
+        return ResponseEntity.ok(ApiResponse.success(String.valueOf(result.get("message")), result));
+    }
+
     @GetMapping("/sample")
     public ResponseEntity<ApiResponse<Map<String, Object>>> getSample(@RequestParam("runId") Long runId) {
         return ResponseEntity.ok(ApiResponse.success(logService.summarizeRun(runId)));

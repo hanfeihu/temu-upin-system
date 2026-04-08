@@ -79,6 +79,7 @@ public class TemuAutoPublishLogService {
 
     @Transactional
     public void finishSkipped(Long runId, String eligibilityJson, String summary) {
+        if (runId == null) return;
         TemuAutoPublishRun r = runRepo.findById(runId).orElse(null);
         if (r == null) return;
         r.setStatus("SKIPPED");
@@ -91,6 +92,7 @@ public class TemuAutoPublishLogService {
 
     @Transactional
     public void finishSucceeded(Long runId, Long publishRunId, String eligibilityJson, String summary) {
+        if (runId == null) return;
         TemuAutoPublishRun r = runRepo.findById(runId).orElse(null);
         if (r == null) return;
         r.setStatus("SUCCEEDED");
@@ -104,6 +106,7 @@ public class TemuAutoPublishLogService {
 
     @Transactional
     public void finishFailed(Long runId, Long publishRunId, String eligibilityJson, String error) {
+        if (runId == null) return;
         TemuAutoPublishRun r = runRepo.findById(runId).orElse(null);
         if (r == null) return;
         r.setStatus("FAILED");
@@ -167,6 +170,7 @@ public class TemuAutoPublishLogService {
 
     @Transactional(readOnly = true)
     public Map<String, Object> summarizeRun(Long runId) {
+        if (runId == null) return null;
         TemuAutoPublishRun r = runRepo.findById(runId).orElse(null);
         if (r == null) return null;
         Map<String, Object> out = new LinkedHashMap<>();
@@ -182,6 +186,28 @@ public class TemuAutoPublishLogService {
         out.put("eligibilityJson", r.getEligibilityJson());
         out.put("logs", listLogs(runId));
         return out;
+    }
+
+    @Transactional
+    public Map<String, Object> clearAllLogs() {
+        long runCount = runRepo.count();
+        long logCount = logRepo.count();
+
+        if (logCount > 0) {
+            logRepo.deleteAllInBatch();
+        }
+        if (runCount > 0) {
+            runRepo.deleteAllInBatch();
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("success", true);
+        result.put("deletedRuns", runCount);
+        result.put("deletedLogs", logCount);
+        result.put("message", runCount == 0 && logCount == 0
+                ? "当前没有可清空的自动发布日志数据"
+                : String.format("已清空 TEMU 自动发布日志：%d 条 run，%d 条明细日志", runCount, logCount));
+        return result;
     }
 
     public String toJsonSafe(Object o) {

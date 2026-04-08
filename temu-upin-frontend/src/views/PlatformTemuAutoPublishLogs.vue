@@ -43,9 +43,10 @@
                 placeholder="关键字(原因/错误)"
                 style="width: 220px"
                 allow-clear
-                @pressEnter="reload"
+                @pressEnter="search"
               />
-              <a-button type="primary" :loading="loading" @click="reload">查询</a-button>
+              <a-button type="primary" :loading="loading" @click="search">查询</a-button>
+              <a-button danger :loading="clearing" @click="clearAllLogs">清空数据</a-button>
             </a-space>
           </div>
         </div>
@@ -177,7 +178,7 @@
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { message } from 'ant-design-vue'
+import { message, Modal } from 'ant-design-vue'
 import { useRoute, useRouter } from 'vue-router'
 import ProLayout from '@/platform/components/ProLayout.vue'
 import { temuAutoPublishLogsApi } from '@/platform/api/temuAutoPublishLogs'
@@ -187,6 +188,7 @@ const router = useRouter()
 
 const workerLoading = ref(false)
 const worker = ref(null)
+const clearing = ref(false)
 
 const loading = ref(false)
 const runs = ref([])
@@ -216,7 +218,8 @@ const pagination = computed(() => ({
   pageSize: pageSize.value,
   total: total.value,
   showSizeChanger: true,
-  showTotal: (t) => `共 ${t} 条`
+  showTotal: (t) => `共 ${t} 条`,
+  pageSizeOptions: ['10', '20', '50', '100']
 }))
 
 const statusColor = (s) => {
@@ -252,6 +255,11 @@ const reload = async () => {
   }
 }
 
+const search = () => {
+  page.value = 1
+  reload()
+}
+
 const loadWorkerStatus = async () => {
   workerLoading.value = true
   try {
@@ -272,6 +280,38 @@ const onTableChange = (pager) => {
   page.value = pager?.current || 1
   pageSize.value = pager?.pageSize || 20
   reload()
+}
+
+const clearAllLogs = () => {
+  Modal.confirm({
+    title: '确认清空自动发布日志',
+    content: '会删除 TEMU 自动发布 run 记录和对应明细日志。清空后无法恢复，但不影响已发布商品数据。',
+    okText: '确认清空',
+    okButtonProps: { danger: true },
+    onOk: async () => {
+      clearing.value = true
+      try {
+        const res = await temuAutoPublishLogsApi.clearAllLogs()
+        if (res?.success) {
+          logsOpen.value = false
+          logs.value = []
+          sample.value = null
+          selectedRun.value = null
+          runs.value = []
+          total.value = 0
+          page.value = 1
+          message.success(res.message || '自动发布日志已清空')
+          await reload()
+          return
+        }
+        message.error(res?.message || '清空失败')
+      } catch (e) {
+        message.error(e.message || '清空失败')
+      } finally {
+        clearing.value = false
+      }
+    }
+  })
 }
 
 const logsOpen = ref(false)
