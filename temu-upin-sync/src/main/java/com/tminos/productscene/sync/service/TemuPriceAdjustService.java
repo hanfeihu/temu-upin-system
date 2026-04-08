@@ -196,17 +196,20 @@ public class TemuPriceAdjustService {
                 .filter(Objects::nonNull)
                 .distinct()
                 .toList();
-        Map<Long, String> goodsMainImageMap = goodsRepository.findAllById(new ArrayList<>(goodsIds)).stream()
-                .filter(goods -> goods.getId() != null)
-                .collect(Collectors.toMap(TemuGoods::getId, TemuGoods::getMainImageUrl, (left, right) -> left, LinkedHashMap::new));
+        Map<Long, String> goodsMainImageMap = new LinkedHashMap<>();
+        for (TemuGoods goods : goodsRepository.findAllById(new ArrayList<>(goodsIds))) {
+            if (goods.getId() != null) {
+                goodsMainImageMap.putIfAbsent(goods.getId(), goods.getMainImageUrl());
+            }
+        }
 
-        Map<Long, String> imageUrlMap = goodsSkuMap.values().stream()
-                .filter(sku -> sku.getProductSkuId() != null)
-                .collect(Collectors.toMap(
-                        TemuGoodsSku::getProductSkuId,
-                        sku -> resolveSkuImageUrl(sku, goodsMainImageMap.get(sku.getGoodsId())),
-                        (left, right) -> left,
-                        LinkedHashMap::new));
+        Map<Long, String> imageUrlMap = new LinkedHashMap<>();
+        for (TemuGoodsSku sku : goodsSkuMap.values()) {
+            if (sku.getProductSkuId() == null) {
+                continue;
+            }
+            imageUrlMap.putIfAbsent(sku.getProductSkuId(), resolveSkuImageUrl(sku, goodsMainImageMap.get(sku.getGoodsId())));
+        }
 
         List<Long> skuIds = goodsSkuMap.values().stream()
                 .map(TemuGoodsSku::getId)
@@ -219,17 +222,21 @@ public class TemuPriceAdjustService {
                         LinkedHashMap::new,
                         Collectors.mapping(spec -> spec.getParentSpecName() + ": " + spec.getSpecName(), Collectors.joining(" / "))));
 
-        Map<Long, String> specInfoByProductSkuId = goodsSkuMap.values().stream()
-                .filter(sku -> sku.getProductSkuId() != null && sku.getId() != null)
-                .collect(Collectors.toMap(
-                        TemuGoodsSku::getProductSkuId,
-                        sku -> specInfoBySkuId.get(sku.getId()),
-                        (left, right) -> left,
-                        LinkedHashMap::new));
+        Map<Long, String> specInfoByProductSkuId = new LinkedHashMap<>();
+        for (TemuGoodsSku sku : goodsSkuMap.values()) {
+            if (sku.getProductSkuId() == null || sku.getId() == null) {
+                continue;
+            }
+            specInfoByProductSkuId.putIfAbsent(sku.getProductSkuId(), specInfoBySkuId.get(sku.getId()));
+        }
 
-        Map<Long, Integer> currentSupplyPriceMap = goodsSkuPriceRepository.findByShopIdAndProductSkuIdIn(shopId, productSkuIds).stream()
-                .filter(price -> price.getProductSkuId() != null)
-                .collect(Collectors.toMap(TemuGoodsSkuPrice::getProductSkuId, TemuGoodsSkuPrice::getSupplierPrice, (left, right) -> left, LinkedHashMap::new));
+        Map<Long, Integer> currentSupplyPriceMap = new LinkedHashMap<>();
+        for (TemuGoodsSkuPrice price : goodsSkuPriceRepository.findByShopIdAndProductSkuIdIn(shopId, productSkuIds)) {
+            if (price.getProductSkuId() == null) {
+                continue;
+            }
+            currentSupplyPriceMap.putIfAbsent(price.getProductSkuId(), price.getSupplierPrice());
+        }
 
         return new AdjustSkuContext(goodsSkuMap, specInfoByProductSkuId, currentSupplyPriceMap, imageUrlMap);
     }

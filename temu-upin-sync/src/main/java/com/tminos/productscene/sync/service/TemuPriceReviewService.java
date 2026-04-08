@@ -483,10 +483,27 @@ public class TemuPriceReviewService {
                         successCount++;
                     } else {
                         failCount++;
-                        errors.add("订单" + order.getOrderId() + ": " + defaultIfBlank(result.errorMsg, "TEMU接口返回失败"));
+                        String failureDetail = buildReviewApiFailureDetail(result);
+                        log.warn("核价单审批失败, shopId={}, localOrderId={}, orderId={}, action={}, apiType={}, params={}, detail={}, raw={}",
+                                shopId,
+                                order.getId(),
+                                order.getOrderId(),
+                                action,
+                                apiType,
+                                summarizeReviewParams(params),
+                                failureDetail,
+                                truncate(result == null ? null : result.raw, 1500));
+                        errors.add("订单" + order.getOrderId() + ": " + failureDetail);
                     }
                 } catch (Exception e) {
                     failCount++;
+                    log.warn("核价单审批异常, shopId={}, localOrderId={}, orderId={}, action={}, message={}",
+                            shopId,
+                            order.getId(),
+                            order.getOrderId(),
+                            action,
+                            e.getMessage(),
+                            e);
                     errors.add("订单" + order.getOrderId() + ": " + defaultIfBlank(e.getMessage(), e.getClass().getSimpleName()));
                 }
             }
@@ -530,8 +547,54 @@ public class TemuPriceReviewService {
         return builder.length() > 0 ? builder.toString() : "批量核价失败";
     }
 
+    private String buildReviewApiFailureDetail(TemuOpenApiClient.ApiResult result) {
+        String errorMsg = defaultIfBlank(result == null ? null : result.errorMsg, "TEMU接口返回失败");
+        Map<String, Object> rawMap = parseRawResponse(result == null ? null : result.raw);
+        String errorCode = rawMap.get("errorCode") == null ? null : String.valueOf(rawMap.get("errorCode"));
+        String rawSnippet = truncate(result == null ? null : result.raw, 500);
+
+        StringBuilder builder = new StringBuilder(errorMsg);
+        if (errorCode != null && !errorCode.isBlank()) {
+            builder.append(" (errorCode=").append(errorCode).append(')');
+        }
+        if (rawSnippet != null && !rawSnippet.isBlank() && !rawSnippet.equals(errorMsg)) {
+            builder.append(" raw=").append(rawSnippet);
+        }
+        return builder.toString();
+    }
+
     private String defaultIfBlank(String value, String fallback) {
         return value == null || value.isBlank() ? fallback : value;
+    }
+
+    private Map<String, Object> parseRawResponse(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return Map.of();
+        }
+        try {
+            return GSON.fromJson(raw, Map.class);
+        } catch (Exception e) {
+            return Map.of();
+        }
+    }
+
+    private String summarizeReviewParams(Map<String, Object> params) {
+        if (params == null || params.isEmpty()) {
+            return "{}";
+        }
+        Object orderId = params.get("orderId");
+        Object bargainReasonList = params.get("bargainReasonList");
+        Object priceItemList = params.get("priceItemList");
+        int bargainReasonCount = bargainReasonList instanceof List<?> list ? list.size() : 0;
+        int priceItemCount = priceItemList instanceof List<?> list ? list.size() : 0;
+        return "orderId=" + orderId + ", bargainReasonList=" + bargainReasonCount + ", priceItemList=" + priceItemCount;
+    }
+
+    private String truncate(String value, int maxLength) {
+        if (value == null || value.length() <= maxLength) {
+            return value;
+        }
+        return value.substring(0, maxLength) + "...";
     }
 
     private List<Map<String, Object>> buildBargainReasonList(List<PriceReviewDTO.BargainReasonItem> source) {
