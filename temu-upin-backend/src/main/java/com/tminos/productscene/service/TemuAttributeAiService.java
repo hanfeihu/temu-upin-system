@@ -4,15 +4,21 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tminos.productscene.config.AITemuAttrFillerConfig;
+import com.tminos.productscene.util.TextAiUrlHelper;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
+import org.springframework.http.client.ClientHttpResponse;
 import org.springframework.web.client.RestTemplate;
 
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 
 @Service
@@ -200,40 +206,90 @@ public class TemuAttributeAiService {
                 if (isReq) requiredOnly.add(one);
             }
             String prompt = buildPrompt(productCtx, requiredOnly);
+            String model = defaultModel();
 
             Map<String, Object> req = new LinkedHashMap<>();
-            req.put("model", defaultModel());
+            req.put("model", model);
             req.put("messages", List.of(
                     Map.of("role", "system", "content", systemInstruction()),
                     Map.of("role", "user", "content", prompt)
             ));
             req.put("max_tokens", config.getMaxTokens() != null ? config.getMaxTokens() : 2500);
+            req.put("stream", true);
 
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
+            headers.setAccept(List.of(MediaType.TEXT_EVENT_STREAM, MediaType.APPLICATION_JSON));
             headers.set("Authorization", "Bearer " + config.getApiKey());
 
             HttpEntity<Map<String, Object>> httpEntity = new HttpEntity<>(req, headers);
             String url = completionsUrl(config.getBaseUrl());
+            String requestJson = objectMapper.writeValueAsString(req);
 
-            ResponseEntity<String> resp = restTemplate.exchange(url, HttpMethod.POST, httpEntity, String.class);
-            if (resp.getStatusCode() != HttpStatus.OK || !StringUtils.hasText(resp.getBody())) {
+            log.info("TemuAttributeAiService.fill request model={} url={} productNameLen={} templatePropertyCount={} requiredPropertyCount={} attrsJsonLen={} originalJsonLen={} skuCount={} promptLen={} maxTokens={}",
+                    model,
+                    url,
+                    productName == null ? 0 : productName.length(),
+                    props.size(),
+                    requiredOnly.size(),
+                    attributesDataJson == null ? 0 : attributesDataJson.length(),
+                    originalContentJson == null ? 0 : originalContentJson.length(),
+                    extractSkuCount(skuSummary),
+                    prompt.length(),
+                    req.get("max_tokens"));
+            log.info("TemuAttributeAiService.fill curl={}", buildCurlCommand(url, config.getApiKey(), requestJson));
+
+            StreamResult streamResult = restTemplate.execute(
+                    url,
+                    HttpMethod.POST,
+                    request -> {
+                        request.getHeaders().putAll(headers);
+                        request.getBody().write(requestJson.getBytes(StandardCharsets.UTF_8));
+                    },
+                    response -> readStreamingResponse(response)
+            );
+
+            if (streamResult == null) {
                 AiFillResult r = new AiFillResult();
                 r.setSuccess(false);
-                r.setErrorMsg("AI request failed: " + resp.getStatusCode());
+                r.setErrorMsg("AI request failed: null response");
                 return r;
             }
 
-            String content = extractAssistantContent(resp.getBody());
+            String responseBody = streamResult.raw;
+            if (streamResult.statusCode != HttpStatus.OK || !StringUtils.hasText(responseBody)) {
+                log.warn("TemuAttributeAiService.fill request failed status={} bodyLen={} bodyPreview={}",
+                        streamResult.statusCode,
+                        responseBody == null ? 0 : responseBody.length(),
+                        preview(responseBody, 1200));
+                AiFillResult r = new AiFillResult();
+                r.setSuccess(false);
+                r.setErrorMsg("AI request failed: " + streamResult.statusCode);
+                r.setRaw(responseBody);
+                return r;
+            }
+
+            logResponseShape(responseBody);
+
+            String content = streamResult.content;
             if (!StringUtils.hasText(content)) {
+                log.warn("TemuAttributeAiService.fill empty assistant content responseBodyLen={} responseBodyPreview={}",
+                        responseBody.length(),
+                        preview(responseBody, 1200));
                 AiFillResult r = new AiFillResult();
                 r.setSuccess(false);
                 r.setErrorMsg("Empty AI response");
+                r.setRaw(responseBody);
                 return r;
             }
 
+            log.info("TemuAttributeAiService.fill extracted assistant content contentLen={} contentPreview={}",
+                    content.length(),
+                    preview(content, 1200));
+
             // Expect pure JSON
-            Map<String, Object> ai = objectMapper.readValue(content, new TypeReference<Map<String, Object>>() {});
+            String normalizedContent = stripCodeFence(content);
+            Map<String, Object> ai = objectMapper.readValue(normalizedContent, new TypeReference<Map<String, Object>>() {});
             @SuppressWarnings("unchecked")
             List<Map<String, Object>> filled = ai.get("properties") instanceof List<?> l ? (List<Map<String, Object>>) ai.get("properties") : Collections.emptyList();
 
@@ -284,6 +340,11 @@ public class TemuAttributeAiService {
             // Recompute missing required pids based on our final post-processed output.
             missing = computeMissingRequiredPids(filled, templateByTemplatePid);
 
+            log.info("TemuAttributeAiService.fill parsed result propertiesCount={} missingRequiredCount={} warningsCount={}",
+                    filled.size(),
+                    missing.size(),
+                    warnings.size());
+
             AiFillResult ok = new AiFillResult();
             ok.setSuccess(true);
             ok.setProperties(filled);
@@ -293,12 +354,150 @@ public class TemuAttributeAiService {
             return ok;
 
         } catch (Exception e) {
-            log.warn("AI fill failed: {}", e.getMessage());
+            log.warn("TemuAttributeAiService.fill failed: {}", e.getMessage(), e);
             AiFillResult r = new AiFillResult();
             r.setSuccess(false);
             r.setErrorMsg(e.getMessage());
             return r;
         }
+    }
+
+    private int extractSkuCount(Map<String, Object> skuSummary) {
+        if (skuSummary == null) return 0;
+        Object count = skuSummary.get("skuCount");
+        if (count instanceof Number n) return n.intValue();
+        try {
+            return count == null ? 0 : Integer.parseInt(String.valueOf(count));
+        } catch (Exception ignored) {
+            return 0;
+        }
+    }
+
+    private String preview(String raw, int maxLen) {
+        if (!StringUtils.hasText(raw)) return null;
+        String normalized = raw.replace("\r", "\\r").replace("\n", "\\n");
+        if (normalized.length() <= maxLen) return normalized;
+        return normalized.substring(0, maxLen) + "...";
+    }
+
+    private String buildCurlCommand(String url, String apiKey, String requestJson) {
+        return "curl -sS -X POST " + shellQuote(url)
+                + " -H " + shellQuote("Content-Type: application/json")
+                + " -H " + shellQuote("Accept: text/event-stream, application/json")
+                + " -H " + shellQuote("Authorization: Bearer " + apiKey)
+                + " --data-raw " + shellQuote(requestJson);
+    }
+
+    private String shellQuote(String raw) {
+        if (raw == null) {
+            return "''";
+        }
+        return "'" + raw.replace("'", "'\"'\"'") + "'";
+    }
+
+    private void logResponseShape(String raw) {
+        try {
+            JsonNode root = objectMapper.readTree(raw);
+            JsonNode choices = root.path("choices");
+            int choicesSize = choices.isArray() ? choices.size() : -1;
+            JsonNode firstChoice = choices.isArray() && !choices.isEmpty() ? choices.get(0) : null;
+            String finishReason = firstChoice == null ? null : text(firstChoice, "finish_reason");
+            JsonNode message = firstChoice == null ? null : firstChoice.path("message");
+            JsonNode contentNode = message == null ? null : message.get("content");
+            String contentNodeType = jsonNodeType(contentNode);
+            int contentArraySize = contentNode != null && contentNode.isArray() ? contentNode.size() : -1;
+            boolean hasToolCalls = message != null && message.has("tool_calls") && !message.path("tool_calls").isEmpty();
+            boolean hasRefusal = message != null && message.has("refusal") && !message.path("refusal").isNull();
+            List<String> messageKeys = new ArrayList<>();
+            if (message != null && message.isObject()) {
+                message.fieldNames().forEachRemaining(messageKeys::add);
+            }
+            String contentNodePreview = null;
+            if (contentNode != null) {
+                contentNodePreview = contentNode.isTextual()
+                        ? preview(contentNode.asText(), 600)
+                        : preview(contentNode.toString(), 600);
+            }
+            log.info("TemuAttributeAiService.fill response shape choicesSize={} finishReason={} messageKeys={} contentNodeType={} contentArraySize={} hasToolCalls={} hasRefusal={} contentNodePreview={}",
+                    choicesSize,
+                    finishReason,
+                    messageKeys,
+                    contentNodeType,
+                    contentArraySize,
+                    hasToolCalls,
+                    hasRefusal,
+                    contentNodePreview);
+        } catch (Exception e) {
+            log.warn("TemuAttributeAiService.fill response shape parse failed: {}", e.getMessage());
+        }
+    }
+
+    private StreamResult readStreamingResponse(ClientHttpResponse response) throws IOException {
+        StringBuilder raw = new StringBuilder();
+        StringBuilder content = new StringBuilder();
+        InputStream body = response.getBody();
+        if (body == null) {
+            return new StreamResult(response.getStatusCode(), null, null);
+        }
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(body, StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                raw.append(line).append('\n');
+                if (!line.startsWith("data:")) {
+                    continue;
+                }
+                String payload = line.substring(5).trim();
+                if (!StringUtils.hasText(payload) || "[DONE]".equals(payload)) {
+                    continue;
+                }
+                appendStreamingContent(payload, content);
+            }
+        }
+        String rawText = raw.toString().trim();
+        return new StreamResult(response.getStatusCode(), rawText, content.toString().trim());
+    }
+
+    private void appendStreamingContent(String payload, StringBuilder content) {
+        try {
+            JsonNode root = objectMapper.readTree(payload);
+            JsonNode choices = root.path("choices");
+            if (!choices.isArray() || choices.isEmpty()) {
+                return;
+            }
+            JsonNode delta = choices.get(0).path("delta");
+            if (delta.isMissingNode() || delta.isNull()) {
+                return;
+            }
+            JsonNode deltaContent = delta.get("content");
+            if (deltaContent == null || deltaContent.isNull()) {
+                return;
+            }
+            if (deltaContent.isTextual()) {
+                content.append(deltaContent.asText());
+                return;
+            }
+            if (deltaContent.isArray()) {
+                for (JsonNode part : deltaContent) {
+                    String text = part.path("text").asText(null);
+                    if (StringUtils.hasText(text)) {
+                        content.append(text);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("TemuAttributeAiService.fill stream chunk parse failed: {} payloadPreview={}", e.getMessage(), preview(payload, 600));
+        }
+    }
+
+    private String jsonNodeType(JsonNode node) {
+        if (node == null) return "missing";
+        if (node.isNull()) return "null";
+        if (node.isTextual()) return "string";
+        if (node.isArray()) return "array";
+        if (node.isObject()) return "object";
+        if (node.isBoolean()) return "boolean";
+        if (node.isNumber()) return "number";
+        return node.getNodeType().name().toLowerCase(Locale.ROOT);
     }
 
     private void applyRequiredNonZeroOverrides(List<Map<String, Object>> filled,
@@ -953,11 +1152,7 @@ public class TemuAttributeAiService {
     }
 
     private String completionsUrl(String baseUrl) {
-        if (!StringUtils.hasText(baseUrl)) return "https://cliapi.tminos.com/v1/chat/completions";
-        String b = baseUrl.trim();
-        if (b.endsWith("/")) b = b.substring(0, b.length() - 1);
-        if (b.endsWith("/v1")) return b + "/chat/completions";
-        return b + "/v1/chat/completions";
+        return TextAiUrlHelper.chatCompletionsUrl(baseUrl, "https://chatbot.tminos.com");
     }
 
     private String defaultModel() {
@@ -971,8 +1166,43 @@ public class TemuAttributeAiService {
         if (!choices.isArray() || choices.isEmpty()) return null;
         JsonNode msg = choices.get(0).path("message");
         String content = msg.path("content").asText(null);
-        if (content == null) return null;
-        return content.trim();
+        if (StringUtils.hasText(content)) {
+            return content.trim();
+        }
+        JsonNode contentNode = msg.get("content");
+        if (contentNode != null && contentNode.isArray()) {
+            StringBuilder sb = new StringBuilder();
+            for (JsonNode part : contentNode) {
+                String text = part.path("text").asText(null);
+                if (StringUtils.hasText(text)) {
+                    sb.append(text);
+                }
+            }
+            if (!sb.isEmpty()) {
+                return sb.toString().trim();
+            }
+        }
+        return null;
+    }
+
+    private String stripCodeFence(String content) {
+        if (!StringUtils.hasText(content)) {
+            return content;
+        }
+        String trimmed = content.trim();
+        if (!trimmed.startsWith("```")) {
+            return trimmed;
+        }
+        int firstLineBreak = trimmed.indexOf('\n');
+        if (firstLineBreak < 0) {
+            return trimmed.replace("```", "").trim();
+        }
+        String body = trimmed.substring(firstLineBreak + 1);
+        int endFence = body.lastIndexOf("```");
+        if (endFence >= 0) {
+            body = body.substring(0, endFence);
+        }
+        return body.trim();
     }
 
     private String text(JsonNode node, String field) {
@@ -1005,5 +1235,17 @@ public class TemuAttributeAiService {
         public void setWarnings(List<String> warnings) { this.warnings = warnings; }
         public String getRaw() { return raw; }
         public void setRaw(String raw) { this.raw = raw; }
+    }
+
+    private static class StreamResult {
+        private final HttpStatusCode statusCode;
+        private final String raw;
+        private final String content;
+
+        private StreamResult(HttpStatusCode statusCode, String raw, String content) {
+            this.statusCode = statusCode;
+            this.raw = raw;
+            this.content = content;
+        }
     }
 }
