@@ -6,17 +6,25 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tminos.productscene.config.AITemuTitleOptimizerConfig;
 import com.tminos.productscene.dto.TemuCategoryDTO;
 import com.tminos.productscene.entity.ProductCollection;
+import com.tminos.productscene.util.TextAiUrlHelper;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.http.client.ClientHttpResponse;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestTemplate;
 
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -122,22 +130,34 @@ public class TemuTitleOptimizationService {
                 Map.of("role", "user", "content", buildPrompt(productContext, failedKeywords, attempt))
         ));
         req.put("max_tokens", config.getMaxTokens() == null ? 1600 : Math.max(400, config.getMaxTokens()));
+        req.put("stream", true);
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.setAccept(List.of(MediaType.TEXT_EVENT_STREAM, MediaType.APPLICATION_JSON));
         headers.setBearerAuth(config.getApiKey().trim());
 
-        ResponseEntity<String> resp = restTemplate.exchange(
-                completionsUrl(config.getBaseUrl()),
+        String url = completionsUrl(config.getBaseUrl());
+        String requestJson = objectMapper.writeValueAsString(req);
+
+        StreamResult streamResult = restTemplate.execute(
+                url,
                 HttpMethod.POST,
-                new HttpEntity<>(req, headers),
-                String.class
+                request -> {
+                    request.getHeaders().putAll(headers);
+                    request.getBody().write(requestJson.getBytes(StandardCharsets.UTF_8));
+                },
+                this::readStreamingResponse
         );
-        if (resp.getStatusCode() != HttpStatus.OK || !StringUtils.hasText(resp.getBody())) {
-            throw new IllegalStateException("AI request failed: " + resp.getStatusCode());
+
+        if (streamResult == null) {
+            throw new IllegalStateException("AI request failed: null response");
+        }
+        if (streamResult.statusCode != HttpStatus.OK || !StringUtils.hasText(streamResult.raw)) {
+            throw new IllegalStateException("AI request failed: " + streamResult.statusCode);
         }
 
-        String content = stripCodeFence(extractAssistantContent(resp.getBody()));
+        String content = stripCodeFence(streamResult.content);
         if (!StringUtils.hasText(content)) {
             throw new IllegalStateException("Empty AI response");
         }
@@ -373,17 +393,7 @@ public class TemuTitleOptimizationService {
     }
 
     private String completionsUrl(String baseUrl) {
-        if (!StringUtils.hasText(baseUrl)) {
-            return "https://cliapi.tminos.com/v1/chat/completions";
-        }
-        String trimmed = baseUrl.trim();
-        if (trimmed.endsWith("/chat/completions")) {
-            return trimmed;
-        }
-        if (trimmed.endsWith("/v1")) {
-            return trimmed + "/chat/completions";
-        }
-        return trimmed + "/v1/chat/completions";
+        return TextAiUrlHelper.chatCompletionsUrl(baseUrl, "https://chatbot.tminos.com");
     }
 
     private String defaultModel() {
@@ -415,6 +425,67 @@ public class TemuTitleOptimizationService {
         return null;
     }
 
+    private StreamResult readStreamingResponse(ClientHttpResponse response) throws IOException {
+        HttpStatusCode statusCode = response.getStatusCode();
+        StringBuilder raw = new StringBuilder();
+        StringBuilder content = new StringBuilder();
+
+        try (InputStream body = response.getBody()) {
+            if (body != null) {
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(body, StandardCharsets.UTF_8))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        raw.append(line).append('\n');
+                        if (!line.startsWith("data:")) {
+                            continue;
+                        }
+                        String payload = line.substring(5).trim();
+                        if (!StringUtils.hasText(payload) || "[DONE]".equals(payload)) {
+                            continue;
+                        }
+                        appendStreamingContent(payload, content);
+                    }
+                }
+            }
+        }
+
+        String rawText = raw.toString();
+        String contentText = content.toString();
+        if (!StringUtils.hasText(contentText) && StringUtils.hasText(rawText) && !rawText.contains("data:")) {
+            try {
+                contentText = extractAssistantContent(rawText);
+            } catch (Exception ignored) {
+            }
+        }
+        return new StreamResult(statusCode, rawText, contentText);
+    }
+
+    private void appendStreamingContent(String payload, StringBuilder content) {
+        try {
+            JsonNode root = objectMapper.readTree(payload);
+            JsonNode choices = root.path("choices");
+            if (!choices.isArray() || choices.isEmpty()) {
+                return;
+            }
+            JsonNode delta = choices.get(0).path("delta");
+            String text = delta.path("content").asText(null);
+            if (StringUtils.hasText(text)) {
+                content.append(text);
+                return;
+            }
+            JsonNode contentNode = delta.get("content");
+            if (contentNode != null && contentNode.isArray()) {
+                for (JsonNode part : contentNode) {
+                    String partText = part.path("text").asText(null);
+                    if (StringUtils.hasText(partText)) {
+                        content.append(partText);
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
     private String stripCodeFence(String content) {
         if (!StringUtils.hasText(content)) {
             return content;
@@ -433,6 +504,9 @@ public class TemuTitleOptimizationService {
             body = body.substring(0, endFence);
         }
         return body.trim();
+    }
+
+    private record StreamResult(HttpStatusCode statusCode, String raw, String content) {
     }
 
     private String normalizePlainText(String raw, int maxLength) {
