@@ -152,6 +152,29 @@
               </template>
             </a-table-column>
           </a-table>
+
+          <a-divider>SKU 调价历史</a-divider>
+          <a-table :dataSource="normalizedPriceChanges" rowKey="historyRowKey" :pagination="false" bordered size="small" :scroll="{ x: 1000 }">
+            <a-table-column title="SKU 图片" key="imageUrl" width="90">
+              <template #default="{ record }">
+                <a-image v-if="record.imageUrl" :src="record.imageUrl" :width="44" :height="44" class="sku-inline-thumb" />
+                <span v-else>-</span>
+              </template>
+            </a-table-column>
+            <a-table-column title="SKU ID" dataIndex="productSkuId" width="140" />
+            <a-table-column title="站点" key="siteName" width="140">
+              <template #default="{ record }">{{ record.siteName || record.siteId || '默认' }}</template>
+            </a-table-column>
+            <a-table-column title="原始价格" key="oldSupplierPrice" width="120">
+              <template #default="{ record }">{{ formatPrice(record.oldSupplierPrice) }}</template>
+            </a-table-column>
+            <a-table-column title="变更价格" key="newSupplierPrice" width="120">
+              <template #default="{ record }">{{ formatPrice(record.newSupplierPrice) }}</template>
+            </a-table-column>
+            <a-table-column title="时间" key="changedAt" width="180">
+              <template #default="{ record }">{{ formatDT(record.changedAt) }}</template>
+            </a-table-column>
+          </a-table>
         </template>
       </a-modal>
     </div>
@@ -246,6 +269,22 @@ const formatPriceRange = (minValue, maxValue) => {
 }
 
 const propertyRowKey = (record, index) => `${record.pid}-${record.vid ?? 'na'}-${index}`
+const historyRowKey = (record, index) => `${record.productSkuId || 'sku'}-${record.siteId ?? 'default'}-${record.changedAt || index}-${index}`
+
+const normalizedPriceChanges = computed(() => {
+  const directList = Array.isArray(detail.value?.priceChangeList) ? detail.value.priceChangeList : []
+  return directList.map((item, index) => ({
+    id: item.id,
+    productSkuId: item.productSkuId,
+    imageUrl: item.imageUrl,
+    siteId: item.siteId,
+    siteName: item.siteName,
+    oldSupplierPrice: item.oldSupplierPrice,
+    newSupplierPrice: item.newSupplierPrice,
+    changedAt: item.changedAt,
+    historyRowKey: historyRowKey(item, index)
+  }))
+})
 
 const buildGoodsExportQuery = () => {
   const params = new URLSearchParams()
