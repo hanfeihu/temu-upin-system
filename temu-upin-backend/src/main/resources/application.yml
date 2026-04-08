@@ -39,6 +39,10 @@ spring:
 
 # AI Image Generation Configuration
 ai:
+  text-channel:
+    base-url: ${AI_TEXT_CHANNEL_BASE_URL:https://chatbot.tminos.com}
+    api-key: ${AI_TEXT_CHANNEL_API_KEY:sk-gJcOn1tUeavYppjdDXIZiqmcdcZX1F4LwhKOz5TPj71TlsBi}
+
   image:
     providers:
       - name: stability
@@ -55,22 +59,20 @@ ai:
         enabled: false
         api-key: ${RUNWAY_API_KEY:}
     
-    # 提示词优化（使用文本模型）
     prompt-optimizer:
       enabled: true
       provider: tminos
-      base-url: http://cliapi.tminos.com
-      api-key: ${PROMPT_OPTIMIZER_API_KEY:1234}
-      model: ${PROMPT_OPTIMIZER_MODEL:gpt-5.2}
+      base-url: ${PROMPT_OPTIMIZER_BASE_URL:${AI_TEXT_CHANNEL_BASE_URL:https://chatbot.tminos.com}}
+      api-key: ${PROMPT_OPTIMIZER_API_KEY:${AI_TEXT_CHANNEL_API_KEY:sk-gJcOn1tUeavYppjdDXIZiqmcdcZX1F4LwhKOz5TPj71TlsBi}}
+      model: ${PROMPT_OPTIMIZER_MODEL:gpt-5.4}
 
   temu-attr-filler:
     enabled: true
-    # base-url can be either https://cliapi.tminos.com or https://cliapi.tminos.com/v1
-    base-url: ${TEMU_ATTR_AI_BASE_URL:https://cliapi.tminos.com/v1}
-    api-key: ${TEMU_ATTR_AI_API_KEY:1234}
-    model: ${TEMU_ATTR_AI_MODEL:gpt-5.2}
+    base-url: ${TEMU_ATTR_AI_BASE_URL:${AI_TEXT_CHANNEL_BASE_URL:https://chatbot.tminos.com}}
+    api-key: ${TEMU_ATTR_AI_API_KEY:${AI_TEXT_CHANNEL_API_KEY:sk-gJcOn1tUeavYppjdDXIZiqmcdcZX1F4LwhKOz5TPj71TlsBi}}
+    model: ${TEMU_ATTR_AI_MODEL:gpt-5.4}
     timeout-ms: ${TEMU_ATTR_AI_TIMEOUT_MS:240000}
-    max-tokens: ${TEMU_ATTR_AI_MAX_TOKENS:2500}
+    max-tokens: ${TEMU_ATTR_AI_MAX_TOKENS:250000}
 
     # Special attribute rules (pid based)
     # - force-empty-pids: AI must NOT fill these pids (leave empty)
@@ -82,8 +84,8 @@ ai:
 
   temu-title-optimizer:
     enabled: ${TEMU_TITLE_OPTIMIZER_ENABLED:true}
-    base-url: ${TEMU_TITLE_AI_BASE_URL:${TEMU_ATTR_AI_BASE_URL:https://cliapi.tminos.com/v1}}
-    api-key: ${TEMU_TITLE_AI_API_KEY:${TEMU_ATTR_AI_API_KEY:1234}}
+    base-url: ${TEMU_TITLE_AI_BASE_URL:${AI_TEXT_CHANNEL_BASE_URL:https://chatbot.tminos.com}}
+    api-key: ${TEMU_TITLE_AI_API_KEY:${AI_TEXT_CHANNEL_API_KEY:sk-gJcOn1tUeavYppjdDXIZiqmcdcZX1F4LwhKOz5TPj71TlsBi}}
     model: ${TEMU_TITLE_AI_MODEL:${TEMU_ATTR_AI_MODEL:gpt-5.2}}
     timeout-ms: ${TEMU_TITLE_AI_TIMEOUT_MS:240000}
     max-tokens: ${TEMU_TITLE_AI_MAX_TOKENS:1600}

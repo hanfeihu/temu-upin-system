@@ -3,6 +3,7 @@ package com.tminos.productscene.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tminos.productscene.config.AITemuAttrFillerConfig;
+import com.tminos.productscene.util.TextAiUrlHelper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -244,15 +245,7 @@ public class TemuMainSaleSpecAiService {
     }
 
     private String completionsUrl(String base) {
-        if (!StringUtils.hasText(base)) return "https://cliapi.tminos.com/v1/chat/completions";
-        String b = base.trim();
-        if (b.endsWith("/")) b = b.substring(0, b.length() - 1);
-        if (b.endsWith("/v1")) {
-            return b + "/chat/completions";
-        }
-        if (b.endsWith("/v1/chat/completions")) return b;
-        if (b.contains("/chat/completions")) return b;
-        return b + "/chat/completions";
+        return TextAiUrlHelper.chatCompletionsUrl(base, "https://chatbot.tminos.com");
     }
 
     private String extractAssistantContent(String raw) {

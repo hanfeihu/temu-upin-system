@@ -9,6 +9,7 @@ import com.tminos.productscene.dto.ProductDTO.*;
 import com.tminos.productscene.entity.*;
 import com.tminos.productscene.repository.*;
 import com.tminos.productscene.dto.StabilityFusionDTO;
+import com.tminos.productscene.util.TextAiUrlHelper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.*;
@@ -818,9 +819,10 @@ public class ImageGenerationService {
             headers.set("Authorization", "Bearer " + config.getApiKey());
             
             HttpEntity<Map<String, Object>> request = new HttpEntity<>(requestBody, headers);
+            String url = TextAiUrlHelper.chatCompletionsUrl(config.getBaseUrl(), "https://chatbot.tminos.com");
             
             ResponseEntity<String> response = restTemplate.postForEntity(
-                    config.getBaseUrl() + "/v1/chat/completions",
+                    url,
                     request,
                     String.class
             );
