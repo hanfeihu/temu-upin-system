@@ -42,6 +42,12 @@
               <a-select-option :value="false">否</a-select-option>
             </a-select>
           </a-form-item>
+          <a-form-item label="包含中文">
+            <a-select v-model:value="filters.containsChinese" style="width: 160px" allow-clear placeholder="全部">
+              <a-select-option :value="true">是</a-select-option>
+              <a-select-option :value="false">否</a-select-option>
+            </a-select>
+          </a-form-item>
 
           <a-form-item>
             <a-space>
@@ -104,6 +110,9 @@
             </template>
             <template v-else-if="column.key === 'filtered'">
               <a-tag :color="record.filtered ? 'red' : 'default'">{{ record.filtered ? '是' : '否' }}</a-tag>
+            </template>
+            <template v-else-if="column.key === 'containsChinese'">
+              <a-tag :color="record.containsChinese ? 'processing' : 'default'">{{ record.containsChinese ? '是' : '否' }}</a-tag>
             </template>
             <template v-else-if="['taskStartedAt', 'taskFinishedAt', 'updatedAt'].includes(column.key)">
               <span class="mono">{{ formatDateTime(record?.[column.key]) || '-' }}</span>
@@ -202,7 +211,8 @@ const fetchStats = async () => {
       spuId: filters.spuId ? Number(filters.spuId) : undefined,
       productId: filters.productId || undefined,
       imageType: filters.imageType ?? undefined,
-      filtered: filters.filtered
+      filtered: filters.filtered,
+      containsChinese: filters.containsChinese
     }
     const res = await ocrApi.statsTasks(params)
     if (res?.success) {
@@ -224,7 +234,8 @@ const filters = reactive({
   productId: '',
   imageType: undefined,
   execStatus: undefined,
-  filtered: undefined
+  filtered: undefined,
+  containsChinese: undefined
 })
 
 const columns = [
@@ -235,6 +246,7 @@ const columns = [
   { title: '图片', key: 'imageUrl', width: 120 },
   { title: '状态', key: 'execStatus', width: 110 },
   { title: '已过滤', key: 'filtered', width: 90 },
+  { title: '含中文', key: 'containsChinese', width: 90 },
   { title: '执行者IP', dataIndex: 'executorPublicIp', key: 'executorPublicIp', width: 140 },
   { title: '开始时间', dataIndex: 'taskStartedAt', key: 'taskStartedAt', width: 190 },
   { title: '完成时间', dataIndex: 'taskFinishedAt', key: 'taskFinishedAt', width: 190 },
@@ -310,6 +322,7 @@ const fetchList = async () => {
       imageType: filters.imageType ?? undefined,
       execStatus: filters.execStatus ?? undefined,
       filtered: filters.filtered,
+      containsChinese: filters.containsChinese,
       page: page.value - 1,
       size: pageSize.value
     }
@@ -339,6 +352,7 @@ const reset = async () => {
   filters.imageType = undefined
   filters.execStatus = undefined
   filters.filtered = undefined
+  filters.containsChinese = undefined
   await reload()
 }
 

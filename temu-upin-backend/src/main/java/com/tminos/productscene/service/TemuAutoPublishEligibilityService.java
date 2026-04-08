@@ -159,7 +159,10 @@ public class TemuAutoPublishEligibilityService {
                                         continue;
                                 }
                                 checked++;
-                                if (containsChinese(text)) {
+                                boolean containsChinese = t.getContainsChinese() != null
+                                                ? Boolean.TRUE.equals(t.getContainsChinese())
+                                                : containsChinese(text);
+                                if (containsChinese) {
                                         chineseHitTasks++;
                                         if (t.getId() != null) chineseHitTaskIds.add(t.getId());
                                 }
