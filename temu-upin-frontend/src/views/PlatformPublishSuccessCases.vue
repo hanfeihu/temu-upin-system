@@ -28,9 +28,10 @@
           :columns="columns"
           :dataSource="rows"
           :loading="loading"
-          :pagination="false"
+          :pagination="pagination"
           :scroll="{ x: 1100 }"
           size="middle"
+          @change="onTableChange"
         >
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'goodsId'">
@@ -149,6 +150,9 @@ const spuId = ref('')
 const temuCatid = ref('')
 const loading = ref(false)
 const rows = ref([])
+const page = ref(1)
+const pageSize = ref(20)
+const total = ref(0)
 
 const columns = [
   { title: 'caseId', dataIndex: 'id', key: 'id', width: 90 },
@@ -161,7 +165,16 @@ const columns = [
   { title: '操作', key: 'actions', width: 240, fixed: 'right' }
 ]
 
-const reload = async () => {
+const pagination = computed(() => ({
+  current: page.value,
+  pageSize: pageSize.value,
+  total: total.value,
+  showSizeChanger: true,
+  showTotal: (t) => `共 ${t} 条`,
+  pageSizeOptions: ['10', '20', '50', '100']
+}))
+
+const fetchList = async () => {
   loading.value = true
   try {
     const params = {}
@@ -169,9 +182,12 @@ const reload = async () => {
     const catid = String(temuCatid.value || '').trim()
     if (id) params.spuId = id
     if (catid) params.temuCatid = catid
+    params.page = page.value
+    params.pageSize = pageSize.value
     const res = await temuPublishSuccessCasesApi.list(params)
     if (res?.success) {
-      rows.value = Array.isArray(res.data) ? res.data : []
+      rows.value = Array.isArray(res.data?.content) ? res.data.content : []
+      total.value = Number(res.data?.totalElements || 0)
       if (!rows.value.length) message.info('暂无成功案例')
       return
     }
@@ -181,6 +197,17 @@ const reload = async () => {
   } finally {
     loading.value = false
   }
+}
+
+const reload = () => {
+  page.value = 1
+  fetchList()
+}
+
+const onTableChange = (pager) => {
+  page.value = pager?.current || 1
+  pageSize.value = pager?.pageSize || 20
+  fetchList()
 }
 
 const detailOpen = ref(false)
@@ -262,7 +289,7 @@ const fmtTime = (value) => {
 }
 
 onMounted(() => {
-  reload()
+  fetchList()
 })
 </script>
 

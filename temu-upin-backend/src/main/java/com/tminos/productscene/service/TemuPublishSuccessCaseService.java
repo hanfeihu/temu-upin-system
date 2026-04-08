@@ -5,12 +5,14 @@ import com.tminos.productscene.entity.ProductCollection;
 import com.tminos.productscene.entity.TemuPublishSuccessCase;
 import com.tminos.productscene.repository.TemuPublishSuccessCaseRepository;
 import jakarta.persistence.EntityNotFoundException;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
-import java.util.List;
 import java.util.Objects;
 
 @Service
@@ -43,18 +45,24 @@ public class TemuPublishSuccessCaseService {
     }
 
     @Transactional(readOnly = true)
-    public List<TemuPublishSuccessCaseDTO.Row> list(Long spuId, String temuCatid) {
-        List<TemuPublishSuccessCase> cases;
+    public Page<TemuPublishSuccessCaseDTO.Row> list(Long spuId, String temuCatid, int page, int pageSize) {
+        PageRequest pageable = PageRequest.of(
+                Math.max(page - 1, 0),
+                Math.min(Math.max(pageSize, 1), 100),
+                Sort.by(Sort.Direction.DESC, "id")
+        );
+
+        Page<TemuPublishSuccessCase> cases;
         if (spuId != null && StringUtils.hasText(temuCatid)) {
-            cases = successCaseRepository.findBySpuIdAndTemuCatidOrderByIdDesc(spuId, temuCatid);
+            cases = successCaseRepository.findBySpuIdAndTemuCatidOrderByIdDesc(spuId, temuCatid, pageable);
         } else if (spuId != null) {
-            cases = successCaseRepository.findBySpuIdOrderByIdDesc(spuId);
+            cases = successCaseRepository.findBySpuIdOrderByIdDesc(spuId, pageable);
         } else if (StringUtils.hasText(temuCatid)) {
-            cases = successCaseRepository.findByTemuCatidOrderByIdDesc(temuCatid);
+            cases = successCaseRepository.findByTemuCatidOrderByIdDesc(temuCatid, pageable);
         } else {
-            cases = successCaseRepository.findTop100ByOrderByIdDesc();
+            cases = successCaseRepository.findAllByOrderByIdDesc(pageable);
         }
-        return cases.stream().map(TemuPublishSuccessCaseDTO.Row::from).toList();
+        return cases.map(TemuPublishSuccessCaseDTO.Row::from);
     }
 
     @Transactional(readOnly = true)
