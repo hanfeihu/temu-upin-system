@@ -356,37 +356,25 @@ public class TemuImageTranslateService {
                 || !Objects.equals(carousel, newCarousel)
                 || !Objects.equals(detail, newDetail);
 
-        if (!Objects.equals(main, newMain)) {
-            pc.setProductMainImage(newMain);
-        }
-
         if (changed) {
-            pc.setCarouselImages(writeJson(newCarousel));
-            pc.setDetailImages(writeJson(newDetail));
+            ProductCollection latest = productCollectionRepository.findById(spuId)
+                    .orElseThrow(() -> new IllegalStateException("ProductCollection not found: " + spuId));
+            int latestLen = latest.getTemuAttributes() == null ? 0 : latest.getTemuAttributes().length();
+            int loadedLen = pc.getTemuAttributes() == null ? 0 : pc.getTemuAttributes().length();
+            log.info("normalizeProductImagesToTemu800 spuId={} beforeSave latest.temuAttributesLen={} loadedPc.temuAttributesLen={} latest.execStatus={}",
+                    spuId, latestLen, loadedLen, latest.getExecStatus());
 
-            // Before saving, reload latest from DB to avoid overwriting attributes updated concurrently by ATTR task.
-            // This prevents the lost-update scenario where ATTR saves attributes while IMG has a stale detached entity.
-            try {
-                ProductCollection latest = productCollectionRepository.findById(spuId).orElse(null);
-                int latestLen = latest == null || latest.getTemuAttributes() == null ? 0 : latest.getTemuAttributes().length();
-                int detachedLen = pc.getTemuAttributes() == null ? 0 : pc.getTemuAttributes().length();
-                log.info("normalizeProductImagesToTemu800 spuId={} beforeSave latest.temuAttributesLen={} detached.temuAttributesLen={}", spuId, latestLen, detachedLen);
-                
-                // Merge: preserve the latest temuAttributes if it's newer
-                if (latest != null && latestLen > 0 && detachedLen == 0) {
-                    pc.setTemuAttributes(latest.getTemuAttributes());
-                    log.info("normalizeProductImagesToTemu800 spuId={} merged temuAttributes from latest to prevent overwrite", spuId);
-                }
-            } catch (Exception ex) {
-                log.warn("normalizeProductImagesToTemu800 spuId={} beforeSave merge failed: {}", spuId, ex.getMessage());
-            }
+            latest.setProductMainImage(newMain);
+            latest.setCarouselImages(writeJson(newCarousel));
+            latest.setDetailImages(writeJson(newDetail));
 
-            productCollectionRepository.save(pc);
+            productCollectionRepository.save(latest);
 
             try {
                 ProductCollection latest2 = productCollectionRepository.findById(spuId).orElse(null);
                 int latestLen2 = latest2 == null || latest2.getTemuAttributes() == null ? 0 : latest2.getTemuAttributes().length();
-                log.info("normalizeProductImagesToTemu800 spuId={} afterSave latest.temuAttributesLen={}", spuId, latestLen2);
+                Integer latestExecStatus = latest2 == null ? null : latest2.getExecStatus();
+                log.info("normalizeProductImagesToTemu800 spuId={} afterSave latest.temuAttributesLen={} latest.execStatus={}", spuId, latestLen2, latestExecStatus);
             } catch (Exception ex) {
                 log.warn("normalizeProductImagesToTemu800 spuId={} afterSave check failed: {}", spuId, ex.getMessage());
             }
@@ -395,7 +383,7 @@ public class TemuImageTranslateService {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("spuId", spuId);
         out.put("changed", changed);
-        out.put("mainImage", pc.getProductMainImage());
+        out.put("mainImage", newMain);
         out.put("carouselCount", newCarousel.size());
         out.put("detailCount", newDetail.size());
         out.put("changes", changes);
