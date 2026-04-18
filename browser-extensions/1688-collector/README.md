@@ -28,7 +28,7 @@
 3. 点击「加载已解压的扩展程序」
 4. 选择本项目的扩展目录：
 
-   `extension/`
+   `browser-extensions/1688-collector/`
 
 安装成功后，打开 1688 页面右侧就会出现浮窗。
 
@@ -43,7 +43,7 @@
 
 ## 修改 dev/prod 地址（可选）
 
-默认地址在 [extension/config.js](extension/config.js) 里：
+默认地址在 [config.js](/Users/a1/Desktop/TEMU上品系统-新仓库/browser-extensions/1688-collector/config.js) 里：
 
 - `TMINOS_COLLECTOR_DEFAULTS.env`
 - `TMINOS_COLLECTOR_DEFAULTS.baseUrls`
@@ -53,6 +53,11 @@
 - 下载内容来自当前页面 DOM（即你看到的页面结构）；若页面数据由 JS 动态渲染，通常也会包含在下载结果里。
 - 不会自动点击分页/滚动加载；如果页面需要下拉加载更多内容，请先在页面里加载完成再点击采集。
 
+## 来源目录
+
+当前仓库中的这个插件目录直接同步自本机源目录：
+
+`/Users/a1/Nextcloud/1688 采集插件/extension`
 
 
 
