@@ -3,6 +3,7 @@
 
 # Vite
 **/dist/
+**/public/downloads/*.zip
 
 # Maven / Java
 **/target/

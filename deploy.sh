@@ -52,7 +52,7 @@ fi
 
 REMOTE_TARGET="$DEPLOY_USER@$DEPLOY_HOST"
 LOCAL_BACKEND_JAR="$SCRIPT_DIR/$BACKEND_MODULE/target/$BACKEND_JAR_NAME"
-LOCAL_FRONTEND_DIR="$SCRIPT_DIR/temu-upin-frontend"
+LOCAL_FRONTEND_DIR="$SCRIPT_DIR/${FRONTEND_DIR:-react-ant-6.3.5-admin}"
 LOCAL_FRONTEND_DIST="$LOCAL_FRONTEND_DIR/dist"
 SSH_OPTS=(-p "$DEPLOY_PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR)
 SCP_OPTS=(-P "$DEPLOY_PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR)

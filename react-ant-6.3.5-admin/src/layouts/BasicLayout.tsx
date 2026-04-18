@@ -1,10 +1,11 @@
 import {
+  DownloadOutlined,
   LogoutOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   UserOutlined,
 } from '@ant-design/icons';
-import { Avatar, Dropdown, Flex, Layout, Menu, Typography, theme } from 'antd';
+import { Avatar, Button, Dropdown, Flex, Layout, Menu, Typography, theme } from 'antd';
 import { useEffect, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
@@ -18,6 +19,7 @@ import { useAuth } from '@/context/AuthContext';
 
 const { Header, Sider, Content } = Layout;
 const { Text } = Typography;
+const PLUGIN_DOWNLOAD_PATH = '/downloads/tminos-1688-collector-latest.zip';
 
 const BasicLayout = () => {
   const navigate = useNavigate();
@@ -51,6 +53,10 @@ const BasicLayout = () => {
       label: '退出登录',
     },
   ];
+
+  function downloadPlugin() {
+    window.open(PLUGIN_DOWNLOAD_PATH, '_blank', 'noopener,noreferrer');
+  }
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
@@ -107,22 +113,27 @@ const BasicLayout = () => {
               </Text>
             </Flex>
 
-            <Dropdown
-              menu={{
-                items: userMenuItems,
-                onClick: ({ key }) => {
-                  if (key === 'logout') {
-                    logout();
-                    navigate('/login', { replace: true });
-                  }
-                },
-              }}
-            >
-              <Flex align="center" gap={8} style={{ cursor: 'pointer' }}>
-                <Avatar size="small" icon={<UserOutlined />} />
-                <Text>{user?.displayName || user?.username || '未登录'}</Text>
-              </Flex>
-            </Dropdown>
+            <Flex align="center" gap={12}>
+              <Button icon={<DownloadOutlined />} onClick={downloadPlugin}>
+                下载插件
+              </Button>
+              <Dropdown
+                menu={{
+                  items: userMenuItems,
+                  onClick: ({ key }) => {
+                    if (key === 'logout') {
+                      logout();
+                      navigate('/login', { replace: true });
+                    }
+                  },
+                }}
+              >
+                <Flex align="center" gap={8} style={{ cursor: 'pointer' }}>
+                  <Avatar size="small" icon={<UserOutlined />} />
+                  <Text>{user?.displayName || user?.username || '未登录'}</Text>
+                </Flex>
+              </Dropdown>
+            </Flex>
           </Flex>
         </Header>
 

@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "prepare:collector": "node ./scripts/build-collector-zip.mjs",
+    "predev": "npm run prepare:collector",
+    "prebuild": "npm run prepare:collector",
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview"
