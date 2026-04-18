@@ -5,24 +5,12 @@
         class="sider"
         :collapsed="collapsed"
         :collapsible="false"
-        width="240"
+        width="200"
+        :collapsedWidth="80"
       >
-        <div class="brand" @click="go('/')">
-          <div class="brand-mark">PS</div>
-          <div v-if="!collapsed" class="brand-text">
-            <div class="brand-title">Product Scene</div>
-            <div class="brand-sub">Platform Console</div>
-          </div>
-        </div>
-
-        <div class="sider-toolbar">
-          <a-button type="text" class="collapse-btn" @click="collapsed = !collapsed">
-            <template #icon>
-              <menu-unfold-outlined v-if="collapsed" />
-              <menu-fold-outlined v-else />
-            </template>
-            <span v-if="!collapsed">收起侧栏</span>
-          </a-button>
+        <div class="brand" :class="{ 'brand--collapsed': collapsed }" @click="go('/')">
+          <img src="/system-logo.png" alt="TMINOS" class="brand-logo" />
+          <span v-if="!collapsed" class="brand-title">TMINOS</span>
         </div>
 
         <a-menu
@@ -60,10 +48,22 @@
             <a-menu-item key="/platform/sync-config">同步配置</a-menu-item>
             <a-menu-item key="/platform/sync-tasks">同步任务</a-menu-item>
             <a-menu-item key="/platform/sync-goods">TEMU 商品数据</a-menu-item>
-            <a-menu-item key="/platform/sync-price-review">核价单管理</a-menu-item>
-            <a-menu-item key="/platform/sync-price-adjust">调价单管理</a-menu-item>
             <a-menu-item key="/platform/sync-activity">活动报名</a-menu-item>
           </a-sub-menu>
+
+          <a-menu-item key="/platform/sync-price-review">
+            <template #icon>
+              <file-text-outlined />
+            </template>
+            核价单管理
+          </a-menu-item>
+
+          <a-menu-item key="/platform/sync-price-adjust">
+            <template #icon>
+              <file-text-outlined />
+            </template>
+            调价单管理
+          </a-menu-item>
 
           <a-sub-menu key="group-temu">
             <template #icon>
@@ -95,7 +95,6 @@
               <setting-outlined />
             </template>
             <template #title>系统与日志</template>
-            <a-menu-item key="/platform/config">平台配置</a-menu-item>
             <a-menu-item key="/platform/ai-channels">AI 渠道管理</a-menu-item>
             <a-menu-item key="/platform/post-import-logs">自动化日志</a-menu-item>
             <a-menu-item key="/platform/biz-logs">业务日志</a-menu-item>
@@ -107,11 +106,19 @@
       <a-layout>
         <a-layout-header class="header">
           <div class="header-left">
+            <a-button type="text" class="header-collapse-btn" @click="collapsed = !collapsed">
+              <template #icon>
+                <menu-unfold-outlined v-if="collapsed" />
+                <menu-fold-outlined v-else />
+              </template>
+            </a-button>
             <div class="page-title">{{ title }}</div>
           </div>
           <div class="header-right">
             <a-space>
+              <span class="header-user">{{ authUser?.displayName || authUser?.username || '未登录' }}</span>
               <a-button @click="go('/ai')">进入 AI 做图</a-button>
+              <a-button @click="logout">退出登录</a-button>
             </a-space>
           </div>
         </a-layout-header>
@@ -128,6 +135,7 @@
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { AppstoreOutlined, MenuFoldOutlined, MenuUnfoldOutlined, SettingOutlined, FileTextOutlined } from '@ant-design/icons-vue'
+import { clearPlatformAuth, getPlatformAuthUser } from '@/utils/platformAuth'
 
 defineProps({
   title: { type: String, default: '平台端' }
@@ -138,13 +146,14 @@ const router = useRouter()
 
 const collapsed = ref(false)
 const openKeys = ref([])
+const authUser = computed(() => getPlatformAuthUser())
 
 const activeGroupKey = computed(() => {
   const p = route.path || ''
   if (p.startsWith('/platform/product-drafts') || p.startsWith('/platform/publish-logs') || p.startsWith('/platform/publish-success-cases') || p.startsWith('/platform/temu-auto-publish-logs')) {
     return 'group-product'
   }
-  if (p.startsWith('/platform/sync-')) {
+  if (p.startsWith('/platform/sync-config') || p.startsWith('/platform/sync-tasks') || p.startsWith('/platform/sync-goods') || p.startsWith('/platform/sync-activity')) {
     return 'group-sync'
   }
   if (p.startsWith('/platform/temu-apps') || p.startsWith('/platform/temu-shops') || p.startsWith('/platform/temu-attr-rules') || p.startsWith('/platform/spec-mappings/parent-spec-mappings')) {
@@ -153,7 +162,7 @@ const activeGroupKey = computed(() => {
   if (p.startsWith('/platform/temu-attr-ai-fill') || p.startsWith('/platform/temu-title-optimizer') || p.startsWith('/platform/image-translate-records') || p.startsWith('/platform/ocr-tasks') || p.startsWith('/platform/ocr-filter-words') || p.startsWith('/platform/title-filter-words') || p.startsWith('/platform/parser-test')) {
     return 'group-ai-tools'
   }
-  if (p.startsWith('/platform/config') || p.startsWith('/platform/ai-channels') || p.startsWith('/platform/post-import-logs') || p.startsWith('/platform/biz-logs')) {
+  if (p.startsWith('/platform/ai-channels') || p.startsWith('/platform/post-import-logs') || p.startsWith('/platform/biz-logs')) {
     return 'group-system'
   }
   return null
@@ -163,7 +172,6 @@ const selectedKeys = computed(() => {
   const p = route.path || ''
   if (p.startsWith('/platform/product-collections')) return ['/platform/product-collections']
   if (p.startsWith('/platform/product-drafts')) return ['/platform/product-drafts']
-  if (p.startsWith('/platform/config')) return ['/platform/config']
   if (p.startsWith('/platform/publish-logs')) return ['/platform/publish-logs']
   if (p.startsWith('/platform/publish-success-cases')) return ['/platform/publish-success-cases']
   if (p.startsWith('/platform/temu-auto-publish-logs')) return ['/platform/temu-auto-publish-logs']
@@ -205,6 +213,10 @@ watch(
 )
 
 const go = (path) => router.push(path)
+const logout = () => {
+  clearPlatformAuth()
+  router.replace('/login')
+}
 const onMenuClick = ({ key }) => {
   if (key) router.push(String(key))
 }
@@ -216,9 +228,7 @@ const onOpenChange = (keys) => {
 <style scoped>
 .pro-layout {
   min-height: 100vh;
-  background: radial-gradient(1200px 400px at 20% 0%, rgba(14, 165, 233, 0.14), transparent 60%),
-    radial-gradient(900px 380px at 80% 15%, rgba(34, 197, 94, 0.12), transparent 55%),
-    #f3f5f8;
+  background: #f5f7fa;
 }
 
 .layout {
@@ -226,7 +236,7 @@ const onOpenChange = (keys) => {
 }
 
 .sider {
-  background: linear-gradient(180deg, #0b1220 0%, #0f172a 55%, #0b1220 100%);
+  background: #001529;
 }
 
 .brand {
@@ -234,73 +244,143 @@ const onOpenChange = (keys) => {
   padding: 0 16px;
   display: flex;
   align-items: center;
-  gap: 12px;
+  justify-content: center;
+  gap: 8px;
   cursor: pointer;
   user-select: none;
 }
 
-.brand-mark {
-  width: 34px;
-  height: 34px;
-  border-radius: 10px;
-  display: grid;
-  place-items: center;
-  font-weight: 800;
-  letter-spacing: 0.4px;
-  color: #0b1220;
-  background: linear-gradient(135deg, #0ea5e9 0%, #22c55e 100%);
+.brand--collapsed {
+  justify-content: center;
+  padding: 0 8px;
+}
+
+.brand-logo {
+  display: block;
+  height: 24px;
+  width: auto;
+  max-width: 56px;
+  object-fit: contain;
+  border-radius: 4px;
+}
+
+.brand--collapsed .brand-logo {
+  height: 24px;
+  max-width: 52px;
 }
 
 .brand-title {
-  color: rgba(255, 255, 255, 0.92);
-  font-weight: 700;
-  line-height: 1.1;
-}
-
-.brand-sub {
-  margin-top: 2px;
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.55);
+  color: rgba(255, 255, 255, 0.96);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0;
+  white-space: nowrap;
 }
 
 .menu {
-  height: calc(100vh - 126px);
+  height: calc(100vh - 64px);
   overflow-y: auto;
-  padding: 8px;
+  padding: 8px 4px;
   background: transparent;
   border-right: 0;
 }
 
-.sider-toolbar {
-  padding: 0 8px 8px;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
+:deep(.menu.ant-menu-dark) {
+  background: #001529;
+  font-size: 15px;
 }
 
-.collapse-btn {
-  width: 100%;
-  color: rgba(255, 255, 255, 0.78);
-  text-align: left;
+:deep(.menu.ant-menu-root .ant-menu-item),
+:deep(.menu.ant-menu-root .ant-menu-submenu-title) {
+  width: calc(100% - 8px);
+  height: 40px;
+  line-height: 40px;
+  margin: 4px;
+  border-radius: 6px;
+  color: rgba(255, 255, 255, 0.65);
+  font-size: 15px;
+  font-weight: 500;
+}
+
+:deep(.menu .ant-menu-title-content) {
+  font-size: 15px;
+  font-weight: 500;
+}
+
+:deep(.menu.ant-menu-dark .ant-menu-item:hover),
+:deep(.menu.ant-menu-dark .ant-menu-submenu-title:hover) {
+  color: #ffffff;
+  background: transparent;
+}
+
+:deep(.menu.ant-menu-dark .ant-menu-item-selected) {
+  color: #ffffff;
+  background: #1677ff;
+}
+
+:deep(.menu.ant-menu-dark .ant-menu-item-selected:hover) {
+  background: #1677ff;
+}
+
+:deep(.menu.ant-menu-dark .ant-menu-sub.ant-menu-inline) {
+  background: #000c17;
+}
+
+:deep(.menu .ant-menu-item .ant-menu-item-icon),
+:deep(.menu .ant-menu-submenu-title .ant-menu-item-icon),
+:deep(.menu .ant-menu-submenu-title .ant-menu-submenu-arrow) {
+  color: inherit;
+}
+
+:deep(.menu .ant-menu-item-icon) {
+  font-size: 16px;
 }
 
 .header {
   height: 64px;
-  padding: 0 18px;
+  padding: 0 24px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: rgba(255, 255, 255, 0.72);
-  backdrop-filter: blur(10px);
-  border-bottom: 1px solid rgba(15, 23, 42, 0.06);
+  background: #ffffff;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.header-collapse-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  color: rgba(0, 0, 0, 0.88);
+  font-size: 18px;
+}
+
+.header-collapse-btn:hover {
+  background: #f5f5f5;
 }
 
 .page-title {
   font-size: 16px;
   font-weight: 700;
-  color: #0f172a;
+  color: rgba(0, 0, 0, 0.88);
+}
+
+.header-user {
+  color: rgba(0, 0, 0, 0.65);
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .content {
-  padding: 18px;
+  padding: 24px 16px;
   min-height: calc(100vh - 64px);
   min-width: 0;
   overflow-x: hidden;

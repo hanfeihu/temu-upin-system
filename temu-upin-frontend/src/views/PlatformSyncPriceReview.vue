@@ -1,9 +1,9 @@
 <template>
   <ProLayout title="核价单管理">
     <div class="page">
-      <a-card class="toolbar" :bordered="false">
+      <a-card class="toolbar-card" :bordered="false">
         <ShopTabs v-model="shopId" :shops="shops" :loading="shopsLoading" empty-text="暂无可用店铺，请先配置店铺" @change="onShopChange" />
-        <a-form layout="inline">
+        <a-form layout="inline" class="toolbar-form">
           <a-form-item label="订单状态">
             <a-select v-model:value="filters.orderStatus" style="width: 140px" allow-clear placeholder="全部">
               <a-select-option v-for="item in orderStatusOptions" :key="item.value" :value="item.value">{{ item.label }}</a-select-option>
@@ -26,8 +26,8 @@
       </a-card>
 
       <a-card v-if="shopId" class="table-card" :bordered="false">
-        <div style="margin-bottom: 12px">
-          <a-space>
+        <div class="table-actions">
+          <a-space wrap>
             <a-button @click="selectSuggestPriceAbove30">自动勾选建议价大于30元</a-button>
             <a-button type="primary" :disabled="!selectedIds.length" :loading="reviewing" @click="startBatchReview('APPROVE')">
               批量同意 ({{ selectedIds.length }})
@@ -36,56 +36,64 @@
               批量拒绝 ({{ selectedIds.length }})
             </a-button>
           </a-space>
+          <div class="table-actions-hint">当前页 {{ rows.length }} 条，已选 {{ selectedIds.length }} 条</div>
         </div>
 
-        <a-table rowKey="id" :columns="columns" :dataSource="rows" :loading="loading" :pagination="pagination"
+        <a-table rowKey="id" class="review-table" size="small" :columns="columns" :dataSource="rows" :loading="loading" :pagination="pagination"
           :row-selection="{ selectedRowKeys: selectedIds, onChange: onSelectChange }"
-          :scroll="{ x: 1720 }" tableLayout="fixed" @change="onTableChange">
+          :scroll="{ x: 1220 }" tableLayout="fixed" @change="onTableChange">
           <template #bodyCell="{ column, record }">
-            <template v-if="column.key === 'orderStatus'">
-              <a-tag :color="orderStatusColor(record.orderStatus)">{{ orderStatusText(record.orderStatus) }}</a-tag>
-            </template>
-            <template v-else-if="column.key === 'reviewAction'">
-              <a-tag :color="reviewColor(record.reviewAction)">{{ reviewText(record.reviewAction) }}</a-tag>
-            </template>
-            <template v-else-if="column.key === 'supplyPrice'">
-              {{ formatPrice(record.supplyPrice) }}
-            </template>
-            <template v-else-if="column.key === 'suggestSupplyPrice'">
-              {{ formatPrice(record.suggestSupplyPrice) }}
-            </template>
-            <template v-else-if="column.key === 'siteNames'">
-              <span>{{ formatJsonList(record.siteNamesJson) }}</span>
+            <template v-if="column.key === 'orderInfo'">
+              <div class="order-info-cell">
+                <div class="order-head-line">
+                  <span class="mono strong-text order-id-line">{{ record.orderId || '-' }}</span>
+                  <span class="order-site-text">{{ formatJsonList(record.siteNamesJson) || '-' }}</span>
+                </div>
+                <a-space :size="6" wrap>
+                  <a-tag :color="orderStatusColor(record.orderStatus)">{{ orderStatusText(record.orderStatus) }}</a-tag>
+                  <a-tag :color="reviewColor(record.reviewAction)">{{ reviewText(record.reviewAction) }}</a-tag>
+                  <a-tag :color="record.canBargain ? 'blue' : 'default'">{{ record.canBargain ? '可议价' : '不可议价' }}</a-tag>
+                </a-space>
+                <div class="order-meta-line">
+                  <span class="muted-text">同步：</span>
+                  <span class="mono">{{ formatDT(record.syncedAt) }}</span>
+                </div>
+              </div>
             </template>
             <template v-else-if="column.key === 'skuInfo'">
-              <div v-if="record.skuList?.length" class="sku-summary-list">
-                <div v-for="sku in record.skuList" :key="sku.id || sku.productSkuId" class="sku-summary-item">
-                  <div class="sku-summary-row">
+              <div v-if="record.skuList?.length" class="sku-preview-list">
+                <div v-for="sku in previewSkuList(record.skuList)" :key="sku.id || sku.productSkuId" class="sku-row">
+                  <div class="sku-media">
                     <a-image
                       v-if="sku.imageUrl"
                       :src="sku.imageUrl"
-                      :width="48"
-                      :height="48"
-                      class="sku-summary-thumb"
+                      :width="36"
+                      :height="36"
+                      class="sku-inline-thumb"
                     />
-                    <div class="sku-summary-body">
-                      <div class="sku-summary-head">
-                        <span class="mono">SKU {{ sku.productSkuId || '-' }}</span>
-                        <span v-if="sku.extCode">外部编码：{{ sku.extCode }}</span>
+                    <div class="sku-text">
+                      <div class="sku-title-line">
+                        <span class="mono strong-text">SKU {{ sku.productSkuId || '-' }}</span>
+                        <span v-if="sku.extCode" class="muted-text">编码 {{ sku.extCode }}</span>
                       </div>
-                      <div class="sku-summary-spec">{{ sku.specInfo || '-' }}</div>
-                      <div class="sku-summary-price">
-                        当前供货价：{{ formatPrice(sku.currentSupplyPrice) }}
-                        <span v-if="sku.newPrice != null"> / 新申报价：{{ formatPrice(sku.newPrice) }}</span>
-                      </div>
+                      <div class="sku-spec-line">{{ sku.specInfo || '-' }}</div>
                     </div>
                   </div>
+                </div>
+                <div v-if="hiddenSkuCount(record.skuList) > 0" class="sku-more-line">
+                  其余 {{ hiddenSkuCount(record.skuList) }} 个 SKU 请在详情中查看
                 </div>
               </div>
               <span v-else>-</span>
             </template>
-            <template v-else-if="column.key === 'canBargain'">
-              {{ record.canBargain ? '是' : '否' }}
+            <template v-else-if="column.key === 'priceInfo'">
+              <div class="price-info-cell">
+                <div class="price-main">{{ formatPrice(record.suggestSupplyPrice) }}</div>
+                <div class="price-sub-line">
+                  <span class="price-arrow">→</span>
+                  <span class="price-sub">{{ formatPrice(record.supplyPrice) }}</span>
+                </div>
+              </div>
             </template>
             <template v-else-if="column.key === 'actions'">
               <a-space>
@@ -93,9 +101,6 @@
                 <a @click="startSingleReview(record, 'APPROVE')">同意</a>
                 <a @click="startSingleReview(record, 'REJECT')">拒绝</a>
               </a-space>
-            </template>
-            <template v-else-if="column.key === 'syncedAt'">
-              <span class="mono">{{ formatDT(record.syncedAt) }}</span>
             </template>
           </template>
         </a-table>
@@ -109,10 +114,8 @@
             <a-descriptions-item label="订单状态">
               <a-tag :color="orderStatusColor(detailData.orderStatus)">{{ orderStatusText(detailData.orderStatus) }}</a-tag>
             </a-descriptions-item>
-            <a-descriptions-item label="供货价(分)">{{ detailData.supplyPrice ?? '-' }}</a-descriptions-item>
+            <a-descriptions-item label="申报价(分)">{{ detailData.supplyPrice ?? '-' }}</a-descriptions-item>
             <a-descriptions-item label="建议价(分)">{{ detailData.suggestSupplyPrice ?? '-' }}</a-descriptions-item>
-            <a-descriptions-item label="币种">{{ detailData.priceCurrency || '-' }}</a-descriptions-item>
-            <a-descriptions-item label="建议价币种">{{ detailData.suggestPriceCurrency || '-' }}</a-descriptions-item>
             <a-descriptions-item label="可议价">{{ detailData.canBargain ? '是' : '否' }}</a-descriptions-item>
             <a-descriptions-item label="站点" :span="2">{{ formatJsonList(detailData.siteNamesJson) || '-' }}</a-descriptions-item>
             <a-descriptions-item label="本地审核" :span="2">
@@ -132,8 +135,13 @@
             <a-table-column title="SKU ID" dataIndex="productSkuId" width="140" />
             <a-table-column title="外部编码" dataIndex="extCode" width="140" />
             <a-table-column title="规格信息" dataIndex="specInfo" />
-            <a-table-column title="当前供货价(分)" dataIndex="currentSupplyPrice" width="140" />
-            <a-table-column title="新价格(分)" dataIndex="newPrice" width="120" />
+            <a-table-column title="申报价(分)" width="120">
+              <template #default>{{ detailData.supplyPrice ?? '-' }}</template>
+            </a-table-column>
+            <a-table-column title="建议价(分)" width="120">
+              <template #default>{{ detailData.suggestSupplyPrice ?? '-' }}</template>
+            </a-table-column>
+            <a-table-column title="新申报价(分)" dataIndex="newPrice" width="140" />
           </a-table>
         </template>
       </a-modal>
@@ -198,8 +206,11 @@
                 <a-table-column title="SKU ID" dataIndex="productSkuId" width="140" />
                 <a-table-column title="外部编码" dataIndex="extCode" width="140" />
                 <a-table-column title="规格" dataIndex="specInfo" />
-                <a-table-column title="当前供货价" width="120">
-                  <template #default="{ record }">{{ formatPrice(record.currentSupplyPrice) }}</template>
+                <a-table-column title="申报价" width="120">
+                  <template #default>{{ formatPrice(detail.supplyPrice) }}</template>
+                </a-table-column>
+                <a-table-column title="建议价" width="120">
+                  <template #default>{{ formatPrice(detail.suggestSupplyPrice) }}</template>
                 </a-table-column>
                 <a-table-column title="新申报价(分)" width="180">
                   <template #default="{ record }">
@@ -233,7 +244,7 @@ const total = ref(0)
 const page = ref(1)
 const pageSize = ref(20)
 const selectedIds = ref([])
-const filters = reactive({ orderStatus: undefined, reviewAction: undefined })
+const filters = reactive({ orderStatus: 1, reviewAction: 'PENDING' })
 
 const detailOpen = ref(false)
 const detailData = ref(null)
@@ -268,17 +279,10 @@ const rejectReasonTypeOptions = [
 ]
 
 const columns = [
-  { title: '订单ID', dataIndex: 'orderId', key: 'orderId', width: 140 },
-  { title: '状态', key: 'orderStatus', width: 100 },
-  { title: '供货价', key: 'supplyPrice', width: 110 },
-  { title: '建议价', key: 'suggestSupplyPrice', width: 110 },
-  { title: 'SKU 信息', key: 'skuInfo', width: 420 },
-  { title: '币种', dataIndex: 'priceCurrency', key: 'priceCurrency', width: 80 },
-  { title: '站点', key: 'siteNames', width: 220, ellipsis: true },
-  { title: '可议价', key: 'canBargain', width: 90 },
-  { title: '本地审核', key: 'reviewAction', width: 100 },
-  { title: '同步时间', key: 'syncedAt', width: 180 },
-  { title: '操作', key: 'actions', width: 190, fixed: 'right' }
+  { title: '订单 / 状态', key: 'orderInfo', width: 330 },
+  { title: 'SKU 信息', key: 'skuInfo', width: 520 },
+  { title: '价格', key: 'priceInfo', width: 220 },
+  { title: '操作', key: 'actions', width: 170, fixed: 'right' }
 ]
 
 const pagination = computed(() => ({
@@ -310,6 +314,8 @@ const parseJsonList = (v) => {
   }
 }
 const formatJsonList = (v) => parseJsonList(v).join(' / ')
+const previewSkuList = (skuList) => Array.isArray(skuList) ? skuList.slice(0, 4) : []
+const hiddenSkuCount = (skuList) => Array.isArray(skuList) ? Math.max(skuList.length - 4, 0) : 0
 const resetReviewForm = () => {
   reviewForm.reasonComponents = [{ type: undefined, reason: '' }]
   reviewForm.externalLinksText = ''
@@ -383,7 +389,7 @@ const fetchList = async () => {
 }
 
 const reload = () => { page.value = 1; selectedIds.value = []; fetchList() }
-const reset = () => { filters.orderStatus = undefined; filters.reviewAction = undefined; reload() }
+const reset = () => { filters.orderStatus = 1; filters.reviewAction = 'PENDING'; reload() }
 const onTableChange = (p) => { page.value = p.current; pageSize.value = p.pageSize; fetchList() }
 
 const openDetail = async (record) => {
@@ -512,20 +518,148 @@ onMounted(() => { loadShops() })
 </script>
 
 <style scoped>
-.page { display: flex; flex-direction: column; gap: 16px; }
-.toolbar { display: flex; flex-direction: column; gap: 16px; }
-.mono { font-family: 'SF Mono', 'Consolas', monospace; font-size: 13px; }
+.page { display: flex; flex-direction: column; gap: 12px; }
+.toolbar-card :deep(.ant-card-body) {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.toolbar-form {
+  margin-top: 4px;
+}
+.table-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+.table-actions-hint {
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.mono { font-family: 'SF Mono', 'Consolas', monospace; }
+.muted-text { color: rgba(0, 0, 0, 0.45); }
+.strong-text { font-weight: 600; }
 .review-block { margin-bottom: 16px; }
 .review-block-title { margin-bottom: 8px; font-weight: 600; }
 .reason-row { display: grid; grid-template-columns: 180px 1fr 72px; gap: 12px; }
 .order-block { margin-top: 12px; }
 .order-block-title { margin-bottom: 8px; font-weight: 600; }
-.sku-summary-list { display: flex; flex-direction: column; gap: 8px; }
-.sku-summary-item { padding: 8px 10px; border-radius: 8px; background: #fafafa; border: 1px solid #f0f0f0; }
-.sku-summary-row { display: flex; gap: 12px; align-items: flex-start; }
-.sku-summary-body { min-width: 0; flex: 1; }
-.sku-summary-head { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 4px; font-weight: 500; }
-.sku-summary-spec { color: #595959; line-height: 1.5; }
-.sku-summary-price { margin-top: 4px; color: #262626; }
-.sku-summary-thumb, .sku-inline-thumb { object-fit: cover; border-radius: 6px; overflow: hidden; flex: none; }
+.order-info-cell {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+  min-height: 100%;
+}
+.order-head-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.order-id-line {
+  font-size: 14px;
+  line-height: 1.4;
+}
+.order-site-text {
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.order-meta-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  line-height: 1.6;
+}
+.price-info-cell {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  min-height: 100%;
+  font-variant-numeric: tabular-nums;
+}
+.price-main {
+  font-size: 26px;
+  line-height: 1.2;
+  font-weight: 700;
+  color: #1677ff;
+}
+.price-sub-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  line-height: 1.4;
+}
+.price-arrow {
+  color: rgba(0, 0, 0, 0.3);
+  font-size: 12px;
+}
+.price-sub {
+  color: rgba(0, 0, 0, 0.65);
+  font-weight: 600;
+  text-decoration: line-through;
+}
+.sku-preview-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.sku-row {
+  width: 100%;
+}
+.sku-media {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+.sku-text {
+  min-width: 0;
+  flex: 1;
+}
+.sku-title-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  line-height: 1.4;
+}
+.sku-spec-line {
+  margin-top: 4px;
+  color: rgba(0, 0, 0, 0.65);
+  line-height: 1.5;
+  word-break: break-word;
+}
+.sku-more-line {
+  padding-left: 46px;
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+}
+.sku-inline-thumb {
+  object-fit: cover;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+:deep(.review-table .ant-table-tbody > tr > td) {
+  vertical-align: middle;
+}
+
+:deep(.table-card .ant-card-body) {
+  padding-top: 16px;
+}
+
+@media (max-width: 960px) {
+  .table-actions {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .table-actions-hint {
+    white-space: normal;
+  }
+}
 </style>

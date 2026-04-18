@@ -58,42 +58,49 @@ const handleClick = (shopId) => {
 .shop-chip-list {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
+  gap: 8px;
 }
 
 .shop-chip {
-  min-width: 180px;
-  padding: 12px 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px 12px;
   border: 1px solid #d9d9d9;
-  border-radius: 12px;
+  border-radius: 4px;
   background: #fff;
   text-align: left;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: border-color 0.2s ease, color 0.2s ease, background 0.2s ease;
 }
 
 .shop-chip:hover {
   border-color: #4096ff;
-  box-shadow: 0 6px 16px rgba(64, 150, 255, 0.12);
+  color: #1677ff;
 }
 
 .shop-chip.active {
   border-color: #1677ff;
-  background: #e6f4ff;
-  box-shadow: 0 8px 20px rgba(22, 119, 255, 0.14);
+  background: #f0f7ff;
+  color: #1677ff;
 }
 
 .shop-chip-name {
-  display: block;
+  display: inline-block;
   color: #1f1f1f;
-  font-weight: 600;
+  font-weight: 500;
   line-height: 1.4;
 }
 
 .shop-chip-id {
-  display: block;
-  margin-top: 4px;
+  display: inline-block;
   color: #8c8c8c;
   font-size: 12px;
+}
+
+.shop-chip.active .shop-chip-name,
+.shop-chip.active .shop-chip-id {
+  color: inherit;
 }
 </style>
