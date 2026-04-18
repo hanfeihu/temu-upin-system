@@ -4,6 +4,7 @@ import jakarta.validation.constraints.NotBlank;
 import lombok.*;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 public class ProductDraftDTO {
 
@@ -16,6 +17,7 @@ public class ProductDraftDTO {
         @NotBlank(message = "HTML content is required")
         private String html;
         private String extractedJson;
+        private List<String> targetShopIds;
     }
 
     @Getter
@@ -53,6 +55,8 @@ public class ProductDraftDTO {
         private String monthlySales;
         private Integer reviewCount;
         private String companyName;
+        private List<String> targetShopIds;
+        private List<String> targetShopNames;
         private Boolean pushedToCollection;
         private Long pushedCollectionId;
         private LocalDateTime pushedAt;
@@ -79,6 +83,8 @@ public class ProductDraftDTO {
         private String monthlySales;
         private Integer reviewCount;
         private String companyName;
+        private List<String> targetShopIds;
+        private List<String> targetShopNames;
         private String originalHtml;
         private String extractedJson;
         private String parserSnapshotJson;

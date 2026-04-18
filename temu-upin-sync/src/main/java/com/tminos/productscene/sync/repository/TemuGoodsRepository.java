@@ -48,5 +48,7 @@ public interface TemuGoodsRepository extends JpaRepository<TemuGoods, Long> {
 
     List<TemuGoods> findByShopIdAndProductIdIn(String shopId, List<Long> productIds);
 
+    List<TemuGoods> findByShopIdAndProductSkcIdIn(String shopId, List<Long> productSkcIds);
+
     Optional<TemuGoods> findByShopIdAndProductId(String shopId, Long productId);
 }

@@ -39,7 +39,7 @@ public class TemuMainSaleSpecInferenceService {
     private final ProductCollectionSkuRepository originSkuRepo;
     private final ProductCollectionTemuSkuRepository temuSkuRepo;
     private final TemuPublishSuccessCaseRepository successCaseRepo;
-    private final PlatformConfigService platformConfigService;
+    private final TemuShopService temuShopService;
     private final TemuOpenApiCredentialService temuOpenApiCredentialService;
     private final ObjectMapper objectMapper;
     private final TemuMainSaleSpecAiService aiService;
@@ -49,7 +49,7 @@ public class TemuMainSaleSpecInferenceService {
                                            ProductCollectionSkuRepository originSkuRepo,
                                            ProductCollectionTemuSkuRepository temuSkuRepo,
                                            TemuPublishSuccessCaseRepository successCaseRepo,
-                                           PlatformConfigService platformConfigService,
+                                           TemuShopService temuShopService,
                                            TemuOpenApiCredentialService temuOpenApiCredentialService,
                                            ObjectMapper objectMapper,
                                            TemuMainSaleSpecAiService aiService) {
@@ -58,7 +58,7 @@ public class TemuMainSaleSpecInferenceService {
         this.originSkuRepo = originSkuRepo;
         this.temuSkuRepo = temuSkuRepo;
         this.successCaseRepo = successCaseRepo;
-        this.platformConfigService = platformConfigService;
+        this.temuShopService = temuShopService;
         this.temuOpenApiCredentialService = temuOpenApiCredentialService;
         this.objectMapper = objectMapper;
         this.aiService = aiService;
@@ -366,11 +366,11 @@ public class TemuMainSaleSpecInferenceService {
                                                        TemuMainSaleSpecAiService.AiPlanResult aiResult,
                                                        List<Map<String, Object>> originSkus,
                                                        List<Map<String, Object>> temuSkus) {
-        Map<String, String> cfg = platformConfigService.getDefaultConfigOrThrow();
-        int siteId = parseInt(cfg.get(PlatformConfigService.KEY_DEFAULT_SITE_ID), 100);
-        String warehouseId = firstNonBlank(cfg.get(PlatformConfigService.KEY_DEFAULT_WAREHOUSE_ID), "WH-03304781516934009");
-        int defaultStock = parseInt(cfg.get(PlatformConfigService.KEY_SKU_DEFAULT_STOCK), 100);
-        int maxStock = parseInt(cfg.get(PlatformConfigService.KEY_SKU_MAX_STOCK), 10842);
+        TemuShopService.PublishConfig shopConfig = resolvePublishConfig(pc);
+        int siteId = shopConfig.siteId();
+        String warehouseId = shopConfig.warehouseId();
+        int defaultStock = shopConfig.skuDefaultStock();
+        int maxStock = shopConfig.skuMaxStock();
 
         Map<String, Long> parentSpecIdMap = new LinkedHashMap<>();
         if (allowedParentSpecs != null) {
@@ -712,6 +712,37 @@ public class TemuMainSaleSpecInferenceService {
             new ArrayList<>(mainProductSkuSpecReqGroupMap.values()),
             new ArrayList<>(productSkuReqGroupMap.values())
         );
+    }
+
+    private TemuShopService.PublishConfig resolvePublishConfig(ProductCollection pc) {
+        String shopId = firstTargetShopId(pc);
+        if (StringUtils.hasText(shopId)) {
+            return temuShopService.getPublishConfigByShopIdOrThrow(shopId);
+        }
+        return temuShopService.getAnyEnabledPublishConfigOrThrow();
+    }
+
+    private String firstTargetShopId(ProductCollection pc) {
+        if (pc == null || !StringUtils.hasText(pc.getTargetShopIds())) {
+            return null;
+        }
+        try {
+            JsonNode node = objectMapper.readTree(pc.getTargetShopIds());
+            if (node == null || !node.isArray()) {
+                return null;
+            }
+            for (JsonNode child : node) {
+                if (child == null || child.isNull()) {
+                    continue;
+                }
+                String shopId = child.asText(null);
+                if (StringUtils.hasText(shopId)) {
+                    return shopId.trim();
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return null;
     }
 
     private String buildResultSummary(Map<String, Object> result) {

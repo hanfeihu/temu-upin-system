@@ -28,6 +28,7 @@ public class Alibaba1688HtmlParser {
 
     private static final Pattern OFFER_ID_PATTERN_1 = Pattern.compile("offer/(\\d+)\\.html", Pattern.CASE_INSENSITIVE);
     private static final Pattern OFFER_ID_PATTERN_2 = Pattern.compile("offerId=(\\d+)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern ALIBABA_IMAGE_VARIANT_PATTERN = Pattern.compile("(?i)(-0-cib)(?:\\.(?:search|summ|\\d+x\\d+))+(\\.(?:jpg|jpeg|png|webp|gif))$");
 
     private final ObjectMapper objectMapper;
 
@@ -76,7 +77,7 @@ public class Alibaba1688HtmlParser {
         ShippingServicesInfo shippingServices = extractShippingServices(doc);
         CategoryInfo categoryInfo = extractCategory(doc);
 
-        CarouselMedia media = extractCarouselMedia(doc);
+        CarouselMedia media = extractCarouselMedia(doc, html);
         List<String> carouselImages = media.bigImages;
         String productMainImage = carouselImages.isEmpty() ? null : carouselImages.get(0);
         if ((productMainImage == null || productMainImage.isBlank()) && media.thumbImages != null && !media.thumbImages.isEmpty()) {
@@ -723,7 +724,7 @@ public class Alibaba1688HtmlParser {
     private List<String> extractCarouselImages(Document doc) {
         LinkedHashSet<String> urls = new LinkedHashSet<>();
         for (Element img : doc.select("#gallery img")) {
-            String u = normalizeUrl(pickImgUrl(img));
+            String u = normalizeCarouselImageUrl(normalizeUrl(pickImgUrl(img)));
             if (u != null && isImageUrl(u)) {
                 urls.add(u);
             }
@@ -731,91 +732,198 @@ public class Alibaba1688HtmlParser {
         return new ArrayList<>(urls);
     }
 
-    private CarouselMedia extractCarouselMedia(Document doc) {
+    private CarouselMedia extractCarouselMedia(Document doc, String rawHtml) {
         CarouselMedia out = new CarouselMedia();
 
+        Element gallery = first(doc, "#gallery");
+        if (gallery == null) gallery = first(doc, ".module-od-picture-gallery");
+        if (gallery == null) gallery = doc.body();
+
+        Element preview = first(gallery, ".od-gallery-preview");
+        if (preview == null) preview = first(gallery, "#od-gallery-preview");
+
+        String video = pickVideoUrl(first(preview, "video"));
+        if (video == null) {
+            Element source = first(preview, "video source");
+            if (source != null) {
+                video = normalizeUrl(source.attr("src"));
+            }
+        }
+
+        List<String> previewDom = extractCarouselPreviewImagesFromDom(gallery);
+        List<String> thumbDom = extractCarouselThumbImagesFromDom(gallery);
+
+        List<String> mainImage = rawHtml == null || rawHtml.isBlank()
+                ? Collections.emptyList()
+                : extractCarouselImagesFromWindowContext(rawHtml, "mainImage");
+
+        List<String> offerAll = rawHtml == null || rawHtml.isBlank()
+                ? Collections.emptyList()
+                : extractCarouselImagesFromWindowContext(rawHtml, "offerImgList");
+
         LinkedHashSet<String> big = new LinkedHashSet<>();
-        Element preview = first(doc, ".od-gallery-preview");
-        if (preview == null) preview = first(doc, "#od-gallery-preview");
-        if (preview != null) {
-            for (Element img : preview.select("img")) {
-                String u = normalizeUrl(pickImgUrl(img));
-                if (u != null && isImageUrl(u)) {
-                    big.add(u);
-                }
-            }
-
-            String video = pickVideoUrl(first(preview, "video"));
-            if (video == null) {
-                Element source = first(preview, "video source");
-                if (source != null) {
-                    video = source.attr("src");
-                    if (video != null && !video.isBlank()) video = normalizeUrl(video);
-                }
-            }
-            out.videoUrl = (video == null || video.isBlank()) ? null : video;
-        }
-
         LinkedHashSet<String> thumbs = new LinkedHashSet<>();
-        Element list = first(doc, ".img-list-wrapper");
-        if (list == null) list = first(doc, "#img-list-wrapper");
-        if (list != null) {
-            for (Element img : list.select("img")) {
-                String u = normalizeUrl(pickImgUrl(img));
-                if (u != null && isImageUrl(u)) {
-                    thumbs.add(u);
-                }
-            }
+
+        // 以页面真实轮播容器 od-scroller-list-wapper 为准。
+        // 只有 DOM 明显不完整时，才退回 mainImage / offerImgList。
+        if (!thumbDom.isEmpty()) {
+            thumbs.addAll(thumbDom);
+        } else if (!mainImage.isEmpty()) {
+            thumbs.addAll(mainImage);
+        } else if (!previewDom.isEmpty()) {
+            thumbs.addAll(previewDom);
+        } else if (!offerAll.isEmpty()) {
+            thumbs.addAll(offerAll);
         }
 
-        if (big.isEmpty()) {
+        if (!thumbDom.isEmpty()) {
+            big.addAll(thumbDom);
+        } else if (!mainImage.isEmpty()) {
+            big.addAll(mainImage);
+        } else if (!previewDom.isEmpty()) {
+            big.addAll(previewDom);
+        } else if (!offerAll.isEmpty()) {
+            big.addAll(offerAll);
+        } else {
             big.addAll(extractCarouselImages(doc));
+        }
+
+        // 若首屏预览图数量更完整，则补齐；但不要覆盖 DOM 轮播顺序。
+        if (!previewDom.isEmpty() && big.size() < previewDom.size()) {
+            big.clear();
+            big.addAll(previewDom);
+        }
+
+        if (big.isEmpty() && !thumbs.isEmpty()) {
+            big.addAll(thumbs);
+        }
+        if (thumbs.isEmpty() && !big.isEmpty()) {
+            thumbs.addAll(big);
         }
 
         out.bigImages = new ArrayList<>(big);
         out.thumbImages = new ArrayList<>(thumbs);
+        out.videoUrl = (video == null || video.isBlank()) ? null : video;
         return out;
     }
 
-    private List<String> extractDetailImages(Document doc, String rawHtml) {
+    private List<String> extractCarouselPreviewImagesFromDom(Element gallery) {
+        if (gallery == null) return Collections.emptyList();
+
         LinkedHashSet<String> urls = new LinkedHashSet<>();
-        collectImages(doc.select("#detail img"), urls);
-
-        if (urls.isEmpty()) {
-            collectImagesFromContainer(first(doc, "#detail"), urls);
-            collectImagesFromContainer(first(doc, "#desc-lazyload-container"), urls);
-            collectImagesFromContainer(first(doc, "#desc-lazyload"), urls);
-            collectImagesFromContainer(first(doc, "#description"), urls);
-            collectImagesFromContainer(first(doc, ".html-description"), urls);
+        for (Element img : gallery.select(".od-gallery-preview img, #od-gallery-preview img")) {
+            String u = normalizeCarouselImageUrl(normalizeUrl(pickImgUrl(img)));
+            if (u != null && isImageUrl(u)) {
+                urls.add(u);
+            }
         }
+        return new ArrayList<>(urls);
+    }
 
-        if (urls.isEmpty()) {
-            collectImages(doc.select(".desc-img-container img, .detail-content img, .detail-desc img"), urls);
-        }
+    private List<String> extractCarouselThumbImagesFromDom(Element gallery) {
+        if (gallery == null) return Collections.emptyList();
 
-        // New OD pages render details via a custom element like <v-detail-9 class="html-description"></v-detail-9>
-        // and the actual description images are hosted on itemcdn.tmall.com. In this case the HTML snapshot
-        // often does not contain the real <img> tags we need. Use window.context detailUrl as a hint.
-        if (urls.isEmpty() && rawHtml != null && !rawHtml.isBlank()) {
-            urls.addAll(extractDetailImagesFromWindowContext(rawHtml));
-        }
+        LinkedHashSet<String> urls = new LinkedHashSet<>();
 
-        if (urls.isEmpty() && rawHtml != null && !rawHtml.isBlank()) {
-            String detailUrl = extractDetailUrlFromWindowContext(rawHtml);
-            if (detailUrl != null && !detailUrl.isBlank()) {
-                urls.addAll(extractDetailImagesFromItemCdn(detailUrl));
+        Element wrapper = first(gallery, ".od-scroller-list-wapper");
+        if (wrapper == null) wrapper = first(gallery, "#od-scroller-list-wapper");
+        if (wrapper == null) wrapper = gallery;
+
+        for (Element cover : wrapper.select(".od-scroller-item .v-image-cover")) {
+            String u = extractBackgroundImageUrl(cover);
+            u = normalizeCarouselImageUrl(normalizeUrl(u));
+            if (u != null && isImageUrl(u)) {
+                urls.add(u);
             }
         }
 
-        if (urls.isEmpty() && rawHtml != null && !rawHtml.isBlank()) {
-            urls.addAll(extractDetailImagesFromRawHtml(rawHtml));
+        if (urls.isEmpty()) {
+            for (Element img : wrapper.select(".od-scroller-item img")) {
+                String u = normalizeCarouselImageUrl(normalizeUrl(pickImgUrl(img)));
+                if (u != null && isImageUrl(u)) {
+                    urls.add(u);
+                }
+            }
         }
 
-        return postProcessDetailImageUrls(new ArrayList<>(urls));
+        // 再做一层老结构兜底，避免个别页面 wrapper 缺失
+        if (urls.isEmpty()) {
+            for (Element cover : gallery.select(".img-switch-item .v-image-cover, .img-list-wrapper .v-image-cover")) {
+                String u = extractBackgroundImageUrl(cover);
+                u = normalizeCarouselImageUrl(normalizeUrl(u));
+                if (u != null && isImageUrl(u)) {
+                    urls.add(u);
+                }
+            }
+        }
+
+        if (urls.isEmpty()) {
+            for (Element img : gallery.select(".img-list-wrapper img, #img-list-wrapper img, .od-gallery-scroller img")) {
+                String u = normalizeCarouselImageUrl(normalizeUrl(pickImgUrl(img)));
+                if (u != null && isImageUrl(u)) {
+                    urls.add(u);
+                }
+            }
+        }
+
+        return new ArrayList<>(urls);
     }
 
-    private List<String> extractDetailImagesFromWindowContext(String html) {
-        if (html == null || html.isBlank()) return Collections.emptyList();
+    private String normalizeCarouselImageUrl(String u) {
+        if (u == null) return null;
+        String s = u.trim();
+        if (s.isBlank()) return null;
+
+        if (s.startsWith("\\\"")) s = s.substring(2);
+        if (s.startsWith("\"") || s.startsWith("'")) s = s.substring(1);
+        if (s.endsWith("\"") || s.endsWith("'")) s = s.substring(0, s.length() - 1);
+        s = s.trim();
+
+        if (!isCleanHttpImageUrlCandidate(s)) return null;
+
+        int q = s.indexOf('?');
+        if (q > 0) s = s.substring(0, q);
+        int h = s.indexOf('#');
+        if (h > 0) s = s.substring(0, h);
+
+        s = collapseAlibabaImageVariant(s);
+        if (s == null || s.isBlank()) return null;
+
+        String lower = s.toLowerCase(Locale.ROOT);
+        int end = firstImageExtEndIndex(lower);
+        if (end < 0) return null;
+
+        // 1688 轮播图 DOM 里常见这些形式：
+        //   xxx.jpg_.webp
+        //   xxx.jpg_b.jpg
+        //   xxx.jpg_sum.jpg
+        // 它们本质上都指向同一张原图，保留第一段真实图片地址即可。
+        if (end < s.length()) {
+            s = s.substring(0, end);
+        }
+
+        return s;
+    }
+
+    private String extractBackgroundImageUrl(Element el) {
+        if (el == null) return null;
+
+        String style = firstNonBlank(el.attr("style"), attrOrNull(el, "style"));
+        if (style == null || style.isBlank()) return null;
+
+        Matcher m = Pattern.compile("url\\((['\"]?)(.*?)\\1\\)", Pattern.CASE_INSENSITIVE).matcher(style);
+        if (m.find()) {
+            String u = m.group(2);
+            return (u == null || u.isBlank()) ? null : u.trim();
+        }
+        return null;
+    }
+
+    private List<String> extractCarouselImagesFromWindowContext(String html, String fieldName) {
+        if (html == null || html.isBlank() || fieldName == null || fieldName.isBlank()) {
+            return Collections.emptyList();
+        }
+
         try {
             String json = extractWindowContextJson(html);
             if (json == null || json.isBlank()) return Collections.emptyList();
@@ -826,10 +934,193 @@ public class Alibaba1688HtmlParser {
             if (root == null) return Collections.emptyList();
 
             Object result = root.get("result");
-            if (!(result instanceof Map<?, ?> resultMap)) return Collections.emptyList();
+            if (!(result instanceof Map<?, ?> r)) return Collections.emptyList();
+
+            Object node = deepGet(r, "data", "gallery", "fields", fieldName);
+            if (node == null) return Collections.emptyList();
 
             LinkedHashSet<String> urls = new LinkedHashSet<>();
-            collectImageUrlsRecursively(resultMap, urls, 0);
+            collectGalleryImageUrls(node, urls, 0);
+            return new ArrayList<>(urls);
+        } catch (Exception ignored) {
+            return Collections.emptyList();
+        }
+    }
+
+    private void collectGalleryImageUrls(Object node, Set<String> out, int depth) {
+        if (node == null || out == null || depth > 8) return;
+
+        if (node instanceof String s) {
+            String u = normalizeImageUrl(normalizeUrl(s));
+            if (u != null && isImageUrl(u)) {
+                out.add(u);
+            }
+            return;
+        }
+
+        if (node instanceof Map<?, ?> map) {
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                Object value = entry.getValue();
+                String key = entry.getKey() == null ? "" : String.valueOf(entry.getKey()).toLowerCase(Locale.ROOT);
+
+                if (value instanceof String s) {
+                    if (key.contains("image") || key.contains("img") || key.contains("url") || key.contains("src") || key.contains("original")) {
+                        String u = normalizeImageUrl(normalizeUrl(s));
+                        if (u != null && isImageUrl(u)) {
+                            out.add(u);
+                        }
+                    }
+                } else {
+                    collectGalleryImageUrls(value, out, depth + 1);
+                }
+            }
+            return;
+        }
+
+        if (node instanceof Iterable<?> iterable) {
+            for (Object item : iterable) {
+                collectGalleryImageUrls(item, out, depth + 1);
+            }
+        }
+    }
+
+    private List<String> extractDetailImages(Document doc, String rawHtml) {
+        LinkedHashSet<String> urls = new LinkedHashSet<>();
+
+        // 先按原始 HTML 字符串做严格切块：
+        // 只取 <div id="detail"> 到 desc-lazyload-container / desc-lazyload / price-explain 之前的图片。
+        // 这样即使页面 DOM 因模板闭合异常被 Jsoup 自动重排，也不会把延迟容器里的图带进来。
+        if (rawHtml != null && !rawHtml.isBlank()) {
+            List<String> strict = extractDetailImagesFromRawDetailBlock(rawHtml);
+            if (strict != null && !strict.isEmpty()) {
+                return strict;
+            }
+        }
+
+        Element detailRoot = first(doc, "#detail");
+        if (detailRoot != null) {
+            collectImagesFromDetailRoot(detailRoot, urls);
+            return postProcessDetailImageUrls(new ArrayList<>(urls));
+        }
+
+        collectImagesFromContainer(first(doc, "#description"), urls);
+        collectImagesFromContainer(first(doc, ".html-description"), urls);
+
+        if (urls.isEmpty()) {
+            for (Element img : doc.select(".desc-img-container img, .detail-content img, .detail-desc img")) {
+                if (isInsideExcludedDetailContainer(img)) continue;
+                String u = normalizeImageUrl(normalizeUrl(pickImgUrl(img)));
+                if (u != null && isImageUrl(u)) {
+                    urls.add(u);
+                }
+            }
+        }
+
+        if (urls.isEmpty() && rawHtml != null && !rawHtml.isBlank()) {
+            String detailUrl = extractDetailUrlFromWindowContext(rawHtml);
+            if (detailUrl != null && !detailUrl.isBlank()) {
+                urls.addAll(extractDetailImagesFromItemCdn(detailUrl));
+            }
+        }
+
+        if (urls.isEmpty() && rawHtml != null && !rawHtml.isBlank()) {
+            urls.addAll(extractDetailImagesFromWindowContext(rawHtml));
+        }
+
+        if (urls.isEmpty() && rawHtml != null && !rawHtml.isBlank()) {
+            urls.addAll(extractDetailImagesFromRawHtml(rawHtml));
+        }
+
+        return postProcessDetailImageUrls(new ArrayList<>(urls));
+    }
+
+    private void collectImagesFromDetailRoot(Element detailRoot, Set<String> out) {
+        if (detailRoot == null || out == null) return;
+
+        Element clone = detailRoot.clone();
+        clone.select("#desc-lazyload-container, #desc-lazyload").remove();
+
+        collectImages(clone.select("img"), out);
+        if (!out.isEmpty()) return;
+
+        String[] fragments = new String[]{clone.text(), clone.data(), clone.html()};
+        for (String frag : fragments) {
+            if (frag == null) continue;
+            String s = frag.trim();
+            if (s.isEmpty()) continue;
+            if (!s.contains("<img") && !s.contains("IMG")) continue;
+            Document sub = Jsoup.parseBodyFragment(s);
+            collectImages(sub.select("img"), out);
+            if (!out.isEmpty()) return;
+        }
+    }
+
+    private List<String> extractDetailImagesFromRawDetailBlock(String rawHtml) {
+        if (rawHtml == null || rawHtml.isBlank()) return Collections.emptyList();
+
+        int start = indexOfIgnoreCase(rawHtml, "<div id=\"detail\"");
+        if (start < 0) start = indexOfIgnoreCase(rawHtml, "<div id='detail'");
+        if (start < 0) return Collections.emptyList();
+
+        int end = rawHtml.length();
+        String[] endMarkers = new String[]{
+                "<div id=\"desc-lazyload-container\"",
+                "<div id='desc-lazyload-container'",
+                "<div id=\"desc-lazyload\"",
+                "<div id='desc-lazyload'",
+                "<div class=\"price-explain\"",
+                "<div class='price-explain'"
+        };
+        for (String marker : endMarkers) {
+            int idx = indexOfIgnoreCase(rawHtml, marker, start + 1);
+            if (idx >= 0 && idx < end) {
+                end = idx;
+            }
+        }
+
+        if (end <= start) return Collections.emptyList();
+
+        String block = rawHtml.substring(start, end);
+        LinkedHashSet<String> urls = new LinkedHashSet<>();
+
+        Document sub = Jsoup.parseBodyFragment(block);
+        collectImages(sub.select("img"), urls);
+        if (urls.isEmpty()) {
+            collectImageUrlsFromText(block, urls);
+        }
+
+        return postProcessDetailImageUrls(new ArrayList<>(urls));
+    }
+
+
+    private boolean isInsideExcludedDetailContainer(Element el) {
+        if (el == null) return false;
+        return el.closest("#desc-lazyload-container") != null || el.closest("#desc-lazyload") != null;
+    }
+
+    private List<String> extractDetailImagesFromWindowContext(String html) {
+        if (html == null || html.isBlank()) return Collections.emptyList();
+
+        try {
+            String json = extractWindowContextJson(html);
+            if (json == null || json.isBlank()) return Collections.emptyList();
+            json = quoteNumericObjectKeys(json);
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> root = objectMapper.readValue(json, Map.class);
+            if (root == null) return Collections.emptyList();
+
+            Object result = root.get("result");
+            if (!(result instanceof Map<?, ?> r)) return Collections.emptyList();
+
+            Object descNode = deepGet(r, "data", "description", "fields");
+            if (descNode == null) {
+                descNode = deepGet(r, "global", "globalData", "model", "offerDetail");
+            }
+            if (descNode == null) return Collections.emptyList();
+
+            LinkedHashSet<String> urls = new LinkedHashSet<>();
+            collectDescriptionImageUrls(descNode, urls, 0);
             return postProcessDetailImageUrls(new ArrayList<>(urls));
         } catch (Exception ignored) {
             return Collections.emptyList();
@@ -850,10 +1141,8 @@ public class Alibaba1688HtmlParser {
             Object result = root.get("result");
             if (!(result instanceof Map<?, ?> r)) return null;
 
-            // Prefer result.data.description.fields.detailUrl
             String u = asString(deepGet(r, "data", "description", "fields", "detailUrl"));
             if (u == null || u.isBlank()) {
-                // Fallback: result.global.globalData.model.offerDetail.detailUrl
                 u = asString(deepGet(r, "global", "globalData", "model", "offerDetail", "detailUrl"));
             }
             if (u == null || u.isBlank()) return null;
@@ -866,18 +1155,24 @@ public class Alibaba1688HtmlParser {
 
     private List<String> extractDetailImagesFromItemCdn(String detailUrl) {
         if (detailUrl == null || detailUrl.isBlank()) return Collections.emptyList();
+
         try {
-            // itemcdn content is often plain HTML containing many <img> tags
             String html = org.jsoup.Jsoup.connect(detailUrl)
                     .userAgent("Mozilla/5.0")
                     .timeout(10_000)
                     .ignoreContentType(true)
                     .execute()
                     .body();
+
             if (html == null || html.isBlank()) return Collections.emptyList();
-            Document doc = org.jsoup.Jsoup.parse(html);
+
             LinkedHashSet<String> urls = new LinkedHashSet<>();
+
+            Document doc = org.jsoup.Jsoup.parse(html);
             collectImages(doc.select("img"), urls);
+
+            collectImageUrlsFromText(html, urls);
+
             return postProcessDetailImageUrls(new ArrayList<>(urls));
         } catch (Exception ignored) {
             return Collections.emptyList();
@@ -893,22 +1188,36 @@ public class Alibaba1688HtmlParser {
         return cur;
     }
 
-    private void collectImageUrlsRecursively(Object node, Set<String> out, int depth) {
-        if (node == null || out == null || depth > 12) return;
+    private void collectDescriptionImageUrls(Object node, Set<String> out, int depth) {
+        if (node == null || out == null || depth > 10) return;
+
+        if (node instanceof String s) {
+            collectImageUrlsFromText(s, out);
+            String u = normalizeImageUrl(normalizeUrl(s));
+            if (u != null && isImageUrl(u)) {
+                out.add(u);
+            }
+            return;
+        }
 
         if (node instanceof Map<?, ?> map) {
             for (Map.Entry<?, ?> entry : map.entrySet()) {
-                Object value = entry.getValue();
                 String key = entry.getKey() == null ? "" : String.valueOf(entry.getKey()).toLowerCase(Locale.ROOT);
+                Object value = entry.getValue();
+
                 if (value instanceof String s) {
-                    String normalized = normalizeImageUrl(normalizeUrl(s));
-                    if (normalized != null && isImageUrl(normalized)) {
-                        if (key.contains("detail") || key.contains("desc") || key.contains("image") || key.contains("url") || key.contains("content")) {
-                            out.add(normalized);
+                    if (key.contains("content") || key.contains("html") || key.contains("desc") || key.contains("detail")) {
+                        collectImageUrlsFromText(s, out);
+                    }
+
+                    if (!key.contains("detailurl")) {
+                        String u = normalizeImageUrl(normalizeUrl(s));
+                        if (u != null && isImageUrl(u)) {
+                            out.add(u);
                         }
                     }
                 } else {
-                    collectImageUrlsRecursively(value, out, depth + 1);
+                    collectDescriptionImageUrls(value, out, depth + 1);
                 }
             }
             return;
@@ -916,15 +1225,26 @@ public class Alibaba1688HtmlParser {
 
         if (node instanceof Iterable<?> iterable) {
             for (Object item : iterable) {
-                collectImageUrlsRecursively(item, out, depth + 1);
+                collectDescriptionImageUrls(item, out, depth + 1);
             }
-            return;
         }
+    }
 
-        if (node instanceof String s) {
-            String normalized = normalizeImageUrl(normalizeUrl(s));
-            if (normalized != null && isImageUrl(normalized)) {
-                out.add(normalized);
+    private void collectImageUrlsFromText(String text, Set<String> out) {
+        if (text == null || text.isBlank() || out == null) return;
+
+        String s = text
+                .replace("\\/", "/")
+                .replace("&quot;", "\"")
+                .replace("&#34;", "\"")
+                .replace("&amp;", "&");
+
+        Pattern p = Pattern.compile("((?:https?:)?//[^\\s\"'<>\\\\]+?\\.(?:jpg|jpeg|png|webp|gif)(?:\\?[^\\s\"'<>]*)?)", Pattern.CASE_INSENSITIVE);
+        Matcher m = p.matcher(s);
+        while (m.find()) {
+            String u = normalizeImageUrl(normalizeUrl(m.group(1)));
+            if (u != null && isImageUrl(u)) {
+                out.add(u);
             }
         }
     }
@@ -975,30 +1295,15 @@ public class Alibaba1688HtmlParser {
     private List<String> postProcessDetailImageUrls(List<String> urls) {
         if (urls == null || urls.isEmpty()) return Collections.emptyList();
 
-        boolean hasIbank = false;
-        for (String u : urls) {
-            if (u != null && u.contains("/img/ibank/")) {
-                hasIbank = true;
-                break;
-            }
-        }
-
         LinkedHashSet<String> out = new LinkedHashSet<>();
         for (String u : urls) {
             if (u == null || u.isBlank()) continue;
-            String s = u;
 
-            String lower = s.toLowerCase(Locale.ROOT);
-            if (lower.contains("/imgextra/") || lower.contains("-tps-") || lower.contains("tps-")) {
-                continue;
-            }
-
-            s = normalizeImageUrl(normalizeUrl(s));
+            String s = normalizeImageUrl(normalizeUrl(u));
             if (s == null || !isImageUrl(s)) continue;
-            if (hasIbank && !s.contains("/img/ibank/")) continue;
+
             out.add(s);
         }
-
         return new ArrayList<>(out);
     }
 
@@ -1014,17 +1319,46 @@ public class Alibaba1688HtmlParser {
         if (s.endsWith("\"") || s.endsWith("'")) s = s.substring(0, s.length() - 1);
         s = s.trim();
 
+        if (!isCleanHttpImageUrlCandidate(s)) return null;
+
         int q = s.indexOf('?');
         if (q > 0) s = s.substring(0, q);
         int h = s.indexOf('#');
         if (h > 0) s = s.substring(0, h);
 
+        s = collapseAlibabaImageVariant(s);
+        if (s == null || s.isBlank()) return null;
+
         String lower = s.toLowerCase(Locale.ROOT);
         int end = firstImageExtEndIndex(lower);
-        if (end > 0 && end <= s.length()) {
-            s = s.substring(0, end);
-        }
+        if (end < 0) return null;
+        if (end != s.length()) return null;
         return s;
+    }
+
+    private String collapseAlibabaImageVariant(String url) {
+        if (url == null || url.isBlank()) return url;
+        Matcher matcher = ALIBABA_IMAGE_VARIANT_PATTERN.matcher(url);
+        if (!matcher.find()) return url;
+        return matcher.replaceFirst("$1$2");
+    }
+
+    private boolean isCleanHttpImageUrlCandidate(String value) {
+        if (value == null || value.isBlank()) return false;
+
+        String lower = value.toLowerCase(Locale.ROOT);
+        if (!lower.startsWith("http://") && !lower.startsWith("https://")) return false;
+        if (lower.contains("[pasted")) return false;
+        if (value.indexOf(' ') >= 0 || value.indexOf('\t') >= 0 || value.indexOf('\n') >= 0 || value.indexOf('\r') >= 0) {
+            return false;
+        }
+        if (value.indexOf('"') >= 0 || value.indexOf('\\') >= 0 || value.indexOf('<') >= 0 || value.indexOf('>') >= 0) {
+            return false;
+        }
+
+        int firstHttp = lower.indexOf("http");
+        int nextHttp = lower.indexOf("http", firstHttp + 4);
+        return nextHttp < 0;
     }
 
     private int firstImageExtEndIndex(String lowerUrl) {

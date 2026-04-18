@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { clearPlatformAuth, getPlatformAuthToken } from '@/utils/platformAuth'
 
 const apiClient = axios.create({
   baseURL: '/api',
@@ -8,9 +9,24 @@ const apiClient = axios.create({
   }
 })
 
+apiClient.interceptors.request.use((config) => {
+  const token = getPlatformAuthToken()
+  if (token) {
+    config.headers = config.headers || {}
+    config.headers.Authorization = `Bearer ${token}`
+  }
+  return config
+})
+
 apiClient.interceptors.response.use(
   response => response.data,
   error => {
+    if (error.response?.status === 401) {
+      clearPlatformAuth()
+      if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+        window.location.replace('/login')
+      }
+    }
     const message = error.response?.data?.message || error.message || '请求失败'
     return Promise.reject(new Error(message))
   }

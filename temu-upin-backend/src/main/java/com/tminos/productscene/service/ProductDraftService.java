@@ -29,19 +29,22 @@ public class ProductDraftService {
     private final ProductCollectionService productCollectionService;
     private final ObjectMapper objectMapper;
     private final ImportTitleFilterWordRepository titleFilterWordRepo;
+    private final TargetShopBindingService targetShopBindingService;
 
     public ProductDraftService(ProductDraftRepository repo,
                                ProductCollectionService productCollectionService,
                                ObjectMapper objectMapper,
-                               ImportTitleFilterWordRepository titleFilterWordRepo) {
+                               ImportTitleFilterWordRepository titleFilterWordRepo,
+                               TargetShopBindingService targetShopBindingService) {
         this.repo = repo;
         this.productCollectionService = productCollectionService;
         this.objectMapper = objectMapper;
         this.titleFilterWordRepo = titleFilterWordRepo;
+        this.targetShopBindingService = targetShopBindingService;
     }
 
     @Transactional(readOnly = true)
-    public Page<ProductDraftDTO.ListItem> list(String q, String sourcePlatform, Boolean pushedToCollection, Boolean showDeleted, int page, int size) {
+    public Page<ProductDraftDTO.ListItem> list(String q, String sourcePlatform, String targetShopId, Boolean pushedToCollection, Boolean showDeleted, int page, int size) {
         Pageable pageable = PageRequest.of(Math.max(page, 0), Math.min(Math.max(size, 1), 100), Sort.by(Sort.Direction.DESC, "updatedAt"));
         boolean includeDeleted = Boolean.TRUE.equals(showDeleted);
         Specification<ProductDraft> spec = (root, query, cb) -> {
@@ -51,6 +54,10 @@ public class ProductDraftService {
             }
             if (StringUtils.hasText(sourcePlatform)) {
                 p = cb.and(p, cb.equal(root.get("sourcePlatform"), sourcePlatform.trim().toUpperCase()));
+            }
+            if (StringUtils.hasText(targetShopId)) {
+                String like = "%\"" + targetShopId.trim() + "\"%";
+                p = cb.and(p, cb.like(root.get("targetShopIds"), like));
             }
             if (pushedToCollection != null) {
                 p = cb.and(p, cb.equal(root.get("pushedToCollection"), pushedToCollection));
@@ -79,6 +86,7 @@ public class ProductDraftService {
             throw new IllegalArgumentException("HTML content is required");
         }
         ParsedSnapshot snapshot = parseSnapshot(request.getHtml(), request.getExtractedJson());
+        TargetShopBindingService.TargetShopBinding targetShopBinding = targetShopBindingService.resolve(request.getTargetShopIds());
         ProductDraft draft = ProductDraft.builder()
                 .sourcePlatform(snapshot.sourcePlatform)
                 .productId(defaultText(snapshot.parsed.getProductId(), "UNKNOWN-" + System.currentTimeMillis()))
@@ -91,6 +99,8 @@ public class ProductDraftService {
                 .monthlySales(trim(snapshot.parsed.getMonthlySales()))
                 .reviewCount(snapshot.parsed.getReviewCount())
                 .companyName(trim(snapshot.parsed.getCompanyName()))
+                .targetShopIds(targetShopBindingService.toJson(targetShopBinding.shopIds()))
+                .targetShopNames(targetShopBindingService.toJson(targetShopBinding.shopNames()))
                 .originalHtml(request.getHtml())
                 .extractedJson(trimToNull(request.getExtractedJson()))
                 .parserSnapshotJson(snapshot.snapshotJson)
@@ -135,7 +145,11 @@ public class ProductDraftService {
         if (!StringUtils.hasText(draft.getOriginalHtml())) {
             throw new IllegalArgumentException("draft html is required");
         }
-        ProductCollection saved = productCollectionService.importFromHtml(draft.getOriginalHtml(), draft.getExtractedJson());
+        ProductCollection saved = productCollectionService.importFromHtml(
+                draft.getOriginalHtml(),
+                draft.getExtractedJson(),
+                targetShopBindingService.parseJsonArray(draft.getTargetShopIds())
+        );
         draft.setPushedToCollection(true);
         draft.setPushedCollectionId(saved.getId());
         draft.setPushedAt(LocalDateTime.now());
@@ -169,6 +183,8 @@ public class ProductDraftService {
                 .monthlySales(e.getMonthlySales())
                 .reviewCount(e.getReviewCount())
                 .companyName(e.getCompanyName())
+                .targetShopIds(targetShopBindingService.parseJsonArray(e.getTargetShopIds()))
+                .targetShopNames(targetShopBindingService.parseJsonArray(e.getTargetShopNames()))
                 .pushedToCollection(e.getPushedToCollection())
                 .pushedCollectionId(e.getPushedCollectionId())
                 .pushedAt(e.getPushedAt())
@@ -192,6 +208,8 @@ public class ProductDraftService {
                 .monthlySales(e.getMonthlySales())
                 .reviewCount(e.getReviewCount())
                 .companyName(e.getCompanyName())
+                .targetShopIds(targetShopBindingService.parseJsonArray(e.getTargetShopIds()))
+                .targetShopNames(targetShopBindingService.parseJsonArray(e.getTargetShopNames()))
                 .originalHtml(e.getOriginalHtml())
                 .extractedJson(e.getExtractedJson())
                 .parserSnapshotJson(e.getParserSnapshotJson())

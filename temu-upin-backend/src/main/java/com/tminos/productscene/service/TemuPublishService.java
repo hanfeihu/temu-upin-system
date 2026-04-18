@@ -37,7 +37,7 @@ public class TemuPublishService {
     private final ProductCollectionRepository productCollectionRepository;
     private final ProductCollectionTemuSkuRepository temuSkuRepository;
     private final TemuSkuPublishDraftConverter temuSkuPublishDraftConverter;
-    private final PlatformConfigService platformConfigService;
+    private final TemuShopService temuShopService;
     private final TemuImageNormalizeService imageNormalizeService;
     private final TemuImageMetaService temuImageMetaService;
     private final TemuPublishLogService publishLogService;
@@ -46,12 +46,13 @@ public class TemuPublishService {
     private final ObjectMapper objectMapper;
     private final AITemuAttrFillerConfig aiTemuAttrFillerConfig;
     private final TemuOpenApiCredentialService temuOpenApiCredentialService;
+    private final TemuSizeChartService temuSizeChartService;
 
     public TemuPublishService(ProductCollectionService productCollectionService,
                              ProductCollectionRepository productCollectionRepository,
                              ProductCollectionTemuSkuRepository temuSkuRepository,
                              TemuSkuPublishDraftConverter temuSkuPublishDraftConverter,
-                             PlatformConfigService platformConfigService,
+                             TemuShopService temuShopService,
                              TemuImageNormalizeService imageNormalizeService,
                              TemuImageMetaService temuImageMetaService,
                              TemuPublishLogService publishLogService,
@@ -59,12 +60,13 @@ public class TemuPublishService {
                              TemuAttrAiFillService temuAttrAiFillService,
                              ObjectMapper objectMapper,
                              AITemuAttrFillerConfig aiTemuAttrFillerConfig,
-                             TemuOpenApiCredentialService temuOpenApiCredentialService) {
+                             TemuOpenApiCredentialService temuOpenApiCredentialService,
+                             TemuSizeChartService temuSizeChartService) {
         this.productCollectionService = productCollectionService;
         this.productCollectionRepository = productCollectionRepository;
         this.temuSkuRepository = temuSkuRepository;
         this.temuSkuPublishDraftConverter = temuSkuPublishDraftConverter;
-        this.platformConfigService = platformConfigService;
+        this.temuShopService = temuShopService;
         this.imageNormalizeService = imageNormalizeService;
         this.temuImageMetaService = temuImageMetaService;
         this.publishLogService = publishLogService;
@@ -73,6 +75,7 @@ public class TemuPublishService {
         this.objectMapper = objectMapper;
         this.aiTemuAttrFillerConfig = aiTemuAttrFillerConfig;
         this.temuOpenApiCredentialService = temuOpenApiCredentialService;
+        this.temuSizeChartService = temuSizeChartService;
     }
 
     @Transactional
@@ -144,25 +147,65 @@ public class TemuPublishService {
             return new TemuPublishDTO.PublishResponse(false, "TEMU SKU 为空，请先做 SKU 转换", runId, null, null, null, warnings);
         }
 
-        // 2) load default config
-        Map<String, String> cfg = platformConfigService.getDefaultConfigOrThrow();
-        int siteId = parseInt(cfg.get(PlatformConfigService.KEY_DEFAULT_SITE_ID), 100);
-        String warehouseId = firstNonBlank(cfg.get(PlatformConfigService.KEY_DEFAULT_WAREHOUSE_ID), "WH-03304781516934009");
-        String originRegion1 = firstNonBlank(cfg.get(PlatformConfigService.KEY_ORIGIN_REGION1_SHORT), "CN");
-        long originRegion2Id = parseLong(cfg.get(PlatformConfigService.KEY_ORIGIN_REGION2_ID), 43000000000016L);
-        String freightTemplateId = firstNonBlank(cfg.get(PlatformConfigService.KEY_SHIPMENT_FREIGHT_TEMPLATE_ID), "HFT-14851213328261424009");
-        int limitSecond = parseInt(cfg.get(PlatformConfigService.KEY_SHIPMENT_LIMIT_SECOND), 777600);
+        PublishShopBinding publishShop = resolvePublishShopBinding(pc, runId, warnings);
+        if (publishShop == null || !StringUtils.hasText(publishShop.shopId())) {
+            String message = "商品未绑定店铺，请先选择目标店铺后再发布";
+            publishLogService.error(runId, "SHOP", message, null);
+            publishLogService.finishFailed(runId, message, null, null);
+            markPublishFailed(pc, runId, message);
+            return new TemuPublishDTO.PublishResponse(false, message, runId, null, null, null, warnings);
+        }
 
-        publishLogService.data(runId, "CONFIG", "loaded default config", cfg);
+        TemuShopService.PublishConfig shopConfig;
+        try {
+            shopConfig = temuShopService.getPublishConfigByShopIdOrThrow(publishShop.shopId());
+        } catch (Exception e) {
+            String message = "TEMU 店铺发布配置不完整: " + safeErrMessage(e);
+            publishLogService.error(runId, "CONFIG", message, null);
+            publishLogService.finishFailed(runId, message, null, null);
+            markPublishFailed(pc, runId, message);
+            return new TemuPublishDTO.PublishResponse(false, message, runId, null, null, null, warnings);
+        }
+        int siteId = shopConfig.siteId();
+        String warehouseId = shopConfig.warehouseId();
+        String originRegion1 = shopConfig.originRegion1ShortName();
+        long originRegion2Id = shopConfig.originRegion2Id();
+        String freightTemplateId = shopConfig.freightTemplateId();
+        int limitSecond = shopConfig.shipmentLimitSecond();
+
+        {
+            Map<String, Object> config = new LinkedHashMap<>();
+            config.put("shopId", shopConfig.shopId());
+            config.put("shopName", shopConfig.shopName());
+            config.put("siteId", shopConfig.siteId());
+            config.put("warehouseId", shopConfig.warehouseId());
+            config.put("skuDefaultStock", shopConfig.skuDefaultStock());
+            config.put("skuMaxStock", shopConfig.skuMaxStock());
+            config.put("originRegion1ShortName", shopConfig.originRegion1ShortName());
+            config.put("originRegion2Id", shopConfig.originRegion2Id());
+            config.put("freightTemplateId", shopConfig.freightTemplateId());
+            config.put("shipmentLimitSecond", shopConfig.shipmentLimitSecond());
+            publishLogService.data(runId, "CONFIG", "loaded shop publish config", config);
+        }
 
         TemuOpenApiCredentials creds;
         try {
-            creds = temuOpenApiCredentialService.getDefaultTemuOpenApiCredentialsOrThrow();
+            creds = temuOpenApiCredentialService.getTemuOpenApiCredentialsByExactShopIdOrThrow(publishShop.shopId());
         } catch (Exception e) {
             publishLogService.error(runId, "CONFIG", "temu credentials missing", null);
             publishLogService.finishFailed(runId, "temu credentials missing", null, null);
             markPublishFailed(pc, runId, "temu credentials missing");
-            return new TemuPublishDTO.PublishResponse(false, "TEMU 配置不完整（店铺/appKey/appSecret/token）", runId, null, null, null, warnings);
+            return new TemuPublishDTO.PublishResponse(false, "TEMU 店铺凭证不完整（店铺/appKey/appSecret/token）", runId, null, null, null, warnings);
+        }
+
+        {
+            Map<String, Object> shopData = new LinkedHashMap<>();
+            shopData.put("selectedShopId", publishShop.shopId());
+            shopData.put("selectedShopName", publishShop.shopName());
+            shopData.put("boundShopIds", publishShop.allShopIds());
+            shopData.put("boundShopNames", publishShop.allShopNames());
+            shopData.put("credentialShopId", creds.getShopId());
+            publishLogService.data(runId, "SHOP", "resolved publish shop and credentials", shopData);
         }
 
         CategoryApiClient categoryClient = new CategoryApiClient(creds);
@@ -248,8 +291,8 @@ public class TemuPublishService {
                 pc,
                 siteId,
                 warehouseId,
-                parseInt(cfg.get(PlatformConfigService.KEY_SKU_DEFAULT_STOCK), 100),
-                parseInt(cfg.get(PlatformConfigService.KEY_SKU_MAX_STOCK), 10842)
+                shopConfig.skuDefaultStock(),
+                shopConfig.skuMaxStock()
         );
         if (!draftGate.ready()) {
             String message = draftGate.message();
@@ -277,6 +320,11 @@ public class TemuPublishService {
         req.setMaterialImgUrl(materialImg);
         if (carousel != null && !carousel.isEmpty()) {
             req.setCarouselImageUrls(new ArrayList<>(carousel));
+        }
+        List<AddGloGoodsRequest.GoodsLayerDecorationReq> goodsLayerDecorationReqs = buildGoodsLayerDecorationReqs(detail);
+        if (!goodsLayerDecorationReqs.isEmpty()) {
+            warnings.add("goodsLayerDecorationReqs skipped before publish to avoid floor validation errors");
+            publishLogService.info(runId, "DETAIL", "skip goodsLayerDecorationReqs before publish");
         }
 
         // category path
@@ -325,6 +373,7 @@ public class TemuPublishService {
         // product properties from saved temuAttributes
         Map<Integer, AttrTemplate> attrTemplateByPid = loadAttrTemplateByPid(spuId, warnings, runId);
         List<AddGloGoodsRequest.ProductPropertyReq> props = parseTemuAttributesAsProductPropertyReqs(pc.getTemuAttributes(), attrTemplateByPid, warnings, runId);
+        props = filterOutSalePropertyReqs(props, attrTemplateByPid, warnings, runId);
         if (props == null || props.isEmpty()) {
             publishLogService.error(runId, "VALIDATE", "parsed productPropertyReqs empty", null);
             publishLogService.finishFailed(runId, "productPropertyReqs empty", null, null);
@@ -345,9 +394,18 @@ public class TemuPublishService {
             markPublishFailed(pc, runId, message);
             return blockedBySpecMappingResponse(message, runId, warnings);
         }
+        StoredMaterializedSpecDraft materialized;
         try {
-            StoredMaterializedSpecDraft materialized = materializeStoredDraft(categoryClient, storedDraft);
+            materialized = materializeStoredDraft(categoryClient, storedDraft);
             req.setProductSpecPropertyReqs(materialized.productSpecPropertyReqs());
+            enrichSpecPropertyReqsWithSaleAttrTemplate(req.getProductSpecPropertyReqs(), attrTemplateByPid);
+            req.setProductPropertyReqs(filterOutSalePropertyReqsHandledBySpecs(
+                    req.getProductPropertyReqs(),
+                    req.getProductSpecPropertyReqs(),
+                    attrTemplateByPid,
+                    warnings,
+                    runId
+            ));
             long leafCatId = leafCatId(catIds);
             boolean leafHasMainSaleAttr = hasLeafMainSaleAttribute(leafCatId, categoryClient, props);
             req.setProductSkcReqs(buildProductSkcReqsFromStoredDraft(runId, spuId, pc, mainImage, fallbackThumb, materialized, leafHasMainSaleAttr));
@@ -367,6 +425,27 @@ public class TemuPublishService {
         }
 
         String requestJson = null;
+        TemuSizeChartService.SizeTemplateBinding sizeTemplateBinding = null;
+        try {
+            sizeTemplateBinding = ensurePublishSizeTemplateIfNeeded(pc, req, creds, runId, warnings);
+            if (sizeTemplateBinding != null) {
+                Map<String, Object> sizeTemplateData = new LinkedHashMap<>();
+                sizeTemplateData.put("baseBusinessId", sizeTemplateBinding.baseBusinessId());
+                sizeTemplateData.put("tempBusinessId", sizeTemplateBinding.tempBusinessId());
+                sizeTemplateData.put("sizeTemplateId", req.getSizeTemplateId());
+                sizeTemplateData.put("sizeTemplateIds", req.getSizeTemplateIds());
+                sizeTemplateData.put("showSizeTemplateIds", req.getShowSizeTemplateIds());
+                publishLogService.data(runId, "SIZE_TEMPLATE", "prepared size template", sizeTemplateData);
+            }
+        } catch (Exception e) {
+            String err = safeErrMessage(e);
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("error", err);
+            publishLogService.error(runId, "SIZE_TEMPLATE", "prepare size template failed", data);
+            publishLogService.finishFailed(runId, "size template failed: " + err, null, null);
+            markPublishFailed(pc, runId, "size template failed: " + err);
+            return new TemuPublishDTO.PublishResponse(false, "尺码模板准备失败: " + err, runId, null, null, null, warnings);
+        }
         try {
             requestJson = objectMapper.writeValueAsString(req);
         } catch (Exception ignored) {
@@ -384,9 +463,53 @@ public class TemuPublishService {
         String raw;
         TemuApiResponse<AddGloGoodsResponse> apiResp;
         try {
-            TemuGloGoodsV2Client goodsClient = new TemuGloGoodsV2Client(creds);
-            apiResp = goodsClient.addGloGoods(req);
-            raw = objectMapper.writeValueAsString(apiResp);
+            AddGloGoodsRequest attemptedReq = req;
+            PublishApiCallResult callResult = callAddGloGoodsWithAdaptiveSaleExtAttr(creds, attemptedReq, sizeTemplateBinding, runId, warnings);
+            apiResp = callResult.response();
+            raw = callResult.raw();
+            requestJson = callResult.requestJson();
+            if (shouldRetryWithCollapsedCompositeSpec(apiResp, attemptedReq)) {
+                publishLogService.warn(runId, "CALL", "sparse SKU matrix detected, retry with flattened placeholder skc");
+                warnings.add("sparse sku matrix detected, retry with flattened placeholder skc");
+                AddGloGoodsRequest flattenedReq = buildFlattenedPlaceholderSkcRequest(attemptedReq, runId, warnings);
+                attemptedReq = flattenedReq;
+                callResult = callAddGloGoodsWithAdaptiveSaleExtAttr(creds, attemptedReq, sizeTemplateBinding, runId, warnings);
+                apiResp = callResult.response();
+                raw = callResult.raw();
+                requestJson = callResult.requestJson();
+                if (shouldRetryWithCollapsedCompositeSpec(apiResp, attemptedReq)) {
+                    publishLogService.warn(runId, "CALL", "flattened sparse sku matrix still rejected, retry with dense placeholder matrix");
+                    warnings.add("flattened sparse sku matrix still rejected, retry with dense placeholder matrix");
+                    AddGloGoodsRequest denseReq = buildDensePlaceholderMatrixRequest(attemptedReq, runId, warnings);
+                    attemptedReq = denseReq;
+                    callResult = callAddGloGoodsWithAdaptiveSaleExtAttr(creds, attemptedReq, sizeTemplateBinding, runId, warnings);
+                    apiResp = callResult.response();
+                    raw = callResult.raw();
+                    requestJson = callResult.requestJson();
+                    if (shouldRetryWithCollapsedCompositeSpec(apiResp, attemptedReq)) {
+                        publishLogService.warn(runId, "CALL", "dense placeholder matrix still rejected, retry with collapsed composite spec");
+                        warnings.add("dense placeholder matrix still rejected, retry with collapsed composite spec");
+                        AddGloGoodsRequest collapsedReq = buildCollapsedCompositeSpecRequest(attemptedReq, categoryClient, runId, warnings);
+                        attemptedReq = collapsedReq;
+                        callResult = callAddGloGoodsWithAdaptiveSaleExtAttr(creds, attemptedReq, sizeTemplateBinding, runId, warnings);
+                        apiResp = callResult.response();
+                        raw = callResult.raw();
+                        requestJson = callResult.requestJson();
+                    }
+                }
+            }
+            if (shouldRetryWithCustomSpecValueLimit(apiResp, attemptedReq)) {
+                publishLogService.warn(runId, "CALL", "custom spec value count exceeded temu limit, retry with trimmed spec values");
+                warnings.add("custom spec value count exceeded temu limit, retry with trimmed spec values");
+                AddGloGoodsRequest limitedReq = buildLimitedCustomSpecValueRequest(attemptedReq, 60, runId, warnings);
+                if (limitedReq != null) {
+                    attemptedReq = limitedReq;
+                    callResult = callAddGloGoodsWithAdaptiveSaleExtAttr(creds, attemptedReq, sizeTemplateBinding, runId, warnings);
+                    apiResp = callResult.response();
+                    raw = callResult.raw();
+                    requestJson = callResult.requestJson();
+                }
+            }
         } catch (Exception e) {
             String err = exceptionToString(e);
             Map<String, Object> data = new LinkedHashMap<>();
@@ -440,6 +563,283 @@ public class TemuPublishService {
         }
 
         return new TemuPublishDTO.PublishResponse(success, success ? "OK" : "TEMU 返回失败", runId, goodsId, raw, null, warnings);
+    }
+
+    private PublishApiCallResult callAddGloGoodsWithAdaptiveSaleExtAttr(TemuOpenApiCredentials creds,
+                                                                        AddGloGoodsRequest req,
+                                                                        TemuSizeChartService.SizeTemplateBinding sizeTemplateBinding,
+                                                                        Long runId,
+                                                                        List<String> warnings) throws Exception {
+        PublishAttemptState state = new PublishAttemptState(req, callAddGloGoodsAndLog(creds, req, runId, "initial"));
+        state = retryWithoutSizeTemplateIfNeeded(creds, state, sizeTemplateBinding, runId, warnings);
+        if (shouldRetryWithoutDiscreetShipping(state.result().response(), state.request())) {
+            publishLogService.warn(runId, "CALL", "category does not support discreetShipping, retry without saleExtAttr");
+            warnings.add("category does not support discreetShipping, retry without productSaleExtAttrReq");
+            AddGloGoodsRequest retryReq = cloneAddGloGoodsRequest(state.request());
+            retryReq.setProductSaleExtAttrReq(null);
+            state = new PublishAttemptState(retryReq, callAddGloGoodsAndLog(creds, retryReq, runId, "retry-without-sale-ext-attr"));
+            state = retryWithoutSizeTemplateIfNeeded(creds, state, sizeTemplateBinding, runId, warnings);
+        }
+        return state.result();
+    }
+
+    private PublishApiCallResult callAddGloGoodsAndLog(TemuOpenApiCredentials creds,
+                                                       AddGloGoodsRequest req,
+                                                       Long runId,
+                                                       String attempt) throws Exception {
+        PublishApiCallResult result = callAddGloGoods(creds, req);
+        if (runId != null) {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("attempt", attempt);
+            data.put("sizeTemplateId", req == null ? null : req.getSizeTemplateId());
+            data.put("sizeTemplateIds", req == null ? null : req.getSizeTemplateIds());
+            data.put("showSizeTemplateIds", req == null ? null : req.getShowSizeTemplateIds());
+            data.put("skcCount", req == null || req.getProductSkcReqs() == null ? 0 : req.getProductSkcReqs().size());
+            data.put("skuCount", countProductSkuReqs(req));
+            data.put("requestJson", result == null ? null : result.requestJson());
+            data.put("raw", result == null ? null : result.raw());
+            publishLogService.data(runId, "CALL_ATTEMPT", "publish api attempt " + firstNonBlank(attempt, "unknown"), data);
+        }
+        return result;
+    }
+
+    private PublishApiCallResult callAddGloGoods(TemuOpenApiCredentials creds,
+                                                 AddGloGoodsRequest req) throws Exception {
+        TemuGloGoodsV2Client goodsClient = new TemuGloGoodsV2Client(creds);
+        TemuApiResponse<AddGloGoodsResponse> apiResp = goodsClient.addGloGoods(req);
+        String raw = objectMapper.writeValueAsString(apiResp);
+        String requestJson = objectMapper.writeValueAsString(req);
+        return new PublishApiCallResult(apiResp, raw, requestJson);
+    }
+
+    private PublishAttemptState retryWithoutSizeTemplateIfNeeded(TemuOpenApiCredentials creds,
+                                                                 PublishAttemptState state,
+                                                                 TemuSizeChartService.SizeTemplateBinding sizeTemplateBinding,
+                                                                 Long runId,
+                                                                 List<String> warnings) throws Exception {
+        if (state == null || state.result() == null) {
+            return state;
+        }
+        AddGloGoodsRequest activeReq = state.request();
+        PublishApiCallResult result = state.result();
+        if (!shouldRetryWithoutSizeTemplate(result.response(), activeReq)) {
+            return state;
+        }
+
+        if (sizeTemplateBinding != null && sizeTemplateBinding.baseBusinessId() != null && sizeTemplateBinding.tempBusinessId() != null) {
+            AddGloGoodsRequest baseListReq = cloneAddGloGoodsRequest(activeReq);
+            baseListReq.setSizeTemplateId(sizeTemplateBinding.tempBusinessId());
+            baseListReq.setSizeTemplateIds(new ArrayList<>(List.of(sizeTemplateBinding.baseBusinessId())));
+            baseListReq.setShowSizeTemplateIds(new ArrayList<>(List.of(sizeTemplateBinding.baseBusinessId())));
+            if (!hasSameSizeTemplateBinding(activeReq, baseListReq)) {
+                publishLogService.warn(runId, "CALL", "size template rejected, retry with temp id + base template lists");
+                warnings.add("size template rejected, retry with temp id + base template lists");
+                activeReq = baseListReq;
+                result = callAddGloGoodsAndLog(creds, activeReq, runId, "retry-temp-id-base-lists");
+            }
+            if (shouldRetryWithoutSizeTemplate(result.response(), activeReq)) {
+                AddGloGoodsRequest tempOnlyReq = cloneAddGloGoodsRequest(activeReq);
+                tempOnlyReq.setSizeTemplateId(sizeTemplateBinding.tempBusinessId());
+                tempOnlyReq.setSizeTemplateIds(null);
+                tempOnlyReq.setShowSizeTemplateIds(null);
+                if (!hasSameSizeTemplateBinding(activeReq, tempOnlyReq)) {
+                    publishLogService.warn(runId, "CALL", "size template rejected, retry with temp id only");
+                    warnings.add("size template rejected, retry with temp id only");
+                    activeReq = tempOnlyReq;
+                    result = callAddGloGoodsAndLog(creds, activeReq, runId, "retry-temp-id-only");
+                }
+            }
+            if (shouldRetryWithoutSizeTemplate(result.response(), activeReq)) {
+                AddGloGoodsRequest baseOnlyReq = cloneAddGloGoodsRequest(activeReq);
+                baseOnlyReq.setSizeTemplateId(sizeTemplateBinding.baseBusinessId());
+                baseOnlyReq.setSizeTemplateIds(new ArrayList<>(List.of(sizeTemplateBinding.baseBusinessId())));
+                baseOnlyReq.setShowSizeTemplateIds(new ArrayList<>(List.of(sizeTemplateBinding.baseBusinessId())));
+                if (!hasSameSizeTemplateBinding(activeReq, baseOnlyReq)) {
+                    publishLogService.warn(runId, "CALL", "size template rejected, retry with base businessId");
+                    warnings.add("size template rejected, retry with base businessId");
+                    activeReq = baseOnlyReq;
+                    result = callAddGloGoodsAndLog(creds, activeReq, runId, "retry-base-business-id");
+                }
+            }
+        }
+        if (shouldRetryWithoutSizeTemplate(result.response(), activeReq)) {
+            AddGloGoodsRequest clearedReq = cloneAddGloGoodsRequest(activeReq);
+            clearSizeTemplateBinding(clearedReq);
+            if (!hasSameSizeTemplateBinding(activeReq, clearedReq)) {
+                publishLogService.warn(runId, "CALL", "size template rejected, retry without size template binding");
+                warnings.add("size template rejected by temu, retry without size template binding");
+                activeReq = clearedReq;
+                result = callAddGloGoodsAndLog(creds, activeReq, runId, "retry-without-size-template");
+            }
+        }
+        return new PublishAttemptState(activeReq, result);
+    }
+
+    private TemuSizeChartService.SizeTemplateBinding ensurePublishSizeTemplateIfNeeded(ProductCollection pc,
+                                                                                      AddGloGoodsRequest req,
+                                                                                      TemuOpenApiCredentials creds,
+                                                                                      Long runId,
+                                                                                      List<String> warnings) throws Exception {
+        if (pc == null || req == null || temuSizeChartService == null) {
+            return null;
+        }
+        if (!hasExplicitSizeSpec(req)) {
+            return null;
+        }
+        TemuSizeChartService.SizeTemplateBinding sizeTemplateBinding = temuSizeChartService.ensureSizeTemplateForApparel(pc, req, creds);
+        if ((sizeTemplateBinding == null || sizeTemplateBinding.tempBusinessId() == null || sizeTemplateBinding.tempBusinessId() <= 0)
+                && requiresSizeTemplate(pc, req)) {
+            throw new IllegalStateException("missing sizeTemplateId for size-sensitive product");
+        }
+        return sizeTemplateBinding;
+    }
+
+    private boolean hasExplicitSizeSpec(AddGloGoodsRequest req) {
+        if (req == null) {
+            return false;
+        }
+        if (containsSizeName(req.getProductPropertyReqs())) {
+            return true;
+        }
+        return containsSizeName(req.getProductSpecPropertyReqs());
+    }
+
+    private boolean shouldRetryWithoutSizeTemplate(TemuApiResponse<AddGloGoodsResponse> apiResp,
+                                                   AddGloGoodsRequest req) {
+        if (apiResp == null || apiResp.isSuccess() || req == null) {
+            return false;
+        }
+        if (req.getSizeTemplateId() == null
+                && (req.getSizeTemplateIds() == null || req.getSizeTemplateIds().isEmpty())
+                && (req.getShowSizeTemplateIds() == null || req.getShowSizeTemplateIds().isEmpty())) {
+            return false;
+        }
+        String errorMsg = firstNonBlank(apiResp.getErrorMsg());
+        if (!StringUtils.hasText(errorMsg)) {
+            return false;
+        }
+        return errorMsg.contains("请重置规格模版")
+                || errorMsg.contains("不合法的尺码模板id")
+                || errorMsg.contains("非法的尺码模板id")
+                || errorMsg.contains("尺码表请补充完整")
+                || errorMsg.contains("请输入必填规格:尺码")
+                || errorMsg.contains("输入必填规格:尺码");
+    }
+
+    private boolean hasSameSizeTemplateBinding(AddGloGoodsRequest left, AddGloGoodsRequest right) {
+        if (left == right) {
+            return true;
+        }
+        if (left == null || right == null) {
+            return false;
+        }
+        return Objects.equals(left.getSizeTemplateId(), right.getSizeTemplateId())
+                && Objects.equals(left.getSizeTemplateIds(), right.getSizeTemplateIds())
+                && Objects.equals(left.getShowSizeTemplateIds(), right.getShowSizeTemplateIds());
+    }
+
+    private void clearSizeTemplateBinding(AddGloGoodsRequest req) {
+        if (req == null) {
+            return;
+        }
+        req.setSizeTemplateId(null);
+        req.setSizeTemplateIds(null);
+        req.setShowSizeTemplateIds(null);
+    }
+
+    private AddGloGoodsRequest cloneAddGloGoodsRequest(AddGloGoodsRequest req) throws Exception {
+        if (req == null) {
+            return null;
+        }
+        return objectMapper.readValue(objectMapper.writeValueAsBytes(req), AddGloGoodsRequest.class);
+    }
+
+    private boolean containsSizeName(List<?> properties) {
+        if (properties == null || properties.isEmpty()) {
+            return false;
+        }
+        for (Object property : properties) {
+            String propName = readStringProperty(property, "getPropName");
+            if (isSizeLikeName(propName)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String readStringProperty(Object target, String getterName) {
+        if (target == null || !StringUtils.hasText(getterName)) {
+            return null;
+        }
+        try {
+            Object value = target.getClass().getMethod(getterName).invoke(target);
+            return value == null ? null : String.valueOf(value);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private boolean requiresSizeTemplate(ProductCollection pc,
+                                         AddGloGoodsRequest req) {
+        if (pc != null) {
+            String catText = firstNonBlank(pc.getTemuCatname(), pc.getTemuCatid(), "").toLowerCase(Locale.ROOT);
+            if (catText.contains("服装")
+                    || catText.contains("鞋")
+                    || catText.contains("鞋靴")
+                    || catText.contains("拖鞋")
+                    || catText.contains("凉鞋")
+                    || catText.contains("靴")) {
+                return true;
+            }
+        }
+        return hasExplicitSizeSpec(req);
+    }
+
+    private boolean isSizeLikeName(String propName) {
+        if (!StringUtils.hasText(propName)) {
+            return false;
+        }
+        String normalized = propName.trim().toLowerCase(Locale.ROOT);
+        return normalized.contains("尺码")
+                || normalized.contains("鞋码")
+                || normalized.equals("size");
+    }
+
+    private boolean shouldRetryWithoutDiscreetShipping(TemuApiResponse<AddGloGoodsResponse> apiResp,
+                                                       AddGloGoodsRequest req) {
+        if (apiResp == null || apiResp.isSuccess() || req == null || req.getProductSaleExtAttrReq() == null) {
+            return false;
+        }
+        String errorMsg = firstNonBlank(apiResp.getErrorMsg());
+        return StringUtils.hasText(errorMsg) && errorMsg.contains("不支持设置隐私发货");
+    }
+
+    private record PublishApiCallResult(TemuApiResponse<AddGloGoodsResponse> response,
+                                        String raw,
+                                        String requestJson) {
+    }
+
+    private record PublishAttemptState(AddGloGoodsRequest request,
+                                       PublishApiCallResult result) {
+    }
+
+    private record PublishShopBinding(String shopId,
+                                      String shopName,
+                                      List<String> allShopIds,
+                                      List<String> allShopNames) {
+    }
+
+    private int countProductSkuReqs(AddGloGoodsRequest req) {
+        if (req == null || req.getProductSkcReqs() == null) {
+            return 0;
+        }
+        int count = 0;
+        for (AddGloGoodsRequest.ProductSkcReq skcReq : req.getProductSkcReqs()) {
+            if (skcReq != null && skcReq.getProductSkuReqs() != null) {
+                count += skcReq.getProductSkuReqs().size();
+            }
+        }
+        return count;
     }
 
     private void markPublishFailed(ProductCollection pc, Long runId, String reason) {
@@ -561,12 +961,84 @@ public class TemuPublishService {
         }
     }
 
+    private PublishShopBinding resolvePublishShopBinding(ProductCollection pc,
+                                                         Long runId,
+                                                         List<String> warnings) {
+        if (pc == null) {
+            return null;
+        }
+        List<String> shopIds = parseJsonStringList(pc.getTargetShopIds());
+        if (shopIds.isEmpty()) {
+            publishLogService.warn(runId, "SHOP", "product has no bound target shop");
+            return null;
+        }
+
+        List<String> shopNames = parseJsonStringList(pc.getTargetShopNames());
+        String selectedShopId = shopIds.get(0);
+        String selectedShopName = shopNames.size() > 0 && StringUtils.hasText(shopNames.get(0))
+                ? shopNames.get(0)
+                : selectedShopId;
+
+        if (shopIds.size() > 1) {
+            String warning = "商品绑定了多个店铺，本次发布将使用第一个店铺凭证: "
+                    + selectedShopName + "(" + selectedShopId + ")";
+            warnings.add(warning);
+            publishLogService.warn(runId, "SHOP", warning);
+        }
+
+        return new PublishShopBinding(selectedShopId, selectedShopName, List.copyOf(shopIds), List.copyOf(shopNames));
+    }
+
     private String writeJson(List<String> list) {
         if (list == null) return null;
         try {
             return objectMapper.writeValueAsString(list);
         } catch (Exception e) {
             return null;
+        }
+    }
+
+    private List<AddGloGoodsRequest.GoodsLayerDecorationReq> buildGoodsLayerDecorationReqs(List<String> detailImages) {
+        if (detailImages == null || detailImages.isEmpty()) {
+            return Collections.emptyList();
+        }
+        List<AddGloGoodsRequest.GoodsLayerDecorationReq> out = new ArrayList<>();
+        int priority = 1;
+        for (String detailImage : detailImages) {
+            if (!StringUtils.hasText(detailImage)) {
+                continue;
+            }
+
+            AddGloGoodsRequest.GoodsLayerDecorationReq.GoodsLayerContent content =
+                    new AddGloGoodsRequest.GoodsLayerDecorationReq.GoodsLayerContent();
+            content.setImgUrl(detailImage.trim());
+            applyDecImageKeyIfSupported(content);
+
+            AddGloGoodsRequest.GoodsLayerDecorationReq layer =
+                    new AddGloGoodsRequest.GoodsLayerDecorationReq();
+            layer.setFloorId(null);
+            layer.setGoodsId(null);
+            layer.setLang("en");
+            layer.setType("image");
+            layer.setPriority(priority++);
+            layer.setContentList(new ArrayList<>(List.of(content)));
+            applyDecImageKeyIfSupported(layer);
+
+            out.add(layer);
+        }
+        return out;
+    }
+
+    private void applyDecImageKeyIfSupported(Object target) {
+        if (target == null) {
+            return;
+        }
+        try {
+            java.lang.reflect.Method setter = target.getClass().getMethod("setKey", String.class);
+            setter.invoke(target, "DecImage");
+        } catch (Exception ignored) {
+            // Some SDK revisions keep `key` on the content node, others on the layer node.
+            // Best-effort only; lack of this setter should not block publish.
         }
     }
 
@@ -605,15 +1077,20 @@ public class TemuPublishService {
                 // Parent-child correctness should be enforced by template rules (templatePropertyValueParentList)
                 // when saving attributes, otherwise the user needs to re-fill based on updated template.
 
-                // Backward-compat: old saved payloads didn't include templatePid/refPid/valueUnit.
-                if ((templatePid <= 0 || refPid <= 0 || !StringUtils.hasText(valueUnit) || !StringUtils.hasText(propName))
-                        && templateByPid != null && pid > 0) {
+                // Keep the saved templatePid/refPid when they already exist on the product.
+                // Some categories reuse the same pid across multiple template rows, so blindly
+                // refreshing by pid can swap a valid saved attribute onto the wrong template.
+                if (templateByPid != null && pid > 0) {
                     AttrTemplate t = templateByPid.get(pid);
                     if (t != null) {
-                        if (templatePid <= 0) templatePid = t.templatePid;
-                        if (refPid <= 0) refPid = t.refPid;
-                        if (!StringUtils.hasText(propName)) propName = t.name;
-                        if (!StringUtils.hasText(valueUnit)) valueUnit = t.valueUnit;
+                        if (templatePid <= 0) {
+                            templatePid = t.templatePid;
+                        }
+                        if (refPid <= 0) {
+                            refPid = t.refPid;
+                        }
+                        propName = firstNonBlank(propName, t.name);
+                        valueUnit = firstNonBlank(valueUnit, t.valueUnit);
                     }
                 }
 
@@ -645,10 +1122,77 @@ public class TemuPublishService {
 
                 JsonNode selected = p.path("selectedValues");
                 if (selected.isArray() && selected.size() > 0) {
+                    if (shouldUseCustomRequiredSaleProperty(template, propName)) {
+                        if (selected.size() == 1) {
+                            JsonNode firstSelected = selected.get(0);
+                            int selectedVid = firstSelected.path("vid").asInt(0);
+                            String selectedValue = firstNonBlank(firstSelected.path("value").asText(null));
+                            if (selectedVid > 0 && StringUtils.hasText(selectedValue)) {
+                                AddGloGoodsRequest.ProductPropertyReq item = new AddGloGoodsRequest.ProductPropertyReq();
+                                item.setPid(pid);
+                                item.setTemplatePid(templatePid);
+                                item.setRefPid(refPid);
+                                item.setVid(selectedVid);
+                                item.setPropName(propName);
+                                item.setPropValue(selectedValue);
+                                item.setValueUnit(valueUnit == null ? "" : valueUnit);
+                                item.setNumberInputValue(resolveNumberInputValue(template, pid, propName, valueUnit, numberInputValue, 1));
+                                if (emittedKeys.add(buildPropertyReqDedupeKey(item))) {
+                                    out.add(item);
+                                }
+                                continue;
+                            }
+                        }
+                        if (selected.size() > 1 && template != null) {
+                            Integer aggregateVid = template.findVidByValue("花色");
+                            if (aggregateVid == null || aggregateVid <= 0) {
+                                aggregateVid = template.findVidByValue("多色");
+                            }
+                            if (aggregateVid != null && aggregateVid > 0) {
+                                AddGloGoodsRequest.ProductPropertyReq item = new AddGloGoodsRequest.ProductPropertyReq();
+                                item.setPid(pid);
+                                item.setTemplatePid(templatePid);
+                                item.setRefPid(refPid);
+                                item.setVid(aggregateVid);
+                                item.setPropName(propName);
+                                item.setPropValue("花色");
+                                item.setValueUnit(valueUnit == null ? "" : valueUnit);
+                                item.setNumberInputValue(resolveNumberInputValue(template, pid, propName, valueUnit, numberInputValue, 1));
+                                if (emittedKeys.add(buildPropertyReqDedupeKey(item))) {
+                                    out.add(item);
+                                }
+                                continue;
+                            }
+                        }
+                        List<String> customValues = buildCustomRequiredSalePropertyValues(selected);
+                        if (!customValues.isEmpty()) {
+                            for (String customValue : customValues) {
+                                AddGloGoodsRequest.ProductPropertyReq item = new AddGloGoodsRequest.ProductPropertyReq();
+                                item.setPid(pid);
+                                item.setTemplatePid(templatePid);
+                                item.setRefPid(refPid);
+                                item.setVid(0);
+                                item.setPropName(propName);
+                                item.setPropValue(customValue);
+                                item.setValueUnit(valueUnit == null ? "" : valueUnit);
+                                item.setNumberInputValue(resolveNumberInputValue(template, pid, propName, valueUnit, numberInputValue, 1));
+                                if (emittedKeys.add(buildPropertyReqDedupeKey(item))) {
+                                    out.add(item);
+                                }
+                            }
+                            continue;
+                        }
+                    }
                     // only take first selected value for now (TEMU supports multi-select for some props, but sdk uses vid per item)
                     JsonNode first = selected.get(0);
                     int vid = first.path("vid").asInt(0);
                     String value = first.path("value").asText("");
+                    if (template != null) {
+                        Integer currentVid = template.findVidByValue(value);
+                        if (currentVid != null && currentVid > 0) {
+                            vid = currentVid;
+                        }
+                    }
                     AddGloGoodsRequest.ProductPropertyReq item = new AddGloGoodsRequest.ProductPropertyReq();
                     item.setPid(pid);
                     item.setTemplatePid(templatePid);
@@ -696,6 +1240,8 @@ public class TemuPublishService {
                 }
             }
 
+            appendInferredRequiredProperties(root, templateByPid, emittedKeys, out);
+
             // Validate required fields are present (templatePid/refPid are required by TEMU)
             int missing = 0;
             for (AddGloGoodsRequest.ProductPropertyReq item : out) {
@@ -712,6 +1258,271 @@ public class TemuPublishService {
             warnings.add("temuAttributes parse failed: " + e.getMessage());
         }
         return out;
+    }
+
+    private List<AddGloGoodsRequest.ProductPropertyReq> filterOutSalePropertyReqs(
+            List<AddGloGoodsRequest.ProductPropertyReq> props,
+            Map<Integer, AttrTemplate> templateByPid,
+            List<String> warnings,
+            Long runId) {
+        if (props == null || props.isEmpty() || templateByPid == null || templateByPid.isEmpty()) {
+            return props;
+        }
+        List<AddGloGoodsRequest.ProductPropertyReq> filtered = new ArrayList<>();
+        List<String> removed = new ArrayList<>();
+        for (AddGloGoodsRequest.ProductPropertyReq prop : props) {
+            if (prop == null || prop.getPid() == null) {
+                continue;
+            }
+            AttrTemplate template = templateByPid.get(prop.getPid());
+            if (template != null && template.sale && !template.required) {
+                removed.add(firstNonBlank(template.name, prop.getPropName(), "pid=" + prop.getPid()));
+                continue;
+            }
+            filtered.add(prop);
+        }
+        if (!removed.isEmpty()) {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("removedSalePropertyNames", removed);
+            publishLogService.data(runId, "ATTR", "filtered sale properties from productPropertyReqs", data);
+            if (warnings != null) {
+                warnings.add("filtered sale properties from productPropertyReqs: " + String.join(", ", removed));
+            }
+        }
+        return filtered;
+    }
+
+    private List<AddGloGoodsRequest.ProductPropertyReq> filterOutSalePropertyReqsHandledBySpecs(
+            List<AddGloGoodsRequest.ProductPropertyReq> props,
+            List<AddGloGoodsRequest.ProductSpecPropertyReq> specProps,
+            Map<Integer, AttrTemplate> templateByPid,
+            List<String> warnings,
+            Long runId) {
+        if (props == null || props.isEmpty() || specProps == null || specProps.isEmpty() || templateByPid == null || templateByPid.isEmpty()) {
+            return props;
+        }
+        Set<Integer> handledParentSpecIds = new LinkedHashSet<>();
+        for (AddGloGoodsRequest.ProductSpecPropertyReq specProp : specProps) {
+            if (specProp == null || specProp.getParentSpecId() == null || specProp.getParentSpecId() <= 0) {
+                continue;
+            }
+            if (!StringUtils.hasText(specProp.getPropValue())) {
+                continue;
+            }
+            handledParentSpecIds.add(specProp.getParentSpecId());
+        }
+        if (handledParentSpecIds.isEmpty()) {
+            return props;
+        }
+
+        List<AddGloGoodsRequest.ProductPropertyReq> filtered = new ArrayList<>();
+        List<String> removed = new ArrayList<>();
+        for (AddGloGoodsRequest.ProductPropertyReq prop : props) {
+            if (prop == null || prop.getPid() == null) {
+                continue;
+            }
+            AttrTemplate template = templateByPid.get(prop.getPid());
+            if (template != null
+                    && template.sale
+                    && template.parentSpecId > 0
+                    && handledParentSpecIds.contains(template.parentSpecId)) {
+                removed.add(firstNonBlank(template.name, prop.getPropName(), "pid=" + prop.getPid()));
+                continue;
+            }
+            filtered.add(prop);
+        }
+        if (!removed.isEmpty()) {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("removedSalePropertyNames", removed);
+            data.put("handledParentSpecIds", handledParentSpecIds);
+            publishLogService.data(runId, "ATTR", "filtered sale properties already handled by specs", data);
+            if (warnings != null) {
+                warnings.add("filtered sale properties already handled by specs: " + String.join(", ", removed));
+            }
+        }
+        return filtered;
+    }
+
+    private void enrichSpecPropertyReqsWithSaleAttrTemplate(
+            List<AddGloGoodsRequest.ProductSpecPropertyReq> specProps,
+            Map<Integer, AttrTemplate> templateByPid) {
+        if (specProps == null || specProps.isEmpty() || templateByPid == null || templateByPid.isEmpty()) {
+            return;
+        }
+        for (AddGloGoodsRequest.ProductSpecPropertyReq specProp : specProps) {
+            if (specProp == null || specProp.getParentSpecId() == null || specProp.getParentSpecId() <= 0) {
+                continue;
+            }
+            AttrTemplate template = findSaleAttrTemplateForParentSpec(
+                    templateByPid,
+                    specProp.getParentSpecId(),
+                    specProp.getPropName()
+            );
+            if (template == null) {
+                continue;
+            }
+            if (specProp.getPid() == null || specProp.getPid() <= 0) {
+                specProp.setPid(template.pid);
+            }
+            if (specProp.getTemplatePid() == null || specProp.getTemplatePid() <= 0) {
+                specProp.setTemplatePid(template.templatePid);
+            }
+            if (specProp.getRefPid() == null || specProp.getRefPid() <= 0) {
+                specProp.setRefPid(template.refPid);
+            }
+            if (!StringUtils.hasText(specProp.getPropName())) {
+                specProp.setPropName(template.name);
+            }
+            if (specProp.getVid() == null) {
+                specProp.setVid(0);
+            }
+        }
+    }
+
+    private AttrTemplate findSaleAttrTemplateForParentSpec(Map<Integer, AttrTemplate> templateByPid,
+                                                           Integer parentSpecId,
+                                                           String propName) {
+        if (templateByPid == null || templateByPid.isEmpty() || parentSpecId == null || parentSpecId <= 0) {
+            return null;
+        }
+        String normalizedPropName = normalizeTemplateValueKey(propName);
+        AttrTemplate fallback = null;
+        for (AttrTemplate template : templateByPid.values()) {
+            if (template == null || !template.sale || template.parentSpecId != parentSpecId) {
+                continue;
+            }
+            if (fallback == null) {
+                fallback = template;
+            }
+            if (!StringUtils.hasText(normalizedPropName)) {
+                continue;
+            }
+            String templateName = normalizeTemplateValueKey(template.name);
+            if (Objects.equals(templateName, normalizedPropName)) {
+                return template;
+            }
+        }
+        return fallback;
+    }
+
+    private boolean shouldUseCustomRequiredSaleProperty(AttrTemplate template,
+                                                        String propName) {
+        if (template == null || !template.sale || !template.required) {
+            return false;
+        }
+        String normalized = firstNonBlank(propName, template.name, "").toLowerCase(Locale.ROOT);
+        return normalized.contains("颜色") || normalized.contains("color");
+    }
+
+    private List<String> buildCustomRequiredSalePropertyValues(JsonNode selectedValues) {
+        if (selectedValues == null || !selectedValues.isArray() || selectedValues.isEmpty()) {
+            return List.of();
+        }
+        LinkedHashSet<String> values = new LinkedHashSet<>();
+        for (JsonNode valueNode : selectedValues) {
+            if (valueNode == null || valueNode.isNull()) {
+                continue;
+            }
+            String value = firstNonBlank(valueNode.path("value").asText(null));
+            if (StringUtils.hasText(value)) {
+                values.add(value.trim());
+            }
+        }
+        if (values.isEmpty()) {
+            return List.of();
+        }
+        return new ArrayList<>(values);
+    }
+
+    private void appendInferredRequiredProperties(JsonNode root,
+                                                  Map<Integer, AttrTemplate> templateByPid,
+                                                  Set<String> emittedKeys,
+                                                  List<AddGloGoodsRequest.ProductPropertyReq> out) {
+        if (root == null || templateByPid == null || templateByPid.isEmpty() || out == null || emittedKeys == null) {
+            return;
+        }
+
+        // Common publish fix: when "材料" is already selected but mandatory "成分" is missing,
+        // reuse the material value and let resolveNumberInputValue fill 100%.
+        final int compositionPid = 2;
+        if (containsPropertyPid(out, compositionPid)) {
+            return;
+        }
+        AttrTemplate compositionTemplate = templateByPid.get(compositionPid);
+        if (compositionTemplate == null || !compositionTemplate.required) {
+            return;
+        }
+
+        String materialValue = firstSelectedPropertyValue(root, 89);
+        if (!StringUtils.hasText(materialValue)) {
+            return;
+        }
+
+        Integer compositionVid = compositionTemplate.findVidByValue(materialValue);
+        if (compositionVid == null || compositionVid <= 0) {
+            return;
+        }
+
+        AddGloGoodsRequest.ProductPropertyReq item = new AddGloGoodsRequest.ProductPropertyReq();
+        item.setPid(compositionTemplate.pid);
+        item.setTemplatePid(compositionTemplate.templatePid);
+        item.setRefPid(compositionTemplate.refPid);
+        item.setVid(compositionVid);
+        item.setPropName(compositionTemplate.name);
+        item.setPropValue(materialValue);
+        item.setValueUnit(firstNonBlank(compositionTemplate.valueUnit, ""));
+        item.setNumberInputValue(resolveNumberInputValue(
+                compositionTemplate,
+                compositionTemplate.pid,
+                compositionTemplate.name,
+                compositionTemplate.valueUnit,
+                "",
+                1
+        ));
+        if (emittedKeys.add(buildPropertyReqDedupeKey(item))) {
+            out.add(item);
+        }
+    }
+
+    private boolean containsPropertyPid(List<AddGloGoodsRequest.ProductPropertyReq> out,
+                                        int pid) {
+        if (out == null || pid <= 0) {
+            return false;
+        }
+        for (AddGloGoodsRequest.ProductPropertyReq item : out) {
+            if (item != null && item.getPid() != null && item.getPid() == pid) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String firstSelectedPropertyValue(JsonNode root,
+                                              int pid) {
+        if (root == null || pid <= 0) {
+            return null;
+        }
+        JsonNode props = root.path("properties");
+        if (!props.isArray()) {
+            return null;
+        }
+        for (JsonNode p : props) {
+            if (p == null || p.isNull() || p.path("pid").asInt(0) != pid) {
+                continue;
+            }
+            JsonNode selected = p.path("selectedValues");
+            if (selected.isArray() && !selected.isEmpty()) {
+                String value = firstNonBlank(selected.get(0).path("value").asText(null));
+                if (StringUtils.hasText(value)) {
+                    return value;
+                }
+            }
+            String freeText = firstNonBlank(p.path("freeText").asText(null));
+            if (StringUtils.hasText(freeText)) {
+                return freeText;
+            }
+        }
+        return null;
     }
 
     private String buildPropertyReqDedupeKey(AddGloGoodsRequest.ProductPropertyReq item) {
@@ -801,16 +1612,46 @@ public class TemuPublishService {
                 int refPid = p.path("refPid").asInt(0);
                 String name = p.path("name").asText("");
                 String valueUnit = "";
+                int parentSpecId = p.path("parentSpecId").asInt(0);
                 JsonNode vu = p.path("valueUnit");
                 if (vu.isArray() && vu.size() > 0) {
                     valueUnit = vu.get(0).asText("");
                 }
                 boolean required = p.path("required").asBoolean(false);
+                boolean sale = p.path("isSale").asBoolean(false);
                 boolean hasValues = p.has("values") && p.get("values").isArray() && p.get("values").size() > 0;
                 String numberInputTitle = p.path("numberInputTitle").asText("");
                 int controlType = p.path("controlType").asInt(0);
+                Map<String, Integer> valueVidByNormalizedValue = new LinkedHashMap<>();
+                JsonNode values = p.path("values");
+                if (values.isArray()) {
+                    for (JsonNode valueNode : values) {
+                        if (valueNode == null || valueNode.isNull()) {
+                            continue;
+                        }
+                        int vid = valueNode.path("vid").asInt(0);
+                        String value = valueNode.path("value").asText("");
+                        String key = normalizeTemplateValueKey(value);
+                        if (vid > 0 && StringUtils.hasText(key)) {
+                            valueVidByNormalizedValue.putIfAbsent(key, vid);
+                        }
+                    }
+                }
                 if (pid > 0 && templatePid > 0 && refPid > 0) {
-                    out.put(pid, new AttrTemplate(pid, templatePid, refPid, name, valueUnit, required, hasValues, numberInputTitle, controlType));
+                    out.put(pid, new AttrTemplate(
+                            pid,
+                            templatePid,
+                            refPid,
+                            name,
+                            valueUnit,
+                            parentSpecId,
+                            required,
+                            sale,
+                            hasValues,
+                            numberInputTitle,
+                            controlType,
+                            valueVidByNormalizedValue
+                    ));
                 }
             }
             {
@@ -831,34 +1672,57 @@ public class TemuPublishService {
         final int refPid;
         final String name;
         final String valueUnit;
+        final int parentSpecId;
         final boolean required;
+        final boolean sale;
         final boolean hasValues;
         final String numberInputTitle;
         final int controlType;
+        final Map<String, Integer> valueVidByNormalizedValue;
 
         AttrTemplate(int pid,
                      int templatePid,
                      int refPid,
                      String name,
                      String valueUnit,
+                     int parentSpecId,
                      boolean required,
+                     boolean sale,
                      boolean hasValues,
                      String numberInputTitle,
-                     int controlType) {
+                     int controlType,
+                     Map<String, Integer> valueVidByNormalizedValue) {
             this.pid = pid;
             this.templatePid = templatePid;
             this.refPid = refPid;
             this.name = name;
             this.valueUnit = valueUnit;
+            this.parentSpecId = parentSpecId;
             this.required = required;
+            this.sale = sale;
             this.hasValues = hasValues;
             this.numberInputTitle = numberInputTitle;
             this.controlType = controlType;
+            this.valueVidByNormalizedValue = valueVidByNormalizedValue == null ? Map.of() : valueVidByNormalizedValue;
         }
 
         boolean supportsNumberInput() {
             return hasValues && (StringUtils.hasText(numberInputTitle) || controlType == 16);
         }
+
+        Integer findVidByValue(String value) {
+            if (!StringUtils.hasText(value) || valueVidByNormalizedValue.isEmpty()) {
+                return null;
+            }
+            return valueVidByNormalizedValue.get(normalizeTemplateValueKey(value));
+        }
+    }
+
+    private static String normalizeTemplateValueKey(String value) {
+        if (!StringUtils.hasText(value)) {
+            return null;
+        }
+        return value.trim().replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
     }
 
     private boolean shouldForceEmptyAttr(int pid, String propName) {
@@ -1398,7 +2262,12 @@ public class TemuPublishService {
             if (converted == null) {
                 return null;
             }
-            validateNoDuplicateSkuSpecGroups(converted.productSkuReqGroups());
+            try {
+                validateNoDuplicateSkuSpecGroups(converted.productSkuReqGroups());
+            } catch (Exception duplicateValidationError) {
+                warnings.add("检测到本地 SKU 规格组合重复，已跳过提交前拦截，继续调用 TEMU 侧规格创建校验: " + safeErrMessage(duplicateValidationError));
+                publishLogService.warn(runId, "SPEC", "skip local duplicate sku validation before publish: spuId=" + spuId + ", error=" + safeErrMessage((Exception) duplicateValidationError));
+            }
             publishLogService.info(runId, "SPEC", "using temu sku converter: spuId=" + spuId + ", skuCount=" + (temuSkus == null ? 0 : temuSkus.size()));
             return converted;
         } catch (Exception e) {
@@ -1672,6 +2541,8 @@ public class TemuPublishService {
                                                                StoredPublishSpecDraft draft) throws Exception {
         Map<String, CreatedSpecInfo> actualSpecInfoMap = new LinkedHashMap<>();
         Map<String, CreatedSpecInfo> tempSpecInfoMap = new LinkedHashMap<>();
+        Map<String, String> publishSpecValueByTempKey = new LinkedHashMap<>();
+        Set<String> usedPublishSpecValues = new LinkedHashSet<>();
         List<AddGloGoodsRequest.ProductSpecPropertyReq> topProps = new ArrayList<>();
         for (AddGloGoodsRequest.ProductSpecPropertyReq prop : draft.productSpecPropertyReqs()) {
             if (prop == null) {
@@ -1681,13 +2552,23 @@ public class TemuPublishService {
                 throw new IllegalStateException("stored productSpecPropertyReqs contains invalid item");
             }
             String tempKey = storedSpecKey(prop.getParentSpecId(), prop.getSpecId(), prop.getPropValue());
-            CreatedSpecInfo createdSpecInfo = actualSpecInfoMap.get(tempKey);
+            String publishSpecValue = publishSpecValueByTempKey.get(tempKey);
+            if (!StringUtils.hasText(publishSpecValue)) {
+                publishSpecValue = buildPublishSpecValue(
+                        prop.getPropValue(),
+                        prop.getSpecId(),
+                        usedPublishSpecValues
+                );
+                publishSpecValueByTempKey.put(tempKey, publishSpecValue);
+            }
+            String actualSpecKey = storedSpecKey(prop.getParentSpecId(), 0, publishSpecValue);
+            CreatedSpecInfo createdSpecInfo = actualSpecInfoMap.get(actualSpecKey);
             if (createdSpecInfo == null) {
-                createdSpecInfo = createSpecInfo(categoryClient, prop.getParentSpecId(), prop.getPropValue());
+                createdSpecInfo = createSpecInfo(categoryClient, prop.getParentSpecId(), publishSpecValue);
                 if (createdSpecInfo == null || createdSpecInfo.specId() == null || createdSpecInfo.specId() <= 0) {
-                    throw new IllegalStateException("createSpec failed for " + prop.getPropValue());
+                    throw new IllegalStateException("createSpec failed for " + publishSpecValue);
                 }
-                actualSpecInfoMap.put(tempKey, createdSpecInfo);
+                actualSpecInfoMap.put(actualSpecKey, createdSpecInfo);
             }
             if (prop.getSpecId() != null) {
                 tempSpecInfoMap.put(simpleStoredSpecKey(prop.getParentSpecId(), prop.getSpecId()), createdSpecInfo);
@@ -1696,6 +2577,8 @@ public class TemuPublishService {
             cloned.setSpecId(createdSpecInfo.specId());
             if (StringUtils.hasText(createdSpecInfo.specName())) {
                 cloned.setPropValue(createdSpecInfo.specName());
+            } else {
+                cloned.setPropValue(publishSpecValue);
             }
             topProps.add(cloned);
         }
@@ -1763,6 +2646,45 @@ public class TemuPublishService {
         return new StoredMaterializedSpecDraft(topProps, mainGroups, skuGroups, tempSpecInfoMap);
     }
 
+    private String buildPublishSpecValue(String rawValue,
+                                         Integer tempSpecId,
+                                         Set<String> usedPublishSpecValues) {
+        String candidate = normalizeMappedSpecValue(rawValue);
+        if (!StringUtils.hasText(candidate)) {
+            candidate = "Variant";
+        }
+        if (usedPublishSpecValues == null) {
+            return candidate;
+        }
+        if (usedPublishSpecValues.add(candidate)) {
+            return candidate;
+        }
+
+        String suffixSeed = tempSpecId == null ? Integer.toHexString(Math.abs(Objects.hashCode(rawValue))) : String.valueOf(tempSpecId);
+        String suffix = "-" + suffixSeed.replaceAll("[^0-9A-Za-z]+", "");
+        if (suffix.length() > 8) {
+            suffix = suffix.substring(suffix.length() - 8);
+        }
+        int baseLimit = Math.max(1, 50 - suffix.length());
+        String base = candidate;
+        if (base.length() > baseLimit) {
+            base = base.substring(0, baseLimit).trim();
+        }
+        String unique = base + suffix;
+        int sequence = 2;
+        while (!usedPublishSpecValues.add(unique)) {
+            String sequenceSuffix = suffix + "-" + sequence;
+            int sequenceBaseLimit = Math.max(1, 50 - sequenceSuffix.length());
+            String sequenceBase = candidate;
+            if (sequenceBase.length() > sequenceBaseLimit) {
+                sequenceBase = sequenceBase.substring(0, sequenceBaseLimit).trim();
+            }
+            unique = sequenceBase + sequenceSuffix;
+            sequence++;
+        }
+        return unique;
+    }
+
     private List<AddGloGoodsRequest.ProductSkcReq> buildProductSkcReqsFromStoredDraft(Long runId,
                                                                                        Long spuId,
                                                                                        ProductCollection pc,
@@ -1803,7 +2725,12 @@ public class TemuPublishService {
             sourceSkuGroups = new ArrayList<>(regroupedSkuMap.values());
         }
 
-        if (hasExplicitEmptyMainSpecPlaceholder || shouldUseEmptyMainSpecPlaceholder(sourceMainGroups)) {
+        // Categories without a TEMU main-sale attribute should publish all sale specs
+        // on child SKUs under a single placeholder SKC. Preserving structured SKC groups
+        // in that case causes TEMU to effectively ignore the grouped dimension and
+        // report duplicated sales-spec combinations across SKCs.
+        boolean forcePlaceholderMainSpec = !leafHasMainSaleAttr;
+        if (forcePlaceholderMainSpec || hasExplicitEmptyMainSpecPlaceholder || shouldUseEmptyMainSpecPlaceholder(sourceMainGroups)) {
             List<AddGloGoodsRequest.ProductSkuReq> mergedSkuGroup = new ArrayList<>();
             for (List<AddGloGoodsRequest.ProductSkuReq> group : sourceSkuGroups) {
                 if (group != null && !group.isEmpty()) {
@@ -1865,14 +2792,1017 @@ public class TemuPublishService {
             preview = firstNonBlank(preview, mainImage, fallbackThumb);
             skc.setPreviewImgUrls(StringUtils.hasText(preview) ? new ArrayList<>(List.of(preview)) : new ArrayList<>());
             skc.setMainProductSkuSpecReqs(new ArrayList<>(mainGroup));
-            if (!leafHasMainSaleAttr && skuGroup.size() == 1) {
-                AddGloGoodsRequest.ProductSkuReq singleSku = skuGroup.get(0);
+            List<AddGloGoodsRequest.ProductSkuReq> childSkuGroup = stripMainSpecsFromSkuGroup(skuGroup, mainGroup);
+            if (!leafHasMainSaleAttr && childSkuGroup.size() == 1) {
+                AddGloGoodsRequest.ProductSkuReq singleSku = childSkuGroup.get(0);
                 ensureSingleSkuMultiPack(singleSku);
             }
-            skc.setProductSkuReqs(new ArrayList<>(skuGroup));
+            skc.setProductSkuReqs(childSkuGroup);
             out.add(skc);
         }
         return out;
+    }
+
+    private boolean shouldRetryWithCollapsedCompositeSpec(TemuApiResponse<AddGloGoodsResponse> apiResp,
+                                                          AddGloGoodsRequest req) {
+        if (apiResp == null || apiResp.isSuccess() || req == null) {
+            return false;
+        }
+        String errorMsg = firstNonBlank(apiResp.getErrorMsg());
+        if (!StringUtils.hasText(errorMsg)) {
+            return false;
+        }
+        boolean retryable = errorMsg.contains("SKU quantity and specification product do not match")
+                || errorMsg.contains("SKU Sales Specification Attribute Value List Duplicated");
+        return retryable && isSparseVariationMatrix(req);
+    }
+
+    private boolean shouldRetryWithCustomSpecValueLimit(TemuApiResponse<AddGloGoodsResponse> apiResp,
+                                                        AddGloGoodsRequest req) {
+        if (apiResp == null || apiResp.isSuccess() || req == null) {
+            return false;
+        }
+        String errorMsg = firstNonBlank(apiResp.getErrorMsg());
+        if (!StringUtils.hasText(errorMsg)) {
+            return false;
+        }
+        return errorMsg.contains("自定义规格值数目不能超过60") && countCustomSpecValues(req) > 60;
+    }
+
+    private int countCustomSpecValues(AddGloGoodsRequest req) {
+        if (req == null || req.getProductSpecPropertyReqs() == null) {
+            return 0;
+        }
+        int count = 0;
+        for (AddGloGoodsRequest.ProductSpecPropertyReq spec : req.getProductSpecPropertyReqs()) {
+            if (spec != null && spec.getSpecId() != null && spec.getSpecId() > 0) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private AddGloGoodsRequest buildLimitedCustomSpecValueRequest(AddGloGoodsRequest baseReq,
+                                                                  int maxCustomSpecValues,
+                                                                  Long runId,
+                                                                  List<String> warnings) {
+        if (baseReq == null || maxCustomSpecValues <= 0 || baseReq.getProductSpecPropertyReqs() == null) {
+            return null;
+        }
+
+        AddGloGoodsRequest limitedReq = objectMapper.convertValue(baseReq, AddGloGoodsRequest.class);
+        LinkedHashMap<Integer, List<AddGloGoodsRequest.ProductSpecPropertyReq>> specsByParent = new LinkedHashMap<>();
+        int originalSpecCount = 0;
+        for (AddGloGoodsRequest.ProductSpecPropertyReq spec : limitedReq.getProductSpecPropertyReqs()) {
+            if (spec == null || spec.getSpecId() == null || spec.getSpecId() <= 0) {
+                continue;
+            }
+            originalSpecCount++;
+            specsByParent.computeIfAbsent(spec.getParentSpecId() == null ? 0 : spec.getParentSpecId(), key -> new ArrayList<>()).add(spec);
+        }
+        if (originalSpecCount <= maxCustomSpecValues || specsByParent.isEmpty()) {
+            return null;
+        }
+
+        LinkedHashMap<Integer, Integer> keepCountByParent = new LinkedHashMap<>();
+        for (Map.Entry<Integer, List<AddGloGoodsRequest.ProductSpecPropertyReq>> entry : specsByParent.entrySet()) {
+            keepCountByParent.put(entry.getKey(), entry.getValue().size());
+        }
+
+        int excess = originalSpecCount - maxCustomSpecValues;
+        List<Map.Entry<Integer, List<AddGloGoodsRequest.ProductSpecPropertyReq>>> sortedGroups = new ArrayList<>(specsByParent.entrySet());
+        sortedGroups.sort((left, right) -> Integer.compare(right.getValue().size(), left.getValue().size()));
+        for (Map.Entry<Integer, List<AddGloGoodsRequest.ProductSpecPropertyReq>> entry : sortedGroups) {
+            if (excess <= 0) {
+                break;
+            }
+            Integer parentSpecId = entry.getKey();
+            int current = keepCountByParent.getOrDefault(parentSpecId, 0);
+            int removable = Math.max(0, current - 1);
+            if (removable <= 0) {
+                continue;
+            }
+            int removeCount = Math.min(removable, excess);
+            keepCountByParent.put(parentSpecId, current - removeCount);
+            excess -= removeCount;
+        }
+        if (excess > 0) {
+            return null;
+        }
+
+        LinkedHashSet<Integer> allowedSpecIds = new LinkedHashSet<>();
+        List<AddGloGoodsRequest.ProductSpecPropertyReq> limitedTopProps = new ArrayList<>();
+        for (Map.Entry<Integer, List<AddGloGoodsRequest.ProductSpecPropertyReq>> entry : specsByParent.entrySet()) {
+            int keepCount = keepCountByParent.getOrDefault(entry.getKey(), 0);
+            int kept = 0;
+            for (AddGloGoodsRequest.ProductSpecPropertyReq spec : entry.getValue()) {
+                if (spec == null || spec.getSpecId() == null || spec.getSpecId() <= 0) {
+                    continue;
+                }
+                if (kept >= keepCount) {
+                    continue;
+                }
+                kept++;
+                allowedSpecIds.add(spec.getSpecId());
+                limitedTopProps.add(spec);
+            }
+        }
+        if (limitedTopProps.isEmpty() || allowedSpecIds.isEmpty() || limitedTopProps.size() >= originalSpecCount) {
+            return null;
+        }
+
+        List<AddGloGoodsRequest.ProductSkcReq> limitedSkcs = new ArrayList<>();
+        int originalSkuCount = 0;
+        int keptSkuCount = 0;
+        if (limitedReq.getProductSkcReqs() != null) {
+            for (AddGloGoodsRequest.ProductSkcReq skc : limitedReq.getProductSkcReqs()) {
+                if (skc == null) {
+                    continue;
+                }
+                if (!isMainSpecGroupAllowed(skc.getMainProductSkuSpecReqs(), allowedSpecIds)) {
+                    if (skc.getProductSkuReqs() != null) {
+                        originalSkuCount += skc.getProductSkuReqs().size();
+                    }
+                    continue;
+                }
+                List<AddGloGoodsRequest.ProductSkuReq> keptSkuReqs = new ArrayList<>();
+                if (skc.getProductSkuReqs() != null) {
+                    for (AddGloGoodsRequest.ProductSkuReq skuReq : skc.getProductSkuReqs()) {
+                        if (skuReq == null) {
+                            continue;
+                        }
+                        originalSkuCount++;
+                        if (isSkuWithinAllowedSpecs(skuReq, allowedSpecIds)) {
+                            keptSkuReqs.add(skuReq);
+                        }
+                    }
+                }
+                if (keptSkuReqs.isEmpty()) {
+                    continue;
+                }
+                keptSkuCount += keptSkuReqs.size();
+                skc.setProductSkuReqs(keptSkuReqs);
+                limitedSkcs.add(skc);
+            }
+        }
+        if (limitedSkcs.isEmpty() || keptSkuCount <= 0) {
+            return null;
+        }
+
+        limitedReq.setProductSpecPropertyReqs(limitedTopProps);
+        limitedReq.setProductSkcReqs(limitedSkcs);
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("originalSpecCount", originalSpecCount);
+        data.put("limitedSpecCount", limitedTopProps.size());
+        data.put("originalSkuCount", originalSkuCount);
+        data.put("limitedSkuCount", keptSkuCount);
+        data.put("limit", maxCustomSpecValues);
+        publishLogService.data(runId, "SPEC", "trimmed custom spec values to satisfy temu limit", data);
+        if (warnings != null) {
+            warnings.add("trimmed custom spec values to satisfy temu limit: " + limitedTopProps.size() + "/" + maxCustomSpecValues);
+        }
+        return limitedReq;
+    }
+
+    private boolean isMainSpecGroupAllowed(List<AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq> mainSpecs,
+                                           Set<Integer> allowedSpecIds) {
+        if (mainSpecs == null || mainSpecs.isEmpty()) {
+            return true;
+        }
+        for (AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq mainSpec : mainSpecs) {
+            if (mainSpec == null || isEmptyMainSpecPlaceholder(mainSpec.getParentSpecId(), mainSpec.getSpecId())) {
+                continue;
+            }
+            if (mainSpec.getSpecId() == null || !allowedSpecIds.contains(mainSpec.getSpecId())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean isSkuWithinAllowedSpecs(AddGloGoodsRequest.ProductSkuReq skuReq,
+                                            Set<Integer> allowedSpecIds) {
+        if (skuReq == null) {
+            return false;
+        }
+        if (skuReq.getProductSkuSpecReqs() == null || skuReq.getProductSkuSpecReqs().isEmpty()) {
+            return true;
+        }
+        for (AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq specReq : skuReq.getProductSkuSpecReqs()) {
+            if (specReq == null || specReq.getSpecId() == null || specReq.getSpecId() <= 0) {
+                continue;
+            }
+            if (!allowedSpecIds.contains(specReq.getSpecId())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean isSparseVariationMatrix(AddGloGoodsRequest req) {
+        List<CollapsedSkuCandidate> candidates = collectCollapsedSkuCandidates(req);
+        if (candidates.size() <= 1) {
+            return false;
+        }
+        Map<Integer, Set<Integer>> specValuesByParent = new LinkedHashMap<>();
+        for (CollapsedSkuCandidate candidate : candidates) {
+            if (candidate == null || candidate.fullSpecs() == null) {
+                continue;
+            }
+            for (AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq specReq : candidate.fullSpecs()) {
+                if (specReq == null || specReq.getParentSpecId() == null || specReq.getSpecId() == null) {
+                    continue;
+                }
+                specValuesByParent
+                        .computeIfAbsent(specReq.getParentSpecId(), key -> new LinkedHashSet<>())
+                        .add(specReq.getSpecId());
+            }
+        }
+        int varyingDimensions = 0;
+        long expectedCombinationCount = 1L;
+        long actualSkuCount = candidates.size();
+        for (Set<Integer> values : specValuesByParent.values()) {
+            if (values == null || values.size() <= 1) {
+                continue;
+            }
+            varyingDimensions++;
+            expectedCombinationCount = safeSpecCombinationCount(expectedCombinationCount, values.size(), actualSkuCount + 1);
+        }
+        return varyingDimensions > 1 && expectedCombinationCount > actualSkuCount;
+    }
+
+    private long safeSpecCombinationCount(long current, int factor, long cap) {
+        if (factor <= 1 || current >= cap) {
+            return current;
+        }
+        if (current > Long.MAX_VALUE / factor) {
+            return cap;
+        }
+        long next = current * factor;
+        return Math.min(next, cap);
+    }
+
+    private AddGloGoodsRequest buildCollapsedCompositeSpecRequest(AddGloGoodsRequest baseReq,
+                                                                  CategoryApiClient categoryClient,
+                                                                  Long runId,
+                                                                  List<String> warnings) throws Exception {
+        AddGloGoodsRequest collapsedReq = objectMapper.convertValue(baseReq, AddGloGoodsRequest.class);
+        List<CollapsedSkuCandidate> candidates = collectCollapsedSkuCandidates(collapsedReq);
+        if (candidates.isEmpty()) {
+            return collapsedReq;
+        }
+
+        ParentSpec parentSpec = chooseCollapsedCompositeParentSpec(categoryClient, collapsedReq.getProductSpecPropertyReqs());
+        if (parentSpec == null || parentSpec.parentSpecId <= 0 || !StringUtils.hasText(parentSpec.parentSpecName)) {
+            throw new IllegalStateException("未找到可用于组合规格回退的父规格");
+        }
+
+        Map<String, CreatedSpecInfo> specInfoByName = new LinkedHashMap<>();
+        LinkedHashMap<String, AddGloGoodsRequest.ProductSpecPropertyReq> topProps = new LinkedHashMap<>();
+        Map<String, Integer> compositeNameCount = new LinkedHashMap<>();
+        List<AddGloGoodsRequest.ProductSkuReq> collapsedSkuReqs = new ArrayList<>();
+
+        for (CollapsedSkuCandidate candidate : candidates) {
+            if (candidate == null || candidate.skuReq() == null) {
+                continue;
+            }
+            AddGloGoodsRequest.ProductSkuReq skuReq = objectMapper.convertValue(candidate.skuReq(), AddGloGoodsRequest.ProductSkuReq.class);
+            String compositeName = buildCollapsedCompositeSpecName(candidate.fullSpecs(), skuReq.getExtCode(), parentSpec.parentSpecName);
+            String duplicateKey = normalizeSpecToken(compositeName);
+            int seenCount = compositeNameCount.getOrDefault(duplicateKey, 0);
+            compositeNameCount.put(duplicateKey, seenCount + 1);
+            if (seenCount > 0) {
+                compositeName = appendCollapsedCompositeSuffix(compositeName, skuReq.getExtCode(), seenCount + 1);
+                if (warnings != null) {
+                    warnings.add("duplicate composite sku spec detected, appended extCode suffix");
+                }
+            }
+
+            CreatedSpecInfo specInfo = specInfoByName.get(compositeName);
+            if (specInfo == null) {
+                specInfo = createSpecInfo(categoryClient, parentSpec.parentSpecId, compositeName);
+                specInfoByName.put(compositeName, specInfo);
+
+                AddGloGoodsRequest.ProductSpecPropertyReq top = new AddGloGoodsRequest.ProductSpecPropertyReq();
+                top.setVid(0);
+                top.setSpecId(specInfo.specId());
+                top.setValueGroupId(0);
+                top.setParentSpecId(parentSpec.parentSpecId);
+                top.setValueGroupName("");
+                top.setValueUnit("");
+                top.setPid(0);
+                top.setTemplatePid(0);
+                top.setNumberInputValue("");
+                top.setPropValue(specInfo.specName());
+                top.setPropName(parentSpec.parentSpecName);
+                top.setRefPid(0);
+                topProps.putIfAbsent(specInfo.specId() + "", top);
+            }
+
+            AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq onlySpec = new AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq();
+            onlySpec.setParentSpecId(parentSpec.parentSpecId);
+            onlySpec.setParentSpecName(parentSpec.parentSpecName);
+            onlySpec.setSpecId(specInfo.specId());
+            onlySpec.setSpecName(specInfo.specName());
+            skuReq.setProductSkuSpecReqs(new ArrayList<>(List.of(onlySpec)));
+            collapsedSkuReqs.add(skuReq);
+        }
+
+        if (collapsedSkuReqs.isEmpty()) {
+            throw new IllegalStateException("组合规格回退后没有可提交的 SKU");
+        }
+
+        AddGloGoodsRequest.ProductSkcReq skc = new AddGloGoodsRequest.ProductSkcReq();
+        skc.setExtCode(resolveCollapsedSkcExtCode(collapsedReq));
+        String preview = null;
+        for (AddGloGoodsRequest.ProductSkuReq skuReq : collapsedSkuReqs) {
+            if (skuReq != null && StringUtils.hasText(skuReq.getThumbUrl())) {
+                preview = skuReq.getThumbUrl();
+                break;
+            }
+        }
+        preview = firstNonBlank(preview, collapsedReq.getMaterialImgUrl());
+        skc.setPreviewImgUrls(StringUtils.hasText(preview) ? new ArrayList<>(List.of(preview)) : new ArrayList<>());
+        skc.setMainProductSkuSpecReqs(new ArrayList<>(List.of(emptyMainProductSkuSpecReq())));
+        skc.setProductSkuReqs(collapsedSkuReqs);
+
+        collapsedReq.setProductSpecPropertyReqs(new ArrayList<>(topProps.values()));
+        collapsedReq.setProductSkcReqs(new ArrayList<>(List.of(skc)));
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("parentSpecId", parentSpec.parentSpecId);
+        data.put("parentSpecName", parentSpec.parentSpecName);
+        data.put("skuCount", collapsedSkuReqs.size());
+        data.put("specCount", topProps.size());
+        publishLogService.data(runId, "SPEC", "collapsed sparse sku matrix into composite spec", data);
+        return collapsedReq;
+    }
+
+    private AddGloGoodsRequest buildFlattenedPlaceholderSkcRequest(AddGloGoodsRequest baseReq,
+                                                                   Long runId,
+                                                                   List<String> warnings) {
+        AddGloGoodsRequest flattenedReq = objectMapper.convertValue(baseReq, AddGloGoodsRequest.class);
+        List<CollapsedSkuCandidate> candidates = collectCollapsedSkuCandidates(flattenedReq);
+        if (candidates.isEmpty()) {
+            return flattenedReq;
+        }
+
+        List<AddGloGoodsRequest.ProductSkuReq> flattenedSkuReqs = new ArrayList<>();
+        String preview = null;
+        Set<String> dimensionKeys = new LinkedHashSet<>();
+        for (CollapsedSkuCandidate candidate : candidates) {
+            if (candidate == null || candidate.skuReq() == null) {
+                continue;
+            }
+            AddGloGoodsRequest.ProductSkuReq skuReq = objectMapper.convertValue(candidate.skuReq(), AddGloGoodsRequest.ProductSkuReq.class);
+            List<AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq> fullSpecs = new ArrayList<>();
+            Set<String> seen = new LinkedHashSet<>();
+            if (candidate.fullSpecs() != null) {
+                for (AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq specReq : candidate.fullSpecs()) {
+                    if (specReq == null || specReq.getParentSpecId() == null || specReq.getSpecId() == null) {
+                        continue;
+                    }
+                    String key = specReq.getParentSpecId() + "=" + specReq.getSpecId();
+                    if (!seen.add(key)) {
+                        continue;
+                    }
+                    fullSpecs.add(objectMapper.convertValue(specReq, AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq.class));
+                    dimensionKeys.add(String.valueOf(specReq.getParentSpecId()));
+                }
+            }
+            skuReq.setProductSkuSpecReqs(fullSpecs);
+            if (!StringUtils.hasText(preview) && StringUtils.hasText(skuReq.getThumbUrl())) {
+                preview = skuReq.getThumbUrl();
+            }
+            flattenedSkuReqs.add(skuReq);
+        }
+
+        if (flattenedSkuReqs.isEmpty()) {
+            return flattenedReq;
+        }
+
+        AddGloGoodsRequest.ProductSkcReq skc = new AddGloGoodsRequest.ProductSkcReq();
+        skc.setExtCode(resolveCollapsedSkcExtCode(flattenedReq));
+        preview = firstNonBlank(preview, flattenedReq.getMaterialImgUrl());
+        skc.setPreviewImgUrls(StringUtils.hasText(preview) ? new ArrayList<>(List.of(preview)) : new ArrayList<>());
+        skc.setMainProductSkuSpecReqs(new ArrayList<>(List.of(emptyMainProductSkuSpecReq())));
+        if (flattenedSkuReqs.size() == 1) {
+            ensureSingleSkuMultiPack(flattenedSkuReqs.get(0));
+        }
+        skc.setProductSkuReqs(flattenedSkuReqs);
+        flattenedReq.setProductSkcReqs(new ArrayList<>(List.of(skc)));
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("skuCount", flattenedSkuReqs.size());
+        data.put("dimensionCount", dimensionKeys.size());
+        data.put("originalSkcCount", baseReq == null || baseReq.getProductSkcReqs() == null ? 0 : baseReq.getProductSkcReqs().size());
+        publishLogService.data(runId, "SPEC", "flattened sparse sku matrix into placeholder skc", data);
+        return flattenedReq;
+    }
+
+    private AddGloGoodsRequest buildDensePlaceholderMatrixRequest(AddGloGoodsRequest baseReq,
+                                                                  Long runId,
+                                                                  List<String> warnings) {
+        AddGloGoodsRequest structuredDenseReq = buildStructuredDensePlaceholderMatrixRequest(baseReq, runId, warnings);
+        if (structuredDenseReq != null) {
+            return structuredDenseReq;
+        }
+
+        AddGloGoodsRequest denseReq = buildFlattenedPlaceholderSkcRequest(baseReq, runId, warnings);
+        List<CollapsedSkuCandidate> candidates = collectCollapsedSkuCandidates(denseReq);
+        if (candidates.isEmpty()) {
+            return denseReq;
+        }
+
+        LinkedHashMap<Integer, LinkedHashMap<Integer, AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq>> valuesByParent = new LinkedHashMap<>();
+        Map<String, CollapsedSkuCandidate> existingByComboKey = new LinkedHashMap<>();
+        for (CollapsedSkuCandidate candidate : candidates) {
+            if (candidate == null || candidate.fullSpecs() == null) {
+                continue;
+            }
+            for (AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq specReq : candidate.fullSpecs()) {
+                if (specReq == null || specReq.getParentSpecId() == null || specReq.getSpecId() == null) {
+                    continue;
+                }
+                valuesByParent
+                        .computeIfAbsent(specReq.getParentSpecId(), key -> new LinkedHashMap<>())
+                        .putIfAbsent(specReq.getSpecId(), objectMapper.convertValue(specReq, AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq.class));
+            }
+            String comboKey = buildSpecComboKey(candidate.fullSpecs());
+            if (StringUtils.hasText(comboKey)) {
+                existingByComboKey.putIfAbsent(comboKey, candidate);
+            }
+        }
+        if (valuesByParent.size() <= 1) {
+            return denseReq;
+        }
+
+        List<List<AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq>> combinations = new ArrayList<>();
+        combinations.add(new ArrayList<>());
+        for (LinkedHashMap<Integer, AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq> specMap : valuesByParent.values()) {
+            if (specMap == null || specMap.isEmpty()) {
+                continue;
+            }
+            List<List<AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq>> next = new ArrayList<>();
+            for (List<AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq> partial : combinations) {
+                for (AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq specReq : specMap.values()) {
+                    List<AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq> combo = new ArrayList<>(partial);
+                    combo.add(objectMapper.convertValue(specReq, AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq.class));
+                    next.add(combo);
+                }
+            }
+            combinations = next;
+            if (combinations.size() > 200) {
+                warnings.add("dense placeholder matrix skipped because combination count exceeds 200");
+                return denseReq;
+            }
+        }
+
+        List<AddGloGoodsRequest.ProductSkuReq> denseSkuReqs = new ArrayList<>();
+        int syntheticCount = 0;
+        int syntheticIndex = 1;
+        for (List<AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq> combination : combinations) {
+            String comboKey = buildSpecComboKey(combination);
+            CollapsedSkuCandidate existing = existingByComboKey.get(comboKey);
+            if (existing != null && existing.skuReq() != null) {
+                AddGloGoodsRequest.ProductSkuReq skuReq = objectMapper.convertValue(existing.skuReq(), AddGloGoodsRequest.ProductSkuReq.class);
+                skuReq.setProductSkuSpecReqs(cloneSpecReqs(combination));
+                denseSkuReqs.add(skuReq);
+                continue;
+            }
+            CollapsedSkuCandidate prototype = chooseBestPrototypeCandidate(candidates, combination);
+            if (prototype == null || prototype.skuReq() == null) {
+                continue;
+            }
+            AddGloGoodsRequest.ProductSkuReq syntheticSku = objectMapper.convertValue(prototype.skuReq(), AddGloGoodsRequest.ProductSkuReq.class);
+            syntheticSku.setProductSkuSpecReqs(cloneSpecReqs(combination));
+            syntheticSku.setExtCode(buildSyntheticSkuExtCode(syntheticSku.getExtCode(), syntheticIndex++));
+            setSkuTargetStock(syntheticSku, 0);
+            denseSkuReqs.add(syntheticSku);
+            syntheticCount++;
+        }
+
+        if (denseSkuReqs.isEmpty()) {
+            return denseReq;
+        }
+        AddGloGoodsRequest.ProductSkcReq skc = new AddGloGoodsRequest.ProductSkcReq();
+        skc.setExtCode(resolveCollapsedSkcExtCode(denseReq));
+        String preview = null;
+        for (AddGloGoodsRequest.ProductSkuReq skuReq : denseSkuReqs) {
+            if (skuReq != null && StringUtils.hasText(skuReq.getThumbUrl())) {
+                preview = skuReq.getThumbUrl();
+                break;
+            }
+        }
+        preview = firstNonBlank(preview, denseReq.getMaterialImgUrl());
+        skc.setPreviewImgUrls(StringUtils.hasText(preview) ? new ArrayList<>(List.of(preview)) : new ArrayList<>());
+        skc.setMainProductSkuSpecReqs(new ArrayList<>(List.of(emptyMainProductSkuSpecReq())));
+        skc.setProductSkuReqs(denseSkuReqs);
+        denseReq.setProductSkcReqs(new ArrayList<>(List.of(skc)));
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("originalSkuCount", candidates.size());
+        data.put("denseSkuCount", denseSkuReqs.size());
+        data.put("syntheticSkuCount", syntheticCount);
+        data.put("dimensionCount", valuesByParent.size());
+        publishLogService.data(runId, "SPEC", "expanded sparse sku matrix into dense placeholder matrix", data);
+        return denseReq;
+    }
+
+    private AddGloGoodsRequest buildStructuredDensePlaceholderMatrixRequest(AddGloGoodsRequest baseReq,
+                                                                            Long runId,
+                                                                            List<String> warnings) {
+        if (baseReq == null || baseReq.getProductSkcReqs() == null || baseReq.getProductSkcReqs().size() <= 1) {
+            return null;
+        }
+
+        boolean hasStructuredGroup = false;
+        LinkedHashMap<Integer, LinkedHashMap<Integer, AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq>> childValuesByParent = new LinkedHashMap<>();
+        int originalSkuCount = 0;
+        for (AddGloGoodsRequest.ProductSkcReq skc : baseReq.getProductSkcReqs()) {
+            if (skc == null || skc.getProductSkuReqs() == null || skc.getProductSkuReqs().isEmpty()) {
+                return null;
+            }
+            if (!containsStructuredMainSpecs(skc.getMainProductSkuSpecReqs())) {
+                return null;
+            }
+            hasStructuredGroup = true;
+            for (AddGloGoodsRequest.ProductSkuReq skuReq : skc.getProductSkuReqs()) {
+                if (skuReq == null || skuReq.getProductSkuSpecReqs() == null || skuReq.getProductSkuSpecReqs().isEmpty()) {
+                    return null;
+                }
+                originalSkuCount++;
+                for (AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq specReq : skuReq.getProductSkuSpecReqs()) {
+                    if (specReq == null || specReq.getParentSpecId() == null || specReq.getSpecId() == null) {
+                        continue;
+                    }
+                    childValuesByParent
+                            .computeIfAbsent(specReq.getParentSpecId(), key -> new LinkedHashMap<>())
+                            .putIfAbsent(specReq.getSpecId(), objectMapper.convertValue(specReq, AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq.class));
+                }
+            }
+        }
+        if (!hasStructuredGroup || childValuesByParent.isEmpty()) {
+            return null;
+        }
+
+        List<List<AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq>> combinations = new ArrayList<>();
+        combinations.add(new ArrayList<>());
+        for (LinkedHashMap<Integer, AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq> specMap : childValuesByParent.values()) {
+            if (specMap == null || specMap.isEmpty()) {
+                continue;
+            }
+            List<List<AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq>> next = new ArrayList<>();
+            for (List<AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq> partial : combinations) {
+                for (AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq specReq : specMap.values()) {
+                    List<AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq> combo = new ArrayList<>(partial);
+                    combo.add(objectMapper.convertValue(specReq, AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq.class));
+                    next.add(combo);
+                }
+            }
+            combinations = next;
+            if (combinations.size() > 200) {
+                warnings.add("structured dense placeholder matrix skipped because combination count exceeds 200");
+                return null;
+            }
+        }
+        if (combinations.isEmpty()) {
+            return null;
+        }
+
+        AddGloGoodsRequest denseReq = objectMapper.convertValue(baseReq, AddGloGoodsRequest.class);
+        int denseSkuCount = 0;
+        int syntheticCount = 0;
+        int syntheticIndex = 1;
+        for (AddGloGoodsRequest.ProductSkcReq skc : denseReq.getProductSkcReqs()) {
+            if (skc == null || skc.getProductSkuReqs() == null || skc.getProductSkuReqs().isEmpty()) {
+                return null;
+            }
+            List<CollapsedSkuCandidate> groupCandidates = new ArrayList<>();
+            Map<String, AddGloGoodsRequest.ProductSkuReq> existingByComboKey = new LinkedHashMap<>();
+            for (AddGloGoodsRequest.ProductSkuReq skuReq : skc.getProductSkuReqs()) {
+                if (skuReq == null) {
+                    continue;
+                }
+                List<AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq> childSpecs = cloneSpecReqs(skuReq.getProductSkuSpecReqs());
+                groupCandidates.add(new CollapsedSkuCandidate(skuReq, childSpecs));
+                String comboKey = buildSpecComboKey(childSpecs);
+                if (StringUtils.hasText(comboKey)) {
+                    existingByComboKey.putIfAbsent(comboKey, skuReq);
+                }
+            }
+            if (groupCandidates.isEmpty()) {
+                return null;
+            }
+
+            List<AddGloGoodsRequest.ProductSkuReq> denseSkuReqs = new ArrayList<>();
+            for (List<AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq> combination : combinations) {
+                String comboKey = buildSpecComboKey(combination);
+                AddGloGoodsRequest.ProductSkuReq existing = existingByComboKey.get(comboKey);
+                if (existing != null) {
+                    AddGloGoodsRequest.ProductSkuReq skuReq = objectMapper.convertValue(existing, AddGloGoodsRequest.ProductSkuReq.class);
+                    skuReq.setProductSkuSpecReqs(cloneSpecReqs(combination));
+                    denseSkuReqs.add(skuReq);
+                    continue;
+                }
+                CollapsedSkuCandidate prototype = chooseBestPrototypeCandidate(groupCandidates, combination);
+                if (prototype == null || prototype.skuReq() == null) {
+                    continue;
+                }
+                AddGloGoodsRequest.ProductSkuReq syntheticSku = objectMapper.convertValue(prototype.skuReq(), AddGloGoodsRequest.ProductSkuReq.class);
+                syntheticSku.setProductSkuSpecReqs(cloneSpecReqs(combination));
+                syntheticSku.setExtCode(buildSyntheticSkuExtCode(syntheticSku.getExtCode(), syntheticIndex++));
+                setSkuTargetStock(syntheticSku, 0);
+                denseSkuReqs.add(syntheticSku);
+                syntheticCount++;
+            }
+            if (denseSkuReqs.isEmpty()) {
+                return null;
+            }
+            denseSkuCount += denseSkuReqs.size();
+            skc.setProductSkuReqs(denseSkuReqs);
+        }
+
+        if (syntheticCount <= 0) {
+            return null;
+        }
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("originalSkuCount", originalSkuCount);
+        data.put("denseSkuCount", denseSkuCount);
+        data.put("syntheticSkuCount", syntheticCount);
+        data.put("dimensionCount", childValuesByParent.size());
+        data.put("skcCount", denseReq.getProductSkcReqs().size());
+        publishLogService.data(runId, "SPEC", "expanded sparse sku matrix within structured skc groups", data);
+        return denseReq;
+    }
+
+    private boolean containsStructuredMainSpecs(List<AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq> mainSpecs) {
+        if (mainSpecs == null || mainSpecs.isEmpty()) {
+            return false;
+        }
+        for (AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq mainSpec : mainSpecs) {
+            if (mainSpec == null) {
+                continue;
+            }
+            if (!isEmptyMainSpecPlaceholder(mainSpec.getParentSpecId(), mainSpec.getSpecId())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private List<AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq> cloneSpecReqs(
+            List<AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq> specs) {
+        List<AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq> out = new ArrayList<>();
+        if (specs == null) {
+            return out;
+        }
+        for (AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq specReq : specs) {
+            if (specReq != null) {
+                out.add(objectMapper.convertValue(specReq, AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq.class));
+            }
+        }
+        return out;
+    }
+
+    private String buildSpecComboKey(List<AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq> specs) {
+        if (specs == null || specs.isEmpty()) {
+            return null;
+        }
+        List<String> parts = new ArrayList<>();
+        for (AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq specReq : specs) {
+            if (specReq == null || specReq.getParentSpecId() == null || specReq.getSpecId() == null) {
+                continue;
+            }
+            parts.add(specReq.getParentSpecId() + "=" + specReq.getSpecId());
+        }
+        Collections.sort(parts);
+        return parts.isEmpty() ? null : String.join("|", parts);
+    }
+
+    private CollapsedSkuCandidate chooseBestPrototypeCandidate(
+            List<CollapsedSkuCandidate> candidates,
+            List<AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq> targetSpecs) {
+        if (candidates == null || candidates.isEmpty()) {
+            return null;
+        }
+        Set<String> targetKeys = new LinkedHashSet<>();
+        if (targetSpecs != null) {
+            for (AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq specReq : targetSpecs) {
+                if (specReq != null && specReq.getParentSpecId() != null && specReq.getSpecId() != null) {
+                    targetKeys.add(specReq.getParentSpecId() + "=" + specReq.getSpecId());
+                }
+            }
+        }
+        CollapsedSkuCandidate best = null;
+        int bestScore = Integer.MIN_VALUE;
+        for (CollapsedSkuCandidate candidate : candidates) {
+            int score = 0;
+            if (candidate != null && candidate.fullSpecs() != null) {
+                for (AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq specReq : candidate.fullSpecs()) {
+                    if (specReq != null && specReq.getParentSpecId() != null && specReq.getSpecId() != null) {
+                        if (targetKeys.contains(specReq.getParentSpecId() + "=" + specReq.getSpecId())) {
+                            score++;
+                        }
+                    }
+                }
+            }
+            if (best == null || score > bestScore) {
+                best = candidate;
+                bestScore = score;
+            }
+        }
+        return best;
+    }
+
+    private String buildSyntheticSkuExtCode(String baseExtCode,
+                                            int sequence) {
+        String base = firstNonBlank(baseExtCode, "SYNTH");
+        String candidate = base + "-S" + sequence;
+        if (candidate.length() > 64) {
+            candidate = candidate.substring(0, 64);
+        }
+        return candidate;
+    }
+
+    private void setSkuTargetStock(AddGloGoodsRequest.ProductSkuReq skuReq,
+                                   int targetStock) {
+        if (skuReq == null || skuReq.getProductSkuStockQuantityReq() == null
+                || skuReq.getProductSkuStockQuantityReq().getWarehouseStockQuantityReqs() == null) {
+            return;
+        }
+        for (AddGloGoodsRequest.ProductSkuReq.ProductSkuStockQuantityReq.WarehouseStockQuantityReq warehouseStock : skuReq.getProductSkuStockQuantityReq().getWarehouseStockQuantityReqs()) {
+            if (warehouseStock != null) {
+                warehouseStock.setTargetStockAvailable(targetStock);
+            }
+        }
+    }
+
+    private List<CollapsedSkuCandidate> collectCollapsedSkuCandidates(AddGloGoodsRequest req) {
+        List<CollapsedSkuCandidate> out = new ArrayList<>();
+        if (req == null || req.getProductSkcReqs() == null) {
+            return out;
+        }
+        for (AddGloGoodsRequest.ProductSkcReq skc : req.getProductSkcReqs()) {
+            if (skc == null || skc.getProductSkuReqs() == null) {
+                continue;
+            }
+            List<AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq> mainSpecs = new ArrayList<>();
+            if (skc.getMainProductSkuSpecReqs() != null) {
+                for (AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq mainReq : skc.getMainProductSkuSpecReqs()) {
+                    if (mainReq == null || isEmptyMainSpecPlaceholder(mainReq.getParentSpecId(), mainReq.getSpecId())) {
+                        continue;
+                    }
+                    AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq specReq = new AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq();
+                    specReq.setParentSpecId(mainReq.getParentSpecId());
+                    specReq.setParentSpecName(mainReq.getParentSpecName());
+                    specReq.setSpecId(mainReq.getSpecId());
+                    specReq.setSpecName(mainReq.getSpecName());
+                    mainSpecs.add(specReq);
+                }
+            }
+            for (AddGloGoodsRequest.ProductSkuReq skuReq : skc.getProductSkuReqs()) {
+                if (skuReq == null) {
+                    continue;
+                }
+                List<AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq> fullSpecs = new ArrayList<>();
+                Set<String> seen = new LinkedHashSet<>();
+                for (AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq mainSpec : mainSpecs) {
+                    if (mainSpec == null || mainSpec.getParentSpecId() == null || mainSpec.getSpecId() == null) {
+                        continue;
+                    }
+                    fullSpecs.add(objectMapper.convertValue(mainSpec, AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq.class));
+                    seen.add(mainSpec.getParentSpecId() + "=" + mainSpec.getSpecId());
+                }
+                if (skuReq.getProductSkuSpecReqs() != null) {
+                    for (AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq specReq : skuReq.getProductSkuSpecReqs()) {
+                        if (specReq == null || specReq.getParentSpecId() == null || specReq.getSpecId() == null) {
+                            continue;
+                        }
+                        String key = specReq.getParentSpecId() + "=" + specReq.getSpecId();
+                        if (seen.add(key)) {
+                            fullSpecs.add(objectMapper.convertValue(specReq, AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq.class));
+                        }
+                    }
+                }
+                out.add(new CollapsedSkuCandidate(skuReq, fullSpecs));
+            }
+        }
+        return out;
+    }
+
+    private ParentSpec chooseCollapsedCompositeParentSpec(CategoryApiClient categoryClient,
+                                                          List<AddGloGoodsRequest.ProductSpecPropertyReq> currentSpecs) {
+        try {
+            JsonNode root = objectMapper.readTree(categoryClient.getParentSpecList());
+            List<ParentSpec> allowed = collectParentSpecs(root.path("result"));
+            ParentSpec preferred = findPreferredParentSpec(allowed, "尺码", "尺寸", "型号", "规格", "颜色");
+            if (preferred != null) {
+                return preferred;
+            }
+            if (!allowed.isEmpty()) {
+                return allowed.get(0);
+            }
+        } catch (Exception ignored) {
+        }
+
+        LinkedHashMap<String, Integer> currentParentMap = new LinkedHashMap<>();
+        if (currentSpecs != null) {
+            for (AddGloGoodsRequest.ProductSpecPropertyReq spec : currentSpecs) {
+                if (spec == null || spec.getParentSpecId() == null || !StringUtils.hasText(spec.getPropName())) {
+                    continue;
+                }
+                currentParentMap.putIfAbsent(spec.getPropName(), spec.getParentSpecId());
+            }
+        }
+        String preferredName = firstExistingParentSpec(currentParentMap, "尺码", "尺寸", "型号", "规格", "颜色");
+        if (StringUtils.hasText(preferredName)) {
+            return new ParentSpec(currentParentMap.get(preferredName), preferredName);
+        }
+        if (!currentParentMap.isEmpty()) {
+            Map.Entry<String, Integer> first = currentParentMap.entrySet().iterator().next();
+            return new ParentSpec(first.getValue(), first.getKey());
+        }
+        return new ParentSpec(0, "");
+    }
+
+    private ParentSpec findPreferredParentSpec(List<ParentSpec> allowed, String... candidates) {
+        if (allowed == null || allowed.isEmpty() || candidates == null) {
+            return null;
+        }
+        LinkedHashMap<String, ParentSpec> byName = new LinkedHashMap<>();
+        for (ParentSpec parentSpec : allowed) {
+            if (parentSpec != null && StringUtils.hasText(parentSpec.parentSpecName)) {
+                byName.putIfAbsent(parentSpec.parentSpecName, parentSpec);
+            }
+        }
+        String preferredName = firstExistingParentSpec(toParentIdMap(byName), candidates);
+        return StringUtils.hasText(preferredName) ? byName.get(preferredName) : null;
+    }
+
+    private Map<String, Integer> toParentIdMap(Map<String, ParentSpec> byName) {
+        LinkedHashMap<String, Integer> out = new LinkedHashMap<>();
+        if (byName == null || byName.isEmpty()) {
+            return out;
+        }
+        for (Map.Entry<String, ParentSpec> entry : byName.entrySet()) {
+            if (entry.getValue() != null) {
+                out.put(entry.getKey(), entry.getValue().parentSpecId);
+            }
+        }
+        return out;
+    }
+
+    private String buildCollapsedCompositeSpecName(List<AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq> fullSpecs,
+                                                   String skuExtCode,
+                                                   String targetParentSpecName) {
+        List<String> parts = new ArrayList<>();
+        List<String> prioritizedParts = new ArrayList<>();
+        if (fullSpecs != null) {
+            for (AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq specReq : fullSpecs) {
+                if (specReq == null) {
+                    continue;
+                }
+                String part = normalizeCollapsedCompositeComponent(specReq.getParentSpecName(), specReq.getSpecName());
+                if (StringUtils.hasText(part)) {
+                    if (sameSpecDimension(targetParentSpecName, specReq.getParentSpecName())) {
+                        prioritizedParts.add(part);
+                    } else {
+                        parts.add(part);
+                    }
+                }
+            }
+        }
+        if (!prioritizedParts.isEmpty()) {
+            prioritizedParts.addAll(parts);
+            parts = prioritizedParts;
+        }
+        String composite = String.join(" / ", parts).replaceAll("\\s+", " ").trim();
+        if (!StringUtils.hasText(composite)) {
+            composite = firstNonBlank(skuExtCode, "Variant");
+        }
+        if (composite.length() > 120) {
+            composite = composite.substring(0, 120).trim();
+        }
+        return composite;
+    }
+
+    private String normalizeCollapsedCompositeComponent(String parentSpecName,
+                                                       String specName) {
+        String value = firstNonBlank(specName);
+        if (!StringUtils.hasText(value)) {
+            return null;
+        }
+        String normalized = value
+                .replace('【', ' ')
+                .replace('】', ' ')
+                .replace('（', ' ')
+                .replace('）', ' ')
+                .replace('(', ' ')
+                .replace(')', ' ')
+                .replaceAll("[,;:!?]+", " ")
+                .replaceAll("\\s+", " ")
+                .trim();
+        String parentName = firstNonBlank(parentSpecName, "").toLowerCase(Locale.ROOT);
+        String lower = normalized.toLowerCase(Locale.ROOT);
+        if (parentName.contains("size") || parentName.contains("尺码") || parentName.contains("尺寸")
+                || lower.contains("shoe size") || lower.contains("foot size")) {
+            java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("(\\d+\\s*-\\s*\\d+)").matcher(normalized);
+            if (matcher.find()) {
+                normalized = matcher.group(1).replaceAll("\\s+", "");
+            }
+        }
+        if (normalized.length() > 60) {
+            normalized = normalized.substring(0, 60).trim();
+        }
+        return normalized;
+    }
+
+    private String appendCollapsedCompositeSuffix(String compositeName,
+                                                  String skuExtCode,
+                                                  int sequence) {
+        String suffix = firstNonBlank(skuExtCode);
+        if (StringUtils.hasText(suffix) && suffix.length() > 6) {
+            suffix = suffix.substring(suffix.length() - 6);
+        }
+        String candidate = StringUtils.hasText(suffix)
+                ? compositeName + " / " + suffix
+                : compositeName + " / " + sequence;
+        if (candidate.length() > 120) {
+            candidate = candidate.substring(0, 120).trim();
+        }
+        return candidate;
+    }
+
+    private String resolveCollapsedSkcExtCode(AddGloGoodsRequest req) {
+        if (req == null || req.getProductSkcReqs() == null || req.getProductSkcReqs().isEmpty()) {
+            return "SKC_COLLAPSED";
+        }
+        for (AddGloGoodsRequest.ProductSkcReq skcReq : req.getProductSkcReqs()) {
+            if (skcReq != null && StringUtils.hasText(skcReq.getExtCode())) {
+                String extCode = skcReq.getExtCode().trim();
+                int idx = extCode.indexOf("_");
+                return idx > 0 ? extCode.substring(0, idx) : extCode;
+            }
+        }
+        return "SKC_COLLAPSED";
+    }
+
+    private record CollapsedSkuCandidate(
+            AddGloGoodsRequest.ProductSkuReq skuReq,
+            List<AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq> fullSpecs) {
+    }
+
+    private boolean shouldPreserveStructuredSkcGroups(
+            List<List<AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq>> mainGroups,
+            List<List<AddGloGoodsRequest.ProductSkuReq>> skuGroups) {
+        if (mainGroups == null || mainGroups.isEmpty() || skuGroups == null || skuGroups.isEmpty()) {
+            return false;
+        }
+        int realMainGroupCount = 0;
+        for (List<AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq> mainGroup : mainGroups) {
+            if (isStructuredMainGroup(mainGroup)) {
+                realMainGroupCount++;
+            }
+        }
+        if (realMainGroupCount <= 1) {
+            return false;
+        }
+
+        Map<Integer, Set<Integer>> childSpecValuesByParent = new LinkedHashMap<>();
+        int totalChildSpecCount = 0;
+        int groupCount = Math.max(mainGroups.size(), skuGroups.size());
+        for (int i = 0; i < groupCount; i++) {
+            List<AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq> mainGroup =
+                    i < mainGroups.size() ? mainGroups.get(i) : List.of();
+            List<AddGloGoodsRequest.ProductSkuReq> skuGroup =
+                    i < skuGroups.size() ? skuGroups.get(i) : List.of();
+            for (AddGloGoodsRequest.ProductSkuReq skuReq : stripMainSpecsFromSkuGroup(skuGroup, mainGroup)) {
+                if (skuReq == null || skuReq.getProductSkuSpecReqs() == null) {
+                    continue;
+                }
+                for (AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq specReq : skuReq.getProductSkuSpecReqs()) {
+                    if (specReq == null || specReq.getParentSpecId() == null || specReq.getSpecId() == null) {
+                        continue;
+                    }
+                    totalChildSpecCount++;
+                    childSpecValuesByParent
+                            .computeIfAbsent(specReq.getParentSpecId(), key -> new LinkedHashSet<>())
+                            .add(specReq.getSpecId());
+                }
+            }
+        }
+        if (totalChildSpecCount == 0) {
+            return false;
+        }
+        for (Set<Integer> values : childSpecValuesByParent.values()) {
+            if (values != null && values.size() > 1) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private boolean hasExplicitEmptyMainSpecPlaceholder(List<List<AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq>> mainGroups) {
@@ -1895,6 +3825,21 @@ public class TemuPublishService {
             }
         }
         return sawPlaceholder;
+    }
+
+    private boolean isStructuredMainGroup(List<AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq> mainGroup) {
+        if (mainGroup == null || mainGroup.isEmpty()) {
+            return false;
+        }
+        for (AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq item : mainGroup) {
+            if (item == null) {
+                continue;
+            }
+            if (!isEmptyMainSpecPlaceholder(item.getParentSpecId(), item.getSpecId())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private boolean shouldUseEmptyMainSpecPlaceholder(List<List<AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq>> mainGroups) {
@@ -2041,6 +3986,47 @@ public class TemuPublishService {
             parts.add(item.getParentSpecId() + "=" + item.getSpecId());
         }
         return String.join("|", parts);
+    }
+
+    private List<AddGloGoodsRequest.ProductSkuReq> stripMainSpecsFromSkuGroup(
+            List<AddGloGoodsRequest.ProductSkuReq> skuGroup,
+            List<AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq> mainGroup) {
+        if (skuGroup == null || skuGroup.isEmpty() || mainGroup == null || mainGroup.isEmpty()) {
+            return skuGroup == null ? new ArrayList<>() : new ArrayList<>(skuGroup);
+        }
+        Set<String> mainSpecKeys = new LinkedHashSet<>();
+        for (AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq mainReq : mainGroup) {
+            if (mainReq == null || mainReq.getParentSpecId() == null || mainReq.getSpecId() == null) {
+                continue;
+            }
+            mainSpecKeys.add(mainReq.getParentSpecId() + "=" + mainReq.getSpecId());
+        }
+        if (mainSpecKeys.isEmpty()) {
+            return new ArrayList<>(skuGroup);
+        }
+
+        List<AddGloGoodsRequest.ProductSkuReq> out = new ArrayList<>();
+        for (AddGloGoodsRequest.ProductSkuReq skuReq : skuGroup) {
+            if (skuReq == null) {
+                continue;
+            }
+            AddGloGoodsRequest.ProductSkuReq cloned = objectMapper.convertValue(skuReq, AddGloGoodsRequest.ProductSkuReq.class);
+            List<AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq> filtered = new ArrayList<>();
+            if (cloned.getProductSkuSpecReqs() != null) {
+                for (AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq specReq : cloned.getProductSkuSpecReqs()) {
+                    if (specReq == null || specReq.getParentSpecId() == null || specReq.getSpecId() == null) {
+                        continue;
+                    }
+                    String key = specReq.getParentSpecId() + "=" + specReq.getSpecId();
+                    if (!mainSpecKeys.contains(key)) {
+                        filtered.add(specReq);
+                    }
+                }
+            }
+            cloned.setProductSkuSpecReqs(filtered);
+            out.add(cloned);
+        }
+        return out;
     }
 
     private CreatedSpecInfo resolveStoredSpecInfo(Map<String, CreatedSpecInfo> tempSpecInfoMap,
@@ -2216,11 +4202,19 @@ public class TemuPublishService {
     private String sanitizeEnglishName(String s, List<String> warnings) {
         if (!StringUtils.hasText(s)) return s;
         String input = s.trim();
-        // Keep only ASCII letters/numbers/basic punctuation/spaces.
-        // Remove emojis, CJK, and other symbols that TEMU rejects.
+        // Keep the title conservative so TEMU's punctuation validator will accept it.
         String cleaned = input
-                .replaceAll("[^A-Za-z0-9\\-\\_\\.\\,\\/\\(\\)\\[\\]\\+\\&\\%\\s]", " ")
+                .replaceAll("[^\\x00-\\x7F]", " ")
+                .replaceAll("[\\(\\)\\[\\]\\{\\}/_%+]", " ")
+                .replaceAll("(\\d)\\.(\\d)", "$1 $2")
+                .replaceAll("\\s*,\\s*", ", ")
+                .replaceAll("[\\.:;!?&]", " ")
+                .replaceAll("[^A-Za-z0-9,\\-\\s]", " ")
+                .replaceAll("\\s*-\\s*", "-")
                 .replaceAll("\\s+", " ")
+                .replaceAll("\\s+,", ",")
+                .replaceAll(",(?!\\s|$)", ", ")
+                .replaceAll("[,\\-]+$", "")
                 .trim();
         if (!StringUtils.hasText(cleaned)) {
             cleaned = "Product";

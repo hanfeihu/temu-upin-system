@@ -6,6 +6,7 @@ import type {
   SpringPage,
   TemuCategoryOption,
   TemuCategorySummary,
+  TemuTitleOptimizationResponseVO,
 } from '@/types/api';
 
 export interface ProductCollectionListParams {
@@ -70,6 +71,12 @@ export const productCollectionsApi = {
   saveTemuCategory(id: number, payload: { temuCatid: string; temuCatname: string }) {
     return client.post(`/platform/product-collections/${id}/temu-category/save`, payload) as Promise<
       ApiResponse<null>
+    >;
+  },
+
+  generateTemuTitleOptimization(id: number) {
+    return client.post(`/platform/product-collections/${id}/temu-title-optimizer/generate`) as Promise<
+      ApiResponse<TemuTitleOptimizationResponseVO>
     >;
   },
 

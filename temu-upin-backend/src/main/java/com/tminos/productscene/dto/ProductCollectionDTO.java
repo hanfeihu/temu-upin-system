@@ -24,6 +24,8 @@ public class ProductCollectionDTO {
         private Long lastPublishRunId;
         private Integer collectCount;
         private String companyName;
+        private List<String> targetShopIds;
+        private List<String> targetShopNames;
         private String productMainImage;
         private String temuCatid;
         private String temuCatname;
@@ -78,6 +80,8 @@ public class ProductCollectionDTO {
 
         private String companyLocation;
         private String companyName;
+        private List<String> targetShopIds;
+        private List<String> targetShopNames;
         private String detailImages;
         private Boolean hasSevereInventory;
 
@@ -153,6 +157,8 @@ public class ProductCollectionDTO {
             public ProductCollectionDetailResponseBuilder collectionTime(LocalDateTime v) { o.collectionTime = v; return this; }
             public ProductCollectionDetailResponseBuilder companyLocation(String v) { o.companyLocation = v; return this; }
             public ProductCollectionDetailResponseBuilder companyName(String v) { o.companyName = v; return this; }
+            public ProductCollectionDetailResponseBuilder targetShopIds(List<String> v) { o.targetShopIds = v; return this; }
+            public ProductCollectionDetailResponseBuilder targetShopNames(List<String> v) { o.targetShopNames = v; return this; }
             public ProductCollectionDetailResponseBuilder detailImages(String v) { o.detailImages = v; return this; }
             public ProductCollectionDetailResponseBuilder hasSevereInventory(Boolean v) { o.hasSevereInventory = v; return this; }
             public ProductCollectionDetailResponseBuilder maxPrice(BigDecimal v) { o.maxPrice = v; return this; }
@@ -304,6 +310,7 @@ public class ProductCollectionDTO {
         private String originalHtml;
 
         private String temuAttributes;
+        private List<String> targetShopIds;
     }
 
     @Getter

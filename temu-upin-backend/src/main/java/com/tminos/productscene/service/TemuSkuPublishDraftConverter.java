@@ -8,6 +8,8 @@ import com.tminos.productscene.entity.ProductCollection;
 import com.tminos.productscene.entity.ProductCollectionTemuSku;
 import com.tminos.temu.upin.sdk.v2.category.CategoryApiClient;
 import com.tminos.temu.upin.sdk.v2.dto.AddGloGoodsRequest;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -24,6 +26,8 @@ import java.util.Objects;
 
 @Service
 public class TemuSkuPublishDraftConverter {
+
+    private static final Logger log = LoggerFactory.getLogger(TemuSkuPublishDraftConverter.class);
 
     private final ObjectMapper objectMapper;
     private final TemuParentSpecMappingTable parentSpecMappingTable;
@@ -69,6 +73,11 @@ public class TemuSkuPublishDraftConverter {
         }
 
         String mainFieldName = resolveMainFieldName(dimensions);
+        Map<String, SpecValueMetadata> specValueMetadataByKey = loadSaleSpecValueMetadata(pc, categoryClient);
+        log.info("temu sku sale spec metadata resolved: spuId={}, keys={}, sizeMeta={}",
+                pc == null ? null : pc.getId(),
+                specValueMetadataByKey.size(),
+                summarizeSizeMetadata(specValueMetadataByKey));
         LinkedHashMap<String, Integer> tempSpecIdByKey = new LinkedHashMap<>();
         int[] nextTempSpecId = {1};
         LinkedHashMap<String, AddGloGoodsRequest.ProductSpecPropertyReq> uniqueSpecs = new LinkedHashMap<>();
@@ -83,6 +92,7 @@ public class TemuSkuPublishDraftConverter {
                     uniqueSpecs,
                     tempSpecIdByKey,
                     nextTempSpecId,
+                    specValueMetadataByKey,
                     siteId,
                     warehouseId,
                     defaultStock,
@@ -106,7 +116,11 @@ public class TemuSkuPublishDraftConverter {
 
             LinkedHashMap<String, List<ProductCollectionTemuSku>> grouped = new LinkedHashMap<>();
             for (ProductCollectionTemuSku sku : sourceSkus) {
-                String mainValue = resolveSpecValue(sku, mainDimension.fieldName());
+                String mainValue = canonicalizeSpecValueForPublish(
+                        mainDimension.parentSpec(),
+                        resolveSpecValue(sku, mainDimension.fieldName()),
+                        specValueMetadataByKey
+                );
                 if (!StringUtils.hasText(mainValue)) {
                     warnings.add("SKU " + firstNonBlank(sku.getTemuSkuId(), sku.getOriginSkuId(), String.valueOf(sku.getId())) + " 缺少主销售属性值，已跳过");
                     continue;
@@ -116,7 +130,14 @@ public class TemuSkuPublishDraftConverter {
 
             for (Map.Entry<String, List<ProductCollectionTemuSku>> entry : grouped.entrySet()) {
                 String mainValue = entry.getKey();
-                Integer tempSpecId = ensureTempSpec(uniqueSpecs, tempSpecIdByKey, nextTempSpecId, mainDimension.parentSpec(), mainValue);
+                Integer tempSpecId = ensureTempSpec(
+                        uniqueSpecs,
+                        tempSpecIdByKey,
+                        nextTempSpecId,
+                        mainDimension.parentSpec(),
+                        mainValue,
+                        resolveSpecValueMetadata(specValueMetadataByKey, mainDimension.parentSpec(), mainValue)
+                );
 
                 AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq mainReq = new AddGloGoodsRequest.ProductSkcReq.MainProductSkuSpecReq();
                 mainReq.setParentSpecId(mainDimension.parentSpec().parentSpecId());
@@ -131,6 +152,7 @@ public class TemuSkuPublishDraftConverter {
                         uniqueSpecs,
                         tempSpecIdByKey,
                         nextTempSpecId,
+                        specValueMetadataByKey,
                         siteId,
                         warehouseId,
                         defaultStock,
@@ -158,6 +180,7 @@ public class TemuSkuPublishDraftConverter {
                                                                 Map<String, AddGloGoodsRequest.ProductSpecPropertyReq> uniqueSpecs,
                                                                 Map<String, Integer> tempSpecIdByKey,
                                                                 int[] nextTempSpecId,
+                                                                Map<String, SpecValueMetadata> specValueMetadataByKey,
                                                                 int siteId,
                                                                 String warehouseId,
                                                                 int defaultStock,
@@ -170,11 +193,22 @@ public class TemuSkuPublishDraftConverter {
             }
             List<AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq> skuSpecReqs = new ArrayList<>();
             for (SpecDimension dimension : dimensions) {
-                String specValue = resolveSpecValue(sku, dimension.fieldName());
+                String specValue = canonicalizeSpecValueForPublish(
+                        dimension.parentSpec(),
+                        resolveSpecValue(sku, dimension.fieldName()),
+                        specValueMetadataByKey
+                );
                 if (!StringUtils.hasText(specValue)) {
                     continue;
                 }
-                Integer tempSpecId = ensureTempSpec(uniqueSpecs, tempSpecIdByKey, nextTempSpecId, dimension.parentSpec(), specValue);
+                Integer tempSpecId = ensureTempSpec(
+                        uniqueSpecs,
+                        tempSpecIdByKey,
+                        nextTempSpecId,
+                        dimension.parentSpec(),
+                        specValue,
+                        resolveSpecValueMetadata(specValueMetadataByKey, dimension.parentSpec(), specValue)
+                );
                 AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq skuSpecReq = new AddGloGoodsRequest.ProductSkuReq.ProductSkuSpecReq();
                 skuSpecReq.setParentSpecId(dimension.parentSpec().parentSpecId());
                 skuSpecReq.setParentSpecName(dimension.parentSpec().parentSpecName());
@@ -217,17 +251,23 @@ public class TemuSkuPublishDraftConverter {
                                                   List<ProductCollectionTemuSku> temuSkus,
                                                   List<ParentSpec> allowedParentSpecs,
                                                   List<String> warnings) {
+        Map<String, List<String>> valuesByField = collectDimensionValues(orderedSpecKeys, temuSkus);
+        String preferredColorField = resolvePreferredColorField(orderedSpecKeys, valuesByField, allowedParentSpecs);
         LinkedHashSet<String> seenParentNames = new LinkedHashSet<>();
         List<SpecDimension> out = new ArrayList<>();
         for (String fieldName : orderedSpecKeys) {
-            ParentSpec parentSpec = resolveParentSpec(fieldName, allowedParentSpecs, warnings);
+            ParentSpec parentSpec = resolveParentSpec(
+                    fieldName,
+                    valuesByField.getOrDefault(fieldName, List.of()),
+                    preferredColorField,
+                    seenParentNames,
+                    allowedParentSpecs,
+                    warnings
+            );
             if (parentSpec == null || parentSpec.parentSpecId() <= 0) {
                 continue;
             }
-            if (!seenParentNames.add(parentSpec.parentSpecName())) {
-                warnings.add("规格维度“" + fieldName + "”映射到重复的父规格“" + parentSpec.parentSpecName() + "”，已忽略后续重复维度");
-                continue;
-            }
+            seenParentNames.add(parentSpec.parentSpecName());
             boolean varying = isVaryingDimension(temuSkus, fieldName);
             out.add(new SpecDimension(fieldName, parentSpec, varying));
         }
@@ -235,24 +275,136 @@ public class TemuSkuPublishDraftConverter {
     }
 
     private ParentSpec resolveParentSpec(String fieldName,
+                                         List<String> fieldValues,
+                                         String preferredColorField,
+                                         LinkedHashSet<String> seenParentNames,
                                          List<ParentSpec> allowedParentSpecs,
                                          List<String> warnings) {
-        ParentSpec directMatch = findParentSpec(fieldName, allowedParentSpecs);
-        if (directMatch != null) {
-            return directMatch;
+        ParentSpec preferredColorSpec = chooseUsableParentSpec(
+                findParentSpec("颜色", allowedParentSpecs),
+                fieldName,
+                preferredColorField,
+                seenParentNames
+        );
+        if (preferredColorSpec != null && Objects.equals(fieldName, preferredColorField)) {
+            return preferredColorSpec;
         }
 
         String mappedName = parentSpecMappingTable.getMappedParentSpecName(fieldName);
-        ParentSpec mappedMatch = findParentSpec(mappedName, allowedParentSpecs);
+        ParentSpec mappedMatch = chooseUsableParentSpec(
+                findParentSpec(mappedName, allowedParentSpecs),
+                fieldName,
+                preferredColorField,
+                seenParentNames
+        );
         if (mappedMatch != null) {
             return mappedMatch;
         }
 
-        ParentSpec fallback = allowedParentSpecs.isEmpty() ? null : allowedParentSpecs.get(0);
+        ParentSpec directMatch = chooseUsableParentSpec(
+                findParentSpec(fieldName, allowedParentSpecs),
+                fieldName,
+                preferredColorField,
+                seenParentNames
+        );
+        if (directMatch != null) {
+            return directMatch;
+        }
+
+        ParentSpec modelFallback = chooseUsableParentSpec(
+                findParentSpec("型号", allowedParentSpecs),
+                fieldName,
+                preferredColorField,
+                seenParentNames
+        );
+        if (modelFallback != null && !Objects.equals(fieldName, preferredColorField)) {
+            warnings.add("规格维度“" + fieldName + "”未命中父规格映射，已回退到“" + modelFallback.parentSpecName() + "”");
+            return modelFallback;
+        }
+
+        ParentSpec fallback = firstUnusedParentSpec(seenParentNames, allowedParentSpecs);
         if (fallback != null) {
             warnings.add("规格维度“" + fieldName + "”未命中父规格映射，已回退到“" + fallback.parentSpecName() + "”");
         }
         return fallback;
+    }
+
+    private Map<String, List<String>> collectDimensionValues(List<String> orderedSpecKeys,
+                                                             List<ProductCollectionTemuSku> temuSkus) {
+        Map<String, List<String>> valuesByField = new LinkedHashMap<>();
+        if (orderedSpecKeys == null || orderedSpecKeys.isEmpty()) {
+            return valuesByField;
+        }
+        for (String fieldName : orderedSpecKeys) {
+            LinkedHashSet<String> values = new LinkedHashSet<>();
+            if (temuSkus != null) {
+                for (ProductCollectionTemuSku sku : temuSkus) {
+                    String value = resolveSpecValue(sku, fieldName);
+                    if (StringUtils.hasText(value)) {
+                        values.add(value);
+                    }
+                }
+            }
+            valuesByField.put(fieldName, new ArrayList<>(values));
+        }
+        return valuesByField;
+    }
+
+    private String resolvePreferredColorField(List<String> orderedSpecKeys,
+                                              Map<String, List<String>> valuesByField,
+                                              List<ParentSpec> allowedParentSpecs) {
+        if (orderedSpecKeys == null || orderedSpecKeys.isEmpty()) {
+            return null;
+        }
+        if (findParentSpec("颜色", allowedParentSpecs) == null) {
+            return null;
+        }
+        for (String fieldName : orderedSpecKeys) {
+            if (isColorLikeDimension(valuesByField.get(fieldName))) {
+                return fieldName;
+            }
+        }
+        for (String fieldName : orderedSpecKeys) {
+            ParentSpec directMatch = findParentSpec(fieldName, allowedParentSpecs);
+            if (directMatch != null && "颜色".equals(directMatch.parentSpecName())) {
+                return fieldName;
+            }
+        }
+        return orderedSpecKeys.get(0);
+    }
+
+    private ParentSpec chooseUsableParentSpec(ParentSpec candidate,
+                                              String fieldName,
+                                              String preferredColorField,
+                                              LinkedHashSet<String> seenParentNames) {
+        if (candidate == null || !StringUtils.hasText(candidate.parentSpecName())) {
+            return null;
+        }
+        if (seenParentNames != null && seenParentNames.contains(candidate.parentSpecName())) {
+            return null;
+        }
+        if ("颜色".equals(candidate.parentSpecName())
+                && StringUtils.hasText(preferredColorField)
+                && !Objects.equals(fieldName, preferredColorField)) {
+            return null;
+        }
+        return candidate;
+    }
+
+    private ParentSpec firstUnusedParentSpec(LinkedHashSet<String> seenParentNames,
+                                             List<ParentSpec> allowedParentSpecs) {
+        if (allowedParentSpecs == null || allowedParentSpecs.isEmpty()) {
+            return null;
+        }
+        for (ParentSpec parentSpec : allowedParentSpecs) {
+            if (parentSpec == null || !StringUtils.hasText(parentSpec.parentSpecName())) {
+                continue;
+            }
+            if (seenParentNames == null || !seenParentNames.contains(parentSpec.parentSpecName())) {
+                return parentSpec;
+            }
+        }
+        return allowedParentSpecs.get(0);
     }
 
     private ParentSpec findParentSpec(String candidate,
@@ -288,22 +440,84 @@ public class TemuSkuPublishDraftConverter {
         return false;
     }
 
+    private boolean isColorLikeDimension(List<String> values) {
+        if (values == null || values.isEmpty()) {
+            return false;
+        }
+        for (String value : values) {
+            if (isColorLikeValue(value)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isColorLikeValue(String value) {
+        String normalized = normalizeSpecToken(value);
+        if (!StringUtils.hasText(normalized)) {
+            return false;
+        }
+        List<String> nonColorTokens = List.of(
+                "packaging", "package", "bag", "box", "opp", "gift", "cm", "mm", "kg", "pcs", "piece", "set"
+        );
+        for (String token : nonColorTokens) {
+            if (normalized.contains(token)) {
+                return false;
+            }
+        }
+        List<String> colorTokens = List.of(
+                "black", "white", "gray", "grey", "blue", "pink", "purple", "red", "green", "yellow",
+                "orange", "brown", "beige", "khaki", "gold", "silver", "coffee", "transparent",
+                "黑", "白", "灰", "蓝", "粉", "紫", "红", "绿", "黄", "橙", "棕", "咖", "金", "银"
+        );
+        for (String token : colorTokens) {
+            if (normalized.contains(token)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private String resolveMainFieldName(List<SpecDimension> dimensions) {
-        List<SpecDimension> varyingDimensions = dimensions.stream()
-                .filter(SpecDimension::varying)
-                .toList();
-        if (varyingDimensions.size() <= 1) {
+        if (dimensions == null || dimensions.isEmpty()) {
             return null;
         }
-        return varyingDimensions.get(0).fieldName();
+
+        for (SpecDimension dimension : dimensions) {
+            if (dimension == null || dimension.parentSpec() == null) {
+                continue;
+            }
+            if ("颜色".equals(dimension.parentSpec().parentSpecName())) {
+                return dimension.fieldName();
+            }
+        }
+
+        for (SpecDimension dimension : dimensions) {
+            if (dimension == null || dimension.parentSpec() == null || !dimension.varying()) {
+                continue;
+            }
+            if (!isModelLikeParentSpec(dimension.parentSpec().parentSpecName())) {
+                return dimension.fieldName();
+            }
+        }
+
+        for (SpecDimension dimension : dimensions) {
+            if (dimension != null && dimension.varying()) {
+                return dimension.fieldName();
+            }
+        }
+
+        return dimensions.get(0).fieldName();
     }
 
     private Integer ensureTempSpec(Map<String, AddGloGoodsRequest.ProductSpecPropertyReq> uniqueSpecs,
                                    Map<String, Integer> tempSpecIdByKey,
                                    int[] nextTempSpecId,
                                    ParentSpec parentSpec,
-                                   String specValue) {
-        String key = parentSpec.parentSpecId() + "\u0001" + normalizeSpecToken(specValue);
+                                   String specValue,
+                                   SpecValueMetadata metadata) {
+        Integer valueGroupId = metadata == null || metadata.valueGroupId() == null ? 0 : metadata.valueGroupId();
+        String key = parentSpec.parentSpecId() + "\u0001" + normalizeSpecToken(specValue) + "\u0001" + valueGroupId;
         Integer tempSpecId = tempSpecIdByKey.get(key);
         if (tempSpecId != null) {
             return tempSpecId;
@@ -312,11 +526,11 @@ public class TemuSkuPublishDraftConverter {
         tempSpecIdByKey.put(key, tempSpecId);
 
         AddGloGoodsRequest.ProductSpecPropertyReq top = new AddGloGoodsRequest.ProductSpecPropertyReq();
-        top.setVid(0);
+        top.setVid(metadata == null || metadata.vid() == null ? 0 : metadata.vid());
         top.setSpecId(tempSpecId);
-        top.setValueGroupId(0);
+        top.setValueGroupId(valueGroupId);
         top.setParentSpecId(parentSpec.parentSpecId());
-        top.setValueGroupName("");
+        top.setValueGroupName(metadata == null ? "" : firstNonBlank(metadata.valueGroupName(), ""));
         top.setValueUnit("");
         top.setPid(0);
         top.setTemplatePid(0);
@@ -326,6 +540,214 @@ public class TemuSkuPublishDraftConverter {
         top.setRefPid(0);
         uniqueSpecs.put(key, top);
         return tempSpecId;
+    }
+
+    private Map<String, SpecValueMetadata> loadSaleSpecValueMetadata(ProductCollection pc,
+                                                                     CategoryApiClient categoryClient) {
+        LinkedHashMap<String, SpecValueMetadata> out = new LinkedHashMap<>();
+        Integer leafCatId = resolveLeafCatId(pc == null ? null : pc.getTemuCatid());
+        if (leafCatId == null || leafCatId <= 0 || categoryClient == null) {
+            return out;
+        }
+
+        try {
+            String raw = categoryClient.getCategoryAttributes(leafCatId);
+            JsonNode root = objectMapper.readTree(raw);
+            if (!root.path("success").asBoolean(false)) {
+                return out;
+            }
+            JsonNode properties = root.path("result").path("properties");
+            if (!properties.isArray() || properties.isEmpty()) {
+                return out;
+            }
+            Map<Integer, LinkedHashSet<Integer>> selectedVidsByPid = parseSelectedVidsByPid(pc == null ? null : pc.getTemuAttributes());
+            for (JsonNode property : properties) {
+                if (property == null
+                        || property.isNull()
+                        || !property.path("isSale").asBoolean(false)) {
+                    continue;
+                }
+                int parentSpecId = property.path("parentSpecId").asInt(0);
+                if (parentSpecId <= 0) {
+                    continue;
+                }
+                JsonNode values = property.path("values");
+                if (!values.isArray() || values.isEmpty()) {
+                    continue;
+                }
+                LinkedHashSet<Integer> selectedVids = selectedVidsByPid.getOrDefault(property.path("pid").asInt(0), new LinkedHashSet<>());
+                String propertyName = firstNonBlank(property.path("name").asText(null));
+                for (JsonNode value : values) {
+                    if (value == null || value.isNull()) {
+                        continue;
+                    }
+                    String normalizedValue = normalizeSpecValueForField(propertyName, value.path("value").asText(null));
+                    if (!StringUtils.hasText(normalizedValue)) {
+                        continue;
+                    }
+                    JsonNode group = value.path("group");
+                    Integer groupId = parseIntegerNode(group.path("id"));
+                    String groupName = firstNonBlank(group.path("name").asText(null), "");
+                    SpecValueMetadata candidate = new SpecValueMetadata(
+                            parseIntegerNode(value.path("vid")),
+                            groupId == null ? 0 : groupId,
+                            groupName
+                    );
+                    String key = specValueMetadataKey(parentSpecId, normalizedValue);
+                    SpecValueMetadata existing = out.get(key);
+                    if (shouldReplaceSpecValueMetadata(existing, candidate, selectedVids)) {
+                        out.put(key, candidate);
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return out;
+    }
+
+    private boolean shouldReplaceSpecValueMetadata(SpecValueMetadata existing,
+                                                   SpecValueMetadata candidate,
+                                                   LinkedHashSet<Integer> selectedVids) {
+        if (candidate == null) {
+            return false;
+        }
+        if (existing == null) {
+            return true;
+        }
+        boolean existingSelected = existing.vid() != null && selectedVids != null && selectedVids.contains(existing.vid());
+        boolean candidateSelected = candidate.vid() != null && selectedVids != null && selectedVids.contains(candidate.vid());
+        if (candidateSelected != existingSelected) {
+            return candidateSelected;
+        }
+        boolean existingHasGroup = existing.valueGroupId() != null && existing.valueGroupId() > 0;
+        boolean candidateHasGroup = candidate.valueGroupId() != null && candidate.valueGroupId() > 0;
+        return candidateHasGroup && !existingHasGroup;
+    }
+
+    private SpecValueMetadata resolveSpecValueMetadata(Map<String, SpecValueMetadata> specValueMetadataByKey,
+                                                       ParentSpec parentSpec,
+                                                       String specValue) {
+        if (specValueMetadataByKey == null || specValueMetadataByKey.isEmpty() || parentSpec == null || parentSpec.parentSpecId() <= 0) {
+            return null;
+        }
+        return specValueMetadataByKey.get(specValueMetadataKey(parentSpec.parentSpecId(), specValue));
+    }
+
+    private String specValueMetadataKey(Integer parentSpecId,
+                                        String specValue) {
+        return String.valueOf(parentSpecId) + "\u0001" + normalizeSpecToken(specValue);
+    }
+
+    private Map<Integer, LinkedHashSet<Integer>> parseSelectedVidsByPid(String temuAttributesJson) {
+        LinkedHashMap<Integer, LinkedHashSet<Integer>> out = new LinkedHashMap<>();
+        if (!StringUtils.hasText(temuAttributesJson)) {
+            return out;
+        }
+        try {
+            JsonNode root = objectMapper.readTree(temuAttributesJson);
+            JsonNode properties = root.path("properties");
+            if (!properties.isArray()) {
+                return out;
+            }
+            for (JsonNode property : properties) {
+                if (property == null || property.isNull()) {
+                    continue;
+                }
+                int pid = property.path("pid").asInt(0);
+                if (pid <= 0) {
+                    continue;
+                }
+                LinkedHashSet<Integer> selectedVids = out.computeIfAbsent(pid, ignored -> new LinkedHashSet<>());
+                JsonNode vidsNode = property.path("selectedVids");
+                if (vidsNode.isArray()) {
+                    for (JsonNode vidNode : vidsNode) {
+                        Integer vid = parseIntegerNode(vidNode);
+                        if (vid != null && vid > 0) {
+                            selectedVids.add(vid);
+                        }
+                    }
+                }
+                JsonNode selectedValues = property.path("selectedValues");
+                if (selectedValues.isArray()) {
+                    for (JsonNode selectedValue : selectedValues) {
+                        Integer vid = parseIntegerNode(selectedValue.path("vid"));
+                        if (vid != null && vid > 0) {
+                            selectedVids.add(vid);
+                        }
+                    }
+                }
+                if (selectedVids.isEmpty()) {
+                    out.remove(pid);
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return out;
+    }
+
+    private Integer parseIntegerNode(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        if (node.isInt() || node.isLong()) {
+            int value = node.asInt(0);
+            return value > 0 ? value : null;
+        }
+        if (node.isTextual()) {
+            String text = firstNonBlank(node.asText(null));
+            if (!StringUtils.hasText(text)) {
+                return null;
+            }
+            try {
+                int value = Integer.parseInt(text);
+                return value > 0 ? value : null;
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private Integer resolveLeafCatId(String temuCatid) {
+        String raw = firstNonBlank(temuCatid);
+        if (!StringUtils.hasText(raw)) {
+            return null;
+        }
+        String[] parts = raw.split(",");
+        for (int i = parts.length - 1; i >= 0; i--) {
+            String part = firstNonBlank(parts[i]);
+            if (!StringUtils.hasText(part)) {
+                continue;
+            }
+            try {
+                int value = Integer.parseInt(part);
+                if (value > 0) {
+                    return value;
+                }
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return null;
+    }
+
+    private Map<String, String> summarizeSizeMetadata(Map<String, SpecValueMetadata> specValueMetadataByKey) {
+        LinkedHashMap<String, String> out = new LinkedHashMap<>();
+        if (specValueMetadataByKey == null || specValueMetadataByKey.isEmpty()) {
+            return out;
+        }
+        for (Map.Entry<String, SpecValueMetadata> entry : specValueMetadataByKey.entrySet()) {
+            if (entry.getKey() == null || !entry.getKey().startsWith("3001")) {
+                continue;
+            }
+            SpecValueMetadata metadata = entry.getValue();
+            out.put(
+                    entry.getKey().replace('\u0001', '|'),
+                    "vid=" + (metadata == null ? null : metadata.vid())
+                            + ",groupId=" + (metadata == null ? null : metadata.valueGroupId())
+                            + ",groupName=" + (metadata == null ? null : metadata.valueGroupName())
+            );
+        }
+        return out;
     }
 
     private AddGloGoodsRequest.ProductSkuReq buildProductSkuReq(ProductCollection pc,
@@ -426,7 +848,7 @@ public class TemuSkuPublishDraftConverter {
         if (StringUtils.hasText(fieldName)) {
             String directValue = firstNonBlank(specMap.get(fieldName));
             if (StringUtils.hasText(directValue) && !"*".equals(directValue)) {
-                return normalizeSpecValue(directValue);
+                return normalizeSpecValueForField(fieldName, directValue);
             }
         }
         List<String> values = new ArrayList<>();
@@ -437,12 +859,138 @@ public class TemuSkuPublishDraftConverter {
             }
         }
         if (!values.isEmpty()) {
-            return normalizeSpecValue(String.join(" / ", values));
+            return normalizeSpecValueForField(fieldName, String.join(" / ", values));
         }
         String fallback = firstNonBlank(sku == null ? null : sku.getSpecKey(),
                 sku == null ? null : sku.getOriginSkuId(),
                 sku == null ? null : sku.getTemuSkuId());
-        return normalizeSpecValue(fallback);
+        return normalizeSpecValueForField(fieldName, fallback);
+    }
+
+    private String normalizeSpecValueForField(String fieldName,
+                                              String value) {
+        if (isSizeLikeFieldName(fieldName)) {
+            String normalizedSize = normalizeSizeSpecValue(value);
+            if (StringUtils.hasText(normalizedSize)) {
+                return normalizedSize;
+            }
+        }
+        return normalizeSpecValue(value);
+    }
+
+    private boolean isSizeLikeFieldName(String fieldName) {
+        String normalized = normalizeSpecToken(fieldName);
+        if (!StringUtils.hasText(normalized)) {
+            return false;
+        }
+        return normalized.contains("尺码")
+                || normalized.contains("鞋码")
+                || normalized.equals("size")
+                || normalized.contains("shoesize");
+    }
+
+    private String normalizeSizeSpecValue(String value) {
+        String candidate = firstNonBlank(value);
+        if (!StringUtils.hasText(candidate)) {
+            return null;
+        }
+        java.util.regex.Matcher shoePairMatcher = java.util.regex.Pattern
+                .compile("(?i)(?:shoe\\s*size|size|尺码|鞋码)\\s*(\\d+(?:\\.\\d+)?)\\s*[-/]\\s*(\\d+(?:\\.\\d+)?)")
+                .matcher(candidate);
+        if (shoePairMatcher.find()) {
+            return formatSizeNumber(shoePairMatcher.group(1)) + "-" + formatSizeNumber(shoePairMatcher.group(2));
+        }
+        java.util.regex.Matcher pairMatcher = java.util.regex.Pattern
+                .compile("(\\d+(?:\\.\\d+)?)\\s*[-/]\\s*(\\d+(?:\\.\\d+)?)")
+                .matcher(candidate);
+        if (pairMatcher.find()) {
+            return formatSizeNumber(pairMatcher.group(1)) + "-" + formatSizeNumber(pairMatcher.group(2));
+        }
+        java.util.regex.Matcher singleMatcher = java.util.regex.Pattern
+                .compile("(?<!\\d)(\\d{1,3}(?:\\.\\d+)?)(?!\\d)")
+                .matcher(candidate);
+        if (singleMatcher.find()) {
+            return formatSizeNumber(singleMatcher.group(1));
+        }
+        return normalizeSpecValue(candidate);
+    }
+
+    private String canonicalizeSpecValueForPublish(ParentSpec parentSpec,
+                                                   String specValue,
+                                                   Map<String, SpecValueMetadata> specValueMetadataByKey) {
+        String normalized = firstNonBlank(specValue);
+        if (!StringUtils.hasText(normalized) || parentSpec == null || parentSpec.parentSpecId() <= 0) {
+            return normalized;
+        }
+        if (!isSizeLikeParentSpec(parentSpec)) {
+            return normalized;
+        }
+        String midpoint = midpointSizeValue(normalized);
+        if (!StringUtils.hasText(midpoint) || midpoint.equals(normalized)) {
+            return normalized;
+        }
+        SpecValueMetadata exact = specValueMetadataByKey == null
+                ? null
+                : specValueMetadataByKey.get(specValueMetadataKey(parentSpec.parentSpecId(), normalized));
+        SpecValueMetadata mapped = specValueMetadataByKey == null
+                ? null
+                : specValueMetadataByKey.get(specValueMetadataKey(parentSpec.parentSpecId(), midpoint));
+        if (mapped == null) {
+            return normalized;
+        }
+        if (exact == null || Objects.equals(exact.valueGroupId(), mapped.valueGroupId())) {
+            return midpoint;
+        }
+        return normalized;
+    }
+
+    private boolean isSizeLikeParentSpec(ParentSpec parentSpec) {
+        if (parentSpec == null) {
+            return false;
+        }
+        if (Objects.equals(parentSpec.parentSpecId(), 3001)) {
+            return true;
+        }
+        return isSizeLikeFieldName(parentSpec.parentSpecName());
+    }
+
+    private String midpointSizeValue(String raw) {
+        String value = firstNonBlank(raw);
+        if (!StringUtils.hasText(value)) {
+            return null;
+        }
+        java.util.regex.Matcher pairMatcher = java.util.regex.Pattern
+                .compile("(\\d+(?:\\.\\d+)?)\\s*[-/]\\s*(\\d+(?:\\.\\d+)?)")
+                .matcher(value);
+        if (!pairMatcher.find()) {
+            return value;
+        }
+        try {
+            double start = Double.parseDouble(pairMatcher.group(1));
+            double end = Double.parseDouble(pairMatcher.group(2));
+            double midpoint = (start + end) / 2.0d;
+            return formatSizeNumber(midpoint);
+        } catch (NumberFormatException ignored) {
+            return value;
+        }
+    }
+
+    private String formatSizeNumber(String raw) {
+        if (!StringUtils.hasText(raw)) {
+            return raw;
+        }
+        try {
+            return formatSizeNumber(Double.parseDouble(raw));
+        } catch (NumberFormatException ignored) {
+            return raw;
+        }
+    }
+
+    private String formatSizeNumber(double value) {
+        if (Math.abs(value - Math.rint(value)) < 0.0001d) {
+            return String.valueOf((int) Math.round(value));
+        }
+        return String.format(Locale.ROOT, "%.1f", value);
     }
 
     private List<ParentSpec> collectParentSpecs(JsonNode node) {
@@ -546,8 +1094,10 @@ public class TemuSkuPublishDraftConverter {
                 .replace('。', ' ')
                 .replaceAll("\\s+", " ")
                 .trim();
-        if (candidate.length() > 50) {
-            candidate = candidate.substring(0, 50);
+        // Keep full-ish spec values so different package/size variants do not collapse
+        // into the same truncated TEMU spec value during publish.
+        if (candidate.length() > 120) {
+            candidate = candidate.substring(0, 120);
         }
         return candidate;
     }
@@ -558,6 +1108,18 @@ public class TemuSkuPublishDraftConverter {
             return null;
         }
         return normalized.replaceAll("\\s+", "").toLowerCase(Locale.ROOT);
+    }
+
+    private boolean isModelLikeParentSpec(String parentSpecName) {
+        String normalized = firstNonBlank(parentSpecName);
+        if (!StringUtils.hasText(normalized)) {
+            return false;
+        }
+        String lower = normalized.toLowerCase(Locale.ROOT);
+        return normalized.contains("型号")
+                || normalized.contains("规格")
+                || lower.contains("model")
+                || lower.contains("spec");
     }
 
     private String firstNonBlank(String... values) {
@@ -576,5 +1138,8 @@ public class TemuSkuPublishDraftConverter {
     }
 
     private record SpecDimension(String fieldName, ParentSpec parentSpec, boolean varying) {
+    }
+
+    private record SpecValueMetadata(Integer vid, Integer valueGroupId, String valueGroupName) {
     }
 }

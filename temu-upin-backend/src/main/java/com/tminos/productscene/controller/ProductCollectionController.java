@@ -21,6 +21,7 @@ import com.tminos.productscene.service.AliyunImageTranslateService;
 import com.tminos.productscene.service.ImageGenerationService;
 import com.tminos.productscene.service.TemuImageTranslateService;
 import com.tminos.productscene.service.TemuPublishService;
+import com.tminos.productscene.service.TemuSizeChartService;
 import com.tminos.productscene.service.TemuSkuService;
 import jakarta.validation.Valid;
 import org.slf4j.Logger;
@@ -43,6 +44,7 @@ public class ProductCollectionController {
     private final ImageGenerationService imageGenerationService;
     private final TemuSkuService temuSkuService;
     private final TemuPublishService temuPublishService;
+    private final TemuSizeChartService temuSizeChartService;
     private final ObjectMapper objectMapper;
     private static final Logger log = LoggerFactory.getLogger(ProductCollectionController.class);
 
@@ -54,6 +56,7 @@ public class ProductCollectionController {
                                        ImageGenerationService imageGenerationService,
                                        TemuSkuService temuSkuService,
                                        TemuPublishService temuPublishService,
+                                       TemuSizeChartService temuSizeChartService,
                                        ObjectMapper objectMapper) {
         this.service = service;
         this.postImportAutomationService = postImportAutomationService;
@@ -63,6 +66,7 @@ public class ProductCollectionController {
         this.imageGenerationService = imageGenerationService;
         this.temuSkuService = temuSkuService;
         this.temuPublishService = temuPublishService;
+        this.temuSizeChartService = temuSizeChartService;
         this.objectMapper = objectMapper;
     }
 
@@ -92,13 +96,14 @@ public class ProductCollectionController {
     ) {
         String htmlContent = request == null ? null : request.getHtml();
         String extractedJson = request == null ? null : request.getExtractedJson();
+        java.util.List<String> targetShopIds = request == null ? null : request.getTargetShopIds();
 
         try {
             if (htmlContent == null || htmlContent.trim().isEmpty()) {
                 return ResponseEntity.ok(ApiResponse.error("HTML content is required"));
             }
 
-            ProductCollection saved = service.importFromHtml(htmlContent, extractedJson);
+            ProductCollection saved = service.importFromHtml(htmlContent, extractedJson, targetShopIds);
 
             // Do not trigger post-import automation here.
             // A global polling worker will pick up execStatus=0 items and process them one-by-one.
@@ -116,6 +121,7 @@ public class ProductCollectionController {
     public ResponseEntity<ApiResponse<Page<ProductCollectionResponse>>> list(
             @RequestParam(value = "q", required = false) String q,
             @RequestParam(value = "sourcePlatform", required = false) String sourcePlatform,
+            @RequestParam(value = "targetShopId", required = false) String targetShopId,
             @RequestParam(value = "collectionStatus", required = false) Integer collectionStatus,
             @RequestParam(value = "showDeleted", required = false) Boolean showDeleted,
             @RequestParam(value = "temuCatid", required = false) String temuCatid,
@@ -133,6 +139,7 @@ public class ProductCollectionController {
         return ResponseEntity.ok(ApiResponse.success(service.list(
                 q,
                 sourcePlatform,
+                targetShopId,
                 collectionStatus,
                 showDeleted,
                 temuCatid,
@@ -204,6 +211,35 @@ public class ProductCollectionController {
     @PostMapping("/{id}/temu-category/attributes")
     public ResponseEntity<ApiResponse<String>> getTemuCategoryAttributes(@PathVariable Long id) {
         return ResponseEntity.ok(ApiResponse.success(service.getTemuCategoryAttributesRaw(id)));
+    }
+
+    @GetMapping("/{id}/temu/size-chart/debug")
+    public ResponseEntity<ApiResponse<java.util.Map<String, Object>>> debugTemuSizeChart(
+            @PathVariable Long id,
+            @RequestParam(value = "sizeValue", required = false) String sizeValue
+    ) {
+        ProductCollection pc = service.get(id);
+        try {
+            return ResponseEntity.ok(ApiResponse.success(temuSizeChartService.debugForProduct(pc, sizeValue)));
+        } catch (Exception e) {
+            return ResponseEntity.ok(ApiResponse.error("Size chart debug failed: " + e.getMessage()));
+        }
+    }
+
+    @PostMapping("/{id}/temu/size-chart/query")
+    public ResponseEntity<ApiResponse<java.util.Map<String, Object>>> debugTemuSizeChartQuery(
+            @PathVariable Long id,
+            @RequestBody(required = false) java.util.Map<String, Object> payload
+    ) {
+        ProductCollection pc = service.get(id);
+        try {
+            String apiType = payload == null || payload.get("apiType") == null
+                    ? null
+                    : String.valueOf(payload.get("apiType"));
+            return ResponseEntity.ok(ApiResponse.success(temuSizeChartService.debugQueryForProduct(pc, apiType, payload)));
+        } catch (Exception e) {
+            return ResponseEntity.ok(ApiResponse.error("Size chart query failed: " + e.getMessage()));
+        }
     }
 
     @PostMapping("/{id}/temu-category/save")

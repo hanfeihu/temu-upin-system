@@ -57,7 +57,6 @@ public class SyncDataCleanupService {
         deleted.put("goodsSkuPriceChanges", Math.toIntExact(skuPriceChangeRepository.deleteByShopId(safeShopId)));
         deleted.put("goodsSkuPrices", deleteByShopId("delete from TemuGoodsSkuPrice p where p.shopId = :shopId", safeShopId));
         deleted.put("goodsSkus", deleteByIds("delete from TemuGoodsSku s where s.goodsId in :ids", "ids", goodsIds));
-        deleted.put("goodsLifecycles", deleteByShopId("delete from TemuGoodsLifecycle l where l.shopId = :shopId", safeShopId));
         deleted.put("goods", deleteByShopId("delete from TemuGoods g where g.shopId = :shopId", safeShopId));
 
         deleted.put("freightTemplates", deleteByShopId("delete from TemuFreightTemplate f where f.shopId = :shopId", safeShopId));

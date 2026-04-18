@@ -1,0 +1,51 @@
+{
+  "manifest_version": 3,
+  "name": "商品页面HTML采集（上传到接口）",
+  "version": "0.1.0",
+  "description": "在商品页面右侧显示浮动窗口，一键采集当前页面HTML并上传。",
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": [
+    "storage"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.1688.com/*",
+        "*://1688.com/*",
+        "*://*.temu.com/*",
+        "*://temu.com/*",
+        "*://*.amazon.com/*",
+        "*://amazon.com/*",
+        "*://*.amazon.co.uk/*",
+        "*://amazon.co.uk/*",
+        "*://*.amazon.de/*",
+        "*://amazon.de/*",
+        "*://*.amazon.fr/*",
+        "*://amazon.fr/*",
+        "*://*.amazon.it/*",
+        "*://amazon.it/*",
+        "*://*.amazon.es/*",
+        "*://amazon.es/*",
+        "*://*.amazon.co.jp/*",
+        "*://amazon.co.jp/*",
+        "*://*.amazon.ca/*",
+        "*://amazon.ca/*"
+      ],
+      "js": [
+        "config.js",
+        "content-script.js"
+      ],
+      "css": [
+        "floating-ui.css"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "host_permissions": [
+    "https://www.tminos.com/*",
+    "https://dev.tminos.com/*",
+    "http://127.0.0.1:8080/*"
+  ]
+}

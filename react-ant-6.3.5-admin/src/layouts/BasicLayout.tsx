@@ -58,11 +58,21 @@ const BasicLayout = () => {
         <Flex
           align="center"
           justify="center"
-          gap={8}
+          gap={10}
           style={{ height: 64, padding: '0 16px', cursor: 'pointer' }}
           onClick={() => navigate(defaultRoute)}
         >
-          <img src="/system-logo.png" alt="TMINOS" style={{ height: 24, width: 'auto', objectFit: 'contain' }} />
+          <img
+            src="/system-logo.png"
+            alt="TMINOS"
+            style={{
+              height: 34,
+              width: 34,
+              objectFit: 'cover',
+              borderRadius: 10,
+              flexShrink: 0,
+            }}
+          />
           {!collapsed && (
             <Text strong style={{ color: '#ffffff', fontSize: 16, whiteSpace: 'nowrap' }}>
               TMINOS

@@ -62,6 +62,7 @@ public class ProductCollectionService {
     private final ImportTitleCleanConfig importTitleCleanConfig;
     private final OcrTaskInsertHelper ocrTaskInsertHelper;
     private final ImportTitleFilterWordRepository titleFilterWordRepo;
+    private final TargetShopBindingService targetShopBindingService;
 
     public ProductCollectionService(
             ProductCollectionRepository repo,
@@ -75,7 +76,8 @@ public class ProductCollectionService {
             ObjectMapper objectMapper,
             ImportTitleCleanConfig importTitleCleanConfig,
             OcrTaskInsertHelper ocrTaskInsertHelper,
-            ImportTitleFilterWordRepository titleFilterWordRepo
+            ImportTitleFilterWordRepository titleFilterWordRepo,
+            TargetShopBindingService targetShopBindingService
     ) {
         this.repo = repo;
         this.skuRepo = skuRepo;
@@ -89,6 +91,7 @@ public class ProductCollectionService {
         this.importTitleCleanConfig = importTitleCleanConfig;
         this.ocrTaskInsertHelper = ocrTaskInsertHelper;
         this.titleFilterWordRepo = titleFilterWordRepo;
+        this.targetShopBindingService = targetShopBindingService;
     }
 
     @Transactional(readOnly = true)
@@ -156,6 +159,7 @@ public class ProductCollectionService {
     public Page<ProductCollectionResponse> list(
             String q,
             String sourcePlatform,
+            String targetShopId,
             Integer collectionStatus,
             Boolean showDeleted,
             String temuCatid,
@@ -175,11 +179,13 @@ public class ProductCollectionService {
         boolean sd = showDeleted != null && showDeleted;
         String q2 = (q == null || q.isBlank()) ? null : q.trim();
         String sp = (sourcePlatform == null || sourcePlatform.isBlank()) ? null : sourcePlatform.trim();
+        String tsi = (targetShopId == null || targetShopId.isBlank()) ? null : targetShopId.trim();
         String tc = (temuCatid == null || temuCatid.isBlank()) ? null : temuCatid.trim();
 
         Page<Object[]> pageRows = repo.searchWithCounts(
                 q2,
                 sp,
+                tsi,
                 collectionStatus,
                 sd,
                 tc,
@@ -207,7 +213,7 @@ public class ProductCollectionService {
     }
 
     private ProductCollectionResponse mapRowToResponse(Object[] r) {
-        if (r == null || r.length < 28) return null;
+        if (r == null || r.length < 30) return null;
         // Column order defined in ProductCollectionRepository.searchWithCounts
         return ProductCollectionResponse.builder()
                 .id(asLong(r[0]))
@@ -220,24 +226,26 @@ public class ProductCollectionService {
                 .lastPublishRunId(asLong(r[7]))
                 .collectCount(asInteger(r[8]))
                 .companyName(asString(r[9]))
-                .productMainImage(asString(r[10]))
-                .temuCatid(asString(r[11]))
-                .temuCatname(asString(r[12]))
-                .temuPublished(asBoolean(r[13]))
-                .temuGoodsId(asString(r[14]))
-                .minPrice(asBigDecimal(r[15]))
-                .maxPrice(asBigDecimal(r[16]))
-                .ocrStatus(asInteger(r[17]))
-                .carouselImageCount(asInteger(r[18]))
-                .detailImageCount(asInteger(r[19]))
-                .skuCount(asInteger(r[20]))
-                .moq(asInteger(r[21]))
-                .moqText(asString(r[22]))
-                .netWeight(asBigDecimal(r[23]))
-                .packagingWeight(asBigDecimal(r[24]))
-                .deleted(asBoolean(r[25]))
-                .createdAt(asLocalDateTime(r[26]))
-                .updatedAt(asLocalDateTime(r[27]))
+                .targetShopIds(parseJsonStringArraySafe(asString(r[10])))
+                .targetShopNames(parseJsonStringArraySafe(asString(r[11])))
+                .productMainImage(asString(r[12]))
+                .temuCatid(asString(r[13]))
+                .temuCatname(asString(r[14]))
+                .temuPublished(asBoolean(r[15]))
+                .temuGoodsId(asString(r[16]))
+                .minPrice(asBigDecimal(r[17]))
+                .maxPrice(asBigDecimal(r[18]))
+                .ocrStatus(asInteger(r[19]))
+                .carouselImageCount(asInteger(r[20]))
+                .detailImageCount(asInteger(r[21]))
+                .skuCount(asInteger(r[22]))
+                .moq(asInteger(r[23]))
+                .moqText(asString(r[24]))
+                .netWeight(asBigDecimal(r[25]))
+                .packagingWeight(asBigDecimal(r[26]))
+                .deleted(asBoolean(r[27]))
+                .createdAt(asLocalDateTime(r[28]))
+                .updatedAt(asLocalDateTime(r[29]))
                 .build();
     }
 
@@ -341,6 +349,8 @@ public class ProductCollectionService {
                 .collectionTime(pc.getCollectionTime())
                 .companyLocation(pc.getCompanyLocation())
                 .companyName(pc.getCompanyName())
+                .targetShopIds(parseJsonStringArraySafe(pc.getTargetShopIds()))
+                .targetShopNames(parseJsonStringArraySafe(pc.getTargetShopNames()))
                 .detailImages(pc.getDetailImages())
                 .hasSevereInventory(pc.getHasSevereInventory())
                 .maxPrice(pc.getMaxPrice())
@@ -512,6 +522,11 @@ public class ProductCollectionService {
         if (req.getOriginalContent() != null) pc.setOriginalContent(req.getOriginalContent());
         if (req.getOriginalHtml() != null) pc.setOriginalHtml(req.getOriginalHtml());
         if (req.getTemuAttributes() != null) pc.setTemuAttributes(req.getTemuAttributes());
+        if (req.getTargetShopIds() != null) {
+            TargetShopBindingService.TargetShopBinding targetShopBinding = targetShopBindingService.resolve(req.getTargetShopIds());
+            pc.setTargetShopIds(targetShopBindingService.toJson(targetShopBinding.shopIds()));
+            pc.setTargetShopNames(targetShopBindingService.toJson(targetShopBinding.shopNames()));
+        }
 
         return repo.save(pc);
     }
@@ -818,6 +833,11 @@ public class ProductCollectionService {
 
     @Transactional
     public ProductCollection importFromHtml(String htmlContent, String extractedJson) throws Exception {
+        return importFromHtml(htmlContent, extractedJson, null);
+    }
+
+    @Transactional
+    public ProductCollection importFromHtml(String htmlContent, String extractedJson, List<String> targetShopIds) throws Exception {
         Alibaba1688HtmlParser.ParsedProduct parsed;
         String sourcePlatform;
         if (TemuHtmlParser.looksLikeTemuHtml(htmlContent)) {
@@ -830,6 +850,7 @@ public class ProductCollectionService {
 
         parsed = Objects.requireNonNull(parsed, "解析导入 HTML 失败");
         boolean skipOcrForTemu = isTemuSourcePlatform(sourcePlatform);
+        TargetShopBindingService.TargetShopBinding targetShopBinding = targetShopBindingService.resolve(targetShopIds);
 
         String cleanedTitle = cleanImportedTitle(parsed.getProductName());
 
@@ -851,6 +872,8 @@ public class ProductCollectionService {
                 .productUrl(parsed.getProductUrl())
                 .productName(cleanedTitle)
                 .companyName(parsed.getCompanyName())
+                .targetShopIds(targetShopBindingService.toJson(targetShopBinding.shopIds()))
+                .targetShopNames(targetShopBindingService.toJson(targetShopBinding.shopNames()))
                 .shippingLocation(parsed.getShippingLocation())
                 .originalCategory(parsed.getOriginalCategory())
                 .productCategory(parsed.getProductCategory())

@@ -22,12 +22,13 @@ public class ProductDraftController {
     public ResponseEntity<ApiResponse<Page<ProductDraftDTO.ListItem>>> list(
             @RequestParam(value = "q", required = false) String q,
             @RequestParam(value = "sourcePlatform", required = false) String sourcePlatform,
+            @RequestParam(value = "targetShopId", required = false) String targetShopId,
             @RequestParam(value = "pushedToCollection", required = false) Boolean pushedToCollection,
             @RequestParam(value = "showDeleted", required = false) Boolean showDeleted,
             @RequestParam(value = "page", defaultValue = "0") int page,
             @RequestParam(value = "size", defaultValue = "20") int size
     ) {
-        return ResponseEntity.ok(ApiResponse.success(service.list(q, sourcePlatform, pushedToCollection, showDeleted, page, size)));
+        return ResponseEntity.ok(ApiResponse.success(service.list(q, sourcePlatform, targetShopId, pushedToCollection, showDeleted, page, size)));
     }
 
     @GetMapping("/{id}")

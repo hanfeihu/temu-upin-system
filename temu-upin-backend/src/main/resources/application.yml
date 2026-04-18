@@ -109,6 +109,14 @@ ai:
 cors:
   allowed-origins: http://localhost:5173,http://localhost:3000
 
+platform:
+  auth:
+    enabled: ${PLATFORM_AUTH_ENABLED:true}
+    username: ${PLATFORM_AUTH_USERNAME:admin}
+    password: ${PLATFORM_AUTH_PASSWORD:admin778899}
+    token-secret: ${PLATFORM_AUTH_TOKEN_SECRET:product-scene-platform-auth-secret}
+    token-ttl-hours: ${PLATFORM_AUTH_TOKEN_TTL_HOURS:168}
+
 temu:
   goods:
     access-token: ${TEMU_GOODS_ACCESS_TOKEN:}

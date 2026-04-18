@@ -22,13 +22,21 @@ public interface TemuGoodsSkuRepository extends JpaRepository<TemuGoodsSku, Long
 
     List<TemuGoodsSku> findByShopIdAndProductSkuIdIn(String shopId, List<Long> productSkuIds);
 
-        @Query("""
-                        select sku from TemuGoodsSku sku
-                        join TemuGoods g on g.id = sku.goodsId
-                        where sku.shopId = :shopId
-                            and coalesce(g.skcSiteStatus, 0) = 1
-                        """)
-        List<TemuGoodsSku> findAddedSiteSkusByShopId(@Param("shopId") String shopId);
+    @Query("""
+            select sku from TemuGoodsSku sku
+            join TemuGoods g on g.id = sku.goodsId
+            where sku.shopId = :shopId
+                and coalesce(g.skcSiteStatus, 0) = 1
+            """)
+    List<TemuGoodsSku> findAddedSiteSkusByShopId(@Param("shopId") String shopId);
+
+    @Query("""
+            select distinct sku.productSkuId from TemuGoodsSku sku
+            where sku.shopId = :shopId
+              and sku.productSkuId is not null
+            order by sku.productSkuId asc
+            """)
+    List<Long> findDistinctProductSkuIdsByShopId(@Param("shopId") String shopId);
 
     void deleteByGoodsId(Long goodsId);
 }

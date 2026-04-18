@@ -51,6 +51,12 @@ public class ProductCollection {
     private String companyName;
 
     @Column(columnDefinition = "TEXT")
+    private String targetShopIds;
+
+    @Column(columnDefinition = "TEXT")
+    private String targetShopNames;
+
+    @Column(columnDefinition = "TEXT")
     private String detailImages;
 
     private Boolean hasSevereInventory;

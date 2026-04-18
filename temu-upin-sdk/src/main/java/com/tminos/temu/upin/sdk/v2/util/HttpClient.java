@@ -4,6 +4,7 @@ import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
+import java.net.Proxy;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 
@@ -18,7 +19,9 @@ public class HttpClient {
         HttpURLConnection connection = null;
 
         try {
-            connection = (HttpURLConnection) url.openConnection();
+            // Ignore machine-level proxy injection so SDK calls do not depend on a local
+            // proxy process such as 127.0.0.1:7897 being available.
+            connection = (HttpURLConnection) url.openConnection(Proxy.NO_PROXY);
 
             connection.setRequestMethod("POST");
             connection.setRequestProperty("Content-Type", "application/json");

@@ -23,6 +23,19 @@
             />
           </a-form-item>
 
+          <a-form-item label="店铺">
+            <a-select
+              v-model:value="filters.targetShopId"
+              :options="targetShopOptions"
+              :loading="loadingTargetShops"
+              allow-clear
+              show-search
+              :filter-option="filterTargetShopOption"
+              placeholder="全部店铺"
+              style="width: 220px"
+            />
+          </a-form-item>
+
             <a-form-item label="状态">
               <a-select
                 v-model:value="filters.collectionStatus"
@@ -100,7 +113,7 @@
           :dataSource="rows"
           :loading="loading"
           :pagination="pagination"
-          :scroll="{ x: 1520 }"
+          :scroll="{ x: 1700 }"
           tableLayout="fixed"
           @change="onTableChange"
         >
@@ -123,6 +136,15 @@
                   <span class="pill mono">#{{ record.id }}</span>
                   <span class="pill mono">{{ record.productId || '-' }}</span>
                 </div>
+              </div>
+            </template>
+
+            <template v-else-if="column.key === 'shops'">
+              <div class="shop-tags-cell">
+                <a-tag v-for="shopName in (record.targetShopNames || [])" :key="shopName" color="blue">
+                  {{ shopName }}
+                </a-tag>
+                <span v-if="!(record.targetShopNames || []).length" class="shop-empty">-</span>
               </div>
             </template>
 
@@ -379,11 +401,12 @@
 </template>
 
 <script setup>
- import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { message, Modal } from 'ant-design-vue'
 import ProLayout from '@/platform/components/ProLayout.vue'
 import { productCollectionApi } from '@/platform/api/productCollections'
 import { publishLogsApi } from '@/platform/api/publishLogs'
+import { temuShopsApi } from '@/platform/api/temuShops'
 import TemuSkuConverterModal from '@/platform/components/TemuSkuConverterModal.vue'
 
 const loading = ref(false)
@@ -393,7 +416,8 @@ const total = ref(0)
 const filters = reactive({
   q: '',
   sourcePlatform: '',
-  collectionStatus: null,
+  targetShopId: null,
+  collectionStatus: -1,
   showDeleted: false,
 
   // search filters
@@ -410,10 +434,39 @@ const filters = reactive({
 
 const loadingTemuCategories = ref(false)
 const temuCategoryOptions = ref([])
+const loadingTargetShops = ref(false)
+const targetShopOptions = ref([])
 
 const filterTemuCategoryOption = (input, option) => {
   const v = (option?.label ?? '').toString().toLowerCase()
   return v.includes((input ?? '').toString().trim().toLowerCase())
+}
+
+const filterTargetShopOption = (input, option) => {
+  const v = (option?.label ?? '').toString().toLowerCase()
+  return v.includes((input ?? '').toString().trim().toLowerCase())
+}
+
+const fetchTargetShops = async () => {
+  loadingTargetShops.value = true
+  try {
+    const res = await temuShopsApi.list({ enabled: true })
+    if (res?.success) {
+      const shopRows = Array.isArray(res.data) ? res.data : []
+      targetShopOptions.value = shopRows
+        .filter(item => item?.shopId && item?.shopName)
+        .map(item => ({
+          value: String(item.shopId),
+          label: String(item.shopName)
+        }))
+      return
+    }
+    message.error(res?.message || '加载店铺失败')
+  } catch (e) {
+    message.error(e.message || '加载店铺失败')
+  } finally {
+    loadingTargetShops.value = false
+  }
 }
 
 const fetchTemuCategories = async () => {
@@ -446,7 +499,9 @@ const page = ref(1)
 const pageSize = ref(20)
 
 const statusOptions = [
+  { value: -1, label: '全部' },
   { value: 0, label: '未发布' },
+  { value: 3, label: '已发布' },
   { value: 1, label: '发布中' },
   { value: 2, label: '发布失败' }
 ]
@@ -502,6 +557,7 @@ const pagination = computed(() => ({
 const columns = [
   { title: '图片', key: 'image', width: 88 },
   { title: '商品', key: 'name', width: 420 },
+  { title: '店铺', key: 'shops', width: 180 },
   { title: 'OCR', key: 'ocr', width: 110 },
   { title: '执行状态', key: 'exec', width: 110 },
   { title: '起批量', key: 'moq', width: 90 },
@@ -579,7 +635,8 @@ const fetchList = async () => {
     const params = {
       q: filters.q || undefined,
       sourcePlatform: filters.sourcePlatform || undefined,
-      collectionStatus: filters.collectionStatus ?? undefined,
+      targetShopId: filters.targetShopId || undefined,
+      collectionStatus: filters.collectionStatus === -1 ? undefined : (filters.collectionStatus ?? undefined),
       showDeleted: filters.showDeleted ? true : undefined,
       temuCatid: filters.temuCatid || undefined,
       moqMin: filters.moqMin ?? undefined,
@@ -615,7 +672,8 @@ const reload = async () => {
 const reset = async () => {
   filters.q = ''
   filters.sourcePlatform = ''
-  filters.collectionStatus = null
+  filters.targetShopId = null
+  filters.collectionStatus = -1
   filters.showDeleted = false
 
   filters.temuCatid = null
@@ -1546,6 +1604,7 @@ const saveTemuCategory = async () => {
 }
 
 onMounted(() => {
+  fetchTargetShops()
   fetchTemuCategories()
   fetchList()
 })
@@ -1764,6 +1823,17 @@ onMounted(() => {
   gap: 8px;
   flex-wrap: wrap;
 }
+
+.shop-tags-cell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.shop-empty {
+  color: rgba(15, 23, 42, 0.45);
+}
+
 .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
 }

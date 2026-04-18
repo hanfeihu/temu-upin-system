@@ -125,6 +125,15 @@
         <div class="info-col">
           <div class="product-title">{{ pc.productName || '-' }}</div>
 
+          <div v-if="(pc.targetShopNames || []).length" class="shop-row">
+            <span class="cat-label">采集店铺</span>
+            <div class="shop-tags">
+              <a-tag v-for="shopName in pc.targetShopNames" :key="shopName" color="blue">
+                {{ shopName }}
+              </a-tag>
+            </div>
+          </div>
+
           <div class="category-row">
             <span class="cat-label">原始类目</span>
             <span class="cat-value">{{ pc.originalCategory || '-' }}</span>
@@ -2148,6 +2157,17 @@ onMounted(load)
   line-height: 1.3;
   color: #0f172a;
   letter-spacing: -0.3px;
+}
+
+.shop-row {
+  display: grid;
+  gap: 10px;
+}
+
+.shop-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .category-row {

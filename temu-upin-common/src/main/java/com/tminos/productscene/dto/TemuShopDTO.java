@@ -19,6 +19,14 @@ public class TemuShopDTO {
         private Long appId;
 
         private Boolean enabled;
+        private Integer siteId;
+        private String warehouseId;
+        private Integer defaultStock;
+        private Integer maxStock;
+        private String originRegion1ShortName;
+        private Long originRegion2Id;
+        private String freightTemplateId;
+        private Integer shipmentLimitSecond;
 
         public String getShopName() { return shopName; }
         public void setShopName(String shopName) { this.shopName = shopName; }
@@ -30,6 +38,22 @@ public class TemuShopDTO {
         public void setAppId(Long appId) { this.appId = appId; }
         public Boolean getEnabled() { return enabled; }
         public void setEnabled(Boolean enabled) { this.enabled = enabled; }
+        public Integer getSiteId() { return siteId; }
+        public void setSiteId(Integer siteId) { this.siteId = siteId; }
+        public String getWarehouseId() { return warehouseId; }
+        public void setWarehouseId(String warehouseId) { this.warehouseId = warehouseId; }
+        public Integer getDefaultStock() { return defaultStock; }
+        public void setDefaultStock(Integer defaultStock) { this.defaultStock = defaultStock; }
+        public Integer getMaxStock() { return maxStock; }
+        public void setMaxStock(Integer maxStock) { this.maxStock = maxStock; }
+        public String getOriginRegion1ShortName() { return originRegion1ShortName; }
+        public void setOriginRegion1ShortName(String originRegion1ShortName) { this.originRegion1ShortName = originRegion1ShortName; }
+        public Long getOriginRegion2Id() { return originRegion2Id; }
+        public void setOriginRegion2Id(Long originRegion2Id) { this.originRegion2Id = originRegion2Id; }
+        public String getFreightTemplateId() { return freightTemplateId; }
+        public void setFreightTemplateId(String freightTemplateId) { this.freightTemplateId = freightTemplateId; }
+        public Integer getShipmentLimitSecond() { return shipmentLimitSecond; }
+        public void setShipmentLimitSecond(Integer shipmentLimitSecond) { this.shipmentLimitSecond = shipmentLimitSecond; }
     }
 
     public static class UpdateRequest {
@@ -46,6 +70,14 @@ public class TemuShopDTO {
         private Long appId;
 
         private Boolean enabled;
+        private Integer siteId;
+        private String warehouseId;
+        private Integer defaultStock;
+        private Integer maxStock;
+        private String originRegion1ShortName;
+        private Long originRegion2Id;
+        private String freightTemplateId;
+        private Integer shipmentLimitSecond;
 
         public String getShopName() { return shopName; }
         public void setShopName(String shopName) { this.shopName = shopName; }
@@ -57,6 +89,22 @@ public class TemuShopDTO {
         public void setAppId(Long appId) { this.appId = appId; }
         public Boolean getEnabled() { return enabled; }
         public void setEnabled(Boolean enabled) { this.enabled = enabled; }
+        public Integer getSiteId() { return siteId; }
+        public void setSiteId(Integer siteId) { this.siteId = siteId; }
+        public String getWarehouseId() { return warehouseId; }
+        public void setWarehouseId(String warehouseId) { this.warehouseId = warehouseId; }
+        public Integer getDefaultStock() { return defaultStock; }
+        public void setDefaultStock(Integer defaultStock) { this.defaultStock = defaultStock; }
+        public Integer getMaxStock() { return maxStock; }
+        public void setMaxStock(Integer maxStock) { this.maxStock = maxStock; }
+        public String getOriginRegion1ShortName() { return originRegion1ShortName; }
+        public void setOriginRegion1ShortName(String originRegion1ShortName) { this.originRegion1ShortName = originRegion1ShortName; }
+        public Long getOriginRegion2Id() { return originRegion2Id; }
+        public void setOriginRegion2Id(Long originRegion2Id) { this.originRegion2Id = originRegion2Id; }
+        public String getFreightTemplateId() { return freightTemplateId; }
+        public void setFreightTemplateId(String freightTemplateId) { this.freightTemplateId = freightTemplateId; }
+        public Integer getShipmentLimitSecond() { return shipmentLimitSecond; }
+        public void setShipmentLimitSecond(Integer shipmentLimitSecond) { this.shipmentLimitSecond = shipmentLimitSecond; }
     }
 
     public static class View {
@@ -67,6 +115,14 @@ public class TemuShopDTO {
         private String tokenMasked;
         private Long appId;
         private String appName;
+        private Integer siteId;
+        private String warehouseId;
+        private Integer defaultStock;
+        private Integer maxStock;
+        private String originRegion1ShortName;
+        private Long originRegion2Id;
+        private String freightTemplateId;
+        private Integer shipmentLimitSecond;
         private String createdAt;
         private String updatedAt;
 
@@ -84,6 +140,22 @@ public class TemuShopDTO {
         public void setAppId(Long appId) { this.appId = appId; }
         public String getAppName() { return appName; }
         public void setAppName(String appName) { this.appName = appName; }
+        public Integer getSiteId() { return siteId; }
+        public void setSiteId(Integer siteId) { this.siteId = siteId; }
+        public String getWarehouseId() { return warehouseId; }
+        public void setWarehouseId(String warehouseId) { this.warehouseId = warehouseId; }
+        public Integer getDefaultStock() { return defaultStock; }
+        public void setDefaultStock(Integer defaultStock) { this.defaultStock = defaultStock; }
+        public Integer getMaxStock() { return maxStock; }
+        public void setMaxStock(Integer maxStock) { this.maxStock = maxStock; }
+        public String getOriginRegion1ShortName() { return originRegion1ShortName; }
+        public void setOriginRegion1ShortName(String originRegion1ShortName) { this.originRegion1ShortName = originRegion1ShortName; }
+        public Long getOriginRegion2Id() { return originRegion2Id; }
+        public void setOriginRegion2Id(Long originRegion2Id) { this.originRegion2Id = originRegion2Id; }
+        public String getFreightTemplateId() { return freightTemplateId; }
+        public void setFreightTemplateId(String freightTemplateId) { this.freightTemplateId = freightTemplateId; }
+        public Integer getShipmentLimitSecond() { return shipmentLimitSecond; }
+        public void setShipmentLimitSecond(Integer shipmentLimitSecond) { this.shipmentLimitSecond = shipmentLimitSecond; }
         public String getCreatedAt() { return createdAt; }
         public void setCreatedAt(String createdAt) { this.createdAt = createdAt; }
         public String getUpdatedAt() { return updatedAt; }

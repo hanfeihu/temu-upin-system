@@ -3,6 +3,7 @@ package com.tminos.productscene.dto;
 public class ImportHtmlRequest {
     private String html;
     private String extractedJson;
+    private java.util.List<String> targetShopIds;
 
     public String getHtml() {
         return html;
@@ -18,5 +19,13 @@ public class ImportHtmlRequest {
 
     public void setExtractedJson(String extractedJson) {
         this.extractedJson = extractedJson;
+    }
+
+    public java.util.List<String> getTargetShopIds() {
+        return targetShopIds;
+    }
+
+    public void setTargetShopIds(java.util.List<String> targetShopIds) {
+        this.targetShopIds = targetShopIds;
     }
 }

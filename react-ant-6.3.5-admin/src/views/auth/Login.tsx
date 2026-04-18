@@ -47,7 +47,6 @@ const Login = () => {
     <Flex justify="center" align="center" style={{ minHeight: '100vh', background: '#f0f2f5', padding: 24 }}>
       <Card style={{ width: 420 }}>
         <Flex vertical align="center" gap={12} style={{ marginBottom: 24 }}>
-          <img src="/system-logo.png" alt="TMINOS" style={{ height: 52, width: 'auto', objectFit: 'contain' }} />
           <Typography.Title level={3} style={{ margin: 0 }}>
             TMINOS
           </Typography.Title>

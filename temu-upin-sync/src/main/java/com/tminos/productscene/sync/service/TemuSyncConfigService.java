@@ -15,7 +15,7 @@ public class TemuSyncConfigService {
     public static final Map<String, String[]> PRESET_CONFIGS = new LinkedHashMap<>();
     static {
         PRESET_CONFIGS.put("goods_sync_thread_count", new String[]{"5", "商品信息同步线程数"});
-        PRESET_CONFIGS.put("lifecycle_sync_thread_count", new String[]{"5", "商品状态同步线程数"});
+        PRESET_CONFIGS.put("lifecycle_sync_thread_count", new String[]{"3", "商品状态同步线程数"});
         PRESET_CONFIGS.put("price_sync_thread_count", new String[]{"3", "价格同步线程数"});
         PRESET_CONFIGS.put("sync_cron", new String[]{"0 2 * * *", "每日同步 cron 表达式"});
         PRESET_CONFIGS.put("price_adjust_auto_sync_days", new String[]{"7", "调价单自动同步范围（天）"});

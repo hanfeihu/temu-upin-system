@@ -2,43 +2,25 @@ package com.tminos.productscene.service;
 
 import com.tminos.productscene.entity.TemuSelfApp;
 import com.tminos.productscene.entity.TemuShop;
-import com.tminos.productscene.repository.TemuShopRepository;
 import com.tminos.temu.upin.sdk.v2.common.TemuOpenApiCredentials;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
-import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 
 @Service
 public class TemuOpenApiCredentialService {
 
-    private final TemuShopRepository shopRepository;
-    private final PlatformConfigService platformConfigService;
+    private final TemuShopService shopService;
 
-    public TemuOpenApiCredentialService(TemuShopRepository shopRepository,
-                                        PlatformConfigService platformConfigService) {
-        this.shopRepository = shopRepository;
-        this.platformConfigService = platformConfigService;
+    public TemuOpenApiCredentialService(TemuShopService shopService) {
+        this.shopService = shopService;
     }
 
     @Transactional(readOnly = true)
     public TemuOpenApiCredentials getDefaultTemuOpenApiCredentialsOrThrow() {
-        TemuShop shop = resolveConfiguredShop();
-        if (shop == null) {
-            List<TemuShop> shops = shopRepository.findByEnabledOrderByIdDesc(true);
-            if (shops == null || shops.isEmpty()) {
-                throw new IllegalStateException("未找到可用的 TEMU 店铺配置，请先在【平台配置】绑定默认店铺，或先在【TEMU店铺】中创建并启用一个店铺");
-            }
-            shop = shops.get(0);
-        }
-        if (shop == null) {
-            throw new IllegalStateException("TEMU 店铺配置为空");
-        }
-
-        return toCredentials(shop);
+        return toCredentials(shopService.getAnyEnabledShopOrThrow());
     }
 
     @Transactional(readOnly = true)
@@ -46,34 +28,15 @@ public class TemuOpenApiCredentialService {
         if (!StringUtils.hasText(shopId)) {
             return getDefaultTemuOpenApiCredentialsOrThrow();
         }
-        TemuShop shop = shopRepository.findByShopId(shopId.trim())
-                .orElseThrow(() -> new IllegalStateException("未找到对应的 TEMU 店铺: " + shopId));
-        if (!Boolean.TRUE.equals(shop.getEnabled())) {
-            throw new IllegalStateException("TEMU 店铺未启用: " + shopId);
-        }
-        return toCredentials(shop);
+        return getTemuOpenApiCredentialsByExactShopIdOrThrow(shopId);
     }
 
-    private TemuShop resolveConfiguredShop() {
-        Map<String, String> cfg = platformConfigService.getDefaultConfigOrThrow();
-        String shopRefId = cfg.get(PlatformConfigService.KEY_TEMU_SHOP_REF_ID);
-        if (!StringUtils.hasText(shopRefId)) {
-            return null;
+    @Transactional(readOnly = true)
+    public TemuOpenApiCredentials getTemuOpenApiCredentialsByExactShopIdOrThrow(String shopId) {
+        if (!StringUtils.hasText(shopId)) {
+            throw new IllegalStateException("商品未绑定店铺，无法获取 TEMU 发布凭证");
         }
-
-        Long shopDbId;
-        try {
-            shopDbId = Long.parseLong(shopRefId.trim());
-        } catch (Exception e) {
-            throw new IllegalStateException("平台配置中的默认 TEMU 店铺无效，请重新选择店铺");
-        }
-
-        TemuShop shop = shopRepository.findById(shopDbId)
-                .orElseThrow(() -> new IllegalStateException("平台配置关联的 TEMU 店铺不存在，请重新选择店铺"));
-        if (!Boolean.TRUE.equals(shop.getEnabled())) {
-            throw new IllegalStateException("平台配置关联的 TEMU 店铺未启用，请先启用该店铺或重新绑定默认店铺");
-        }
-        return shop;
+        return toCredentials(shopService.getEnabledShopByShopIdOrThrow(shopId));
     }
 
     private TemuOpenApiCredentials toCredentials(TemuShop shop) {

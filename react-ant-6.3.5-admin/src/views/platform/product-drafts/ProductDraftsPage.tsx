@@ -4,6 +4,7 @@ import {
   Card,
   Descriptions,
   Drawer,
+  Flex,
   Form,
   Image,
   Input,
@@ -63,6 +64,15 @@ const initialEditForm: DraftEditFormState = {
   monthlySales: '',
   reviewCount: null,
   companyName: '',
+};
+
+const lineClampTextStyle = {
+  display: '-webkit-box',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  WebkitLineClamp: 2,
+  WebkitBoxOrient: 'vertical' as const,
+  lineHeight: 1.5,
 };
 
 const ProductDraftsPage = () => {
@@ -379,11 +389,24 @@ const ProductDraftsPage = () => {
       width: 280,
       fixed: 'left',
       render: (_, record) => (
-        <Space direction="vertical" size={2}>
-          <Typography.Text strong ellipsis={{ tooltip: record.productName || '' }}>
+        <Space direction="vertical" size={2} style={{ width: '100%', minWidth: 0 }}>
+          <Typography.Text
+            strong
+            title={record.productName || ''}
+            style={{
+              ...lineClampTextStyle,
+              width: '100%',
+            }}
+          >
             {record.productName || '-'}
           </Typography.Text>
-          <Typography.Text type="secondary">{record.productId || '-'}</Typography.Text>
+          <Typography.Text
+            type="secondary"
+            ellipsis={{ tooltip: record.productId || '' }}
+            style={{ width: '100%' }}
+          >
+            {record.productId || '-'}
+          </Typography.Text>
         </Space>
       ),
     },
@@ -416,12 +439,14 @@ const ProductDraftsPage = () => {
       dataIndex: 'productCategory',
       key: 'productCategory',
       width: 150,
+      ellipsis: true,
     },
     {
       title: '原始类目',
       dataIndex: 'originalCategory',
       key: 'originalCategory',
       width: 220,
+      ellipsis: true,
     },
     {
       title: '销量',
@@ -481,63 +506,66 @@ const ProductDraftsPage = () => {
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       <Card>
-        <Form layout="inline" onFinish={reload}>
-          <Form.Item label="关键词">
-            <Input
-              value={filters.q}
-              onChange={(event) => updateFilter('q', event.target.value)}
-              placeholder="商品名 / productId"
-              style={{ width: 240 }}
-              allowClear
-              onPressEnter={reload}
-            />
-          </Form.Item>
-          <Form.Item label="来源平台">
-            <Select
-              value={filters.sourcePlatform}
-              onChange={(value) => updateFilter('sourcePlatform', value)}
-              options={[
-                { label: 'TEMU', value: 'TEMU' },
-                { label: '1688', value: '1688' },
-              ]}
-              allowClear
-              placeholder="全部"
-              style={{ width: 160 }}
-            />
-          </Form.Item>
-          <Form.Item label="店铺">
-            <Select
-              value={filters.targetShopId}
-              onChange={(value) => updateFilter('targetShopId', value)}
-              options={shopOptions}
-              loading={loadingShops}
-              allowClear
-              showSearch
-              optionFilterProp="label"
-              placeholder="全部店铺"
-              style={{ width: 220 }}
-            />
-          </Form.Item>
-          <Form.Item label="推送状态">
-            <Select
-              value={filters.pushedToCollection}
-              onChange={(value) => updateFilter('pushedToCollection', value)}
-              options={[
-                { label: '全部', value: undefined },
-                { label: '未推送', value: false },
-                { label: '已推送', value: true },
-              ]}
-              allowClear
-              placeholder="全部"
-              style={{ width: 160 }}
-            />
-          </Form.Item>
-          <Form.Item>
+        <Flex vertical gap={16}>
+          <Form layout="inline" onFinish={reload}>
+            <Flex wrap="wrap" gap={12}>
+              <Form.Item label="关键词" style={{ marginBottom: 0 }}>
+                <Input
+                  value={filters.q}
+                  onChange={(event) => updateFilter('q', event.target.value)}
+                  placeholder="商品名 / productId"
+                  style={{ width: 240 }}
+                  allowClear
+                  onPressEnter={reload}
+                />
+              </Form.Item>
+              <Form.Item label="来源平台" style={{ marginBottom: 0 }}>
+                <Select
+                  value={filters.sourcePlatform}
+                  onChange={(value) => updateFilter('sourcePlatform', value)}
+                  options={[
+                    { label: 'TEMU', value: 'TEMU' },
+                    { label: '1688', value: '1688' },
+                  ]}
+                  allowClear
+                  placeholder="全部"
+                  style={{ width: 160 }}
+                />
+              </Form.Item>
+              <Form.Item label="店铺" style={{ marginBottom: 0 }}>
+                <Select
+                  value={filters.targetShopId}
+                  onChange={(value) => updateFilter('targetShopId', value)}
+                  options={shopOptions}
+                  loading={loadingShops}
+                  allowClear
+                  showSearch
+                  optionFilterProp="label"
+                  placeholder="全部店铺"
+                  style={{ width: 220 }}
+                />
+              </Form.Item>
+              <Form.Item label="推送状态" style={{ marginBottom: 0 }}>
+                <Select
+                  value={filters.pushedToCollection}
+                  onChange={(value) => updateFilter('pushedToCollection', value)}
+                  options={[
+                    { label: '全部', value: undefined },
+                    { label: '未推送', value: false },
+                    { label: '已推送', value: true },
+                  ]}
+                  allowClear
+                  placeholder="全部"
+                  style={{ width: 160 }}
+                />
+              </Form.Item>
+            </Flex>
+          </Form>
+
+          <Space wrap>
             <Button type="primary" onClick={openImport}>
               导入草稿
             </Button>
-          </Form.Item>
-          <Form.Item>
             <Button
               type="primary"
               ghost
@@ -547,16 +575,12 @@ const ProductDraftsPage = () => {
             >
               批量推送商品库（{selectedRowKeys.length}）
             </Button>
-          </Form.Item>
-          <Form.Item>
             <Button loading={loading} onClick={reload}>
               查询
             </Button>
-          </Form.Item>
-          <Form.Item>
             <Button onClick={reset}>重置</Button>
-          </Form.Item>
-        </Form>
+          </Space>
+        </Flex>
       </Card>
 
       <Card>
@@ -566,6 +590,7 @@ const ProductDraftsPage = () => {
           dataSource={rows}
           loading={loading}
           rowSelection={rowSelection}
+          tableLayout="fixed"
           scroll={{ x: 1500 }}
           pagination={{
             current: page,

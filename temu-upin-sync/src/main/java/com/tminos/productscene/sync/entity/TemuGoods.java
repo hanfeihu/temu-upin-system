@@ -83,6 +83,23 @@ public class TemuGoods {
     @Column(name = "shipment_limit_second")
     private Integer shipmentLimitSecond;
 
+    @Column(name = "select_status")
+    private Integer selectStatus;
+
+    @Column(name = "apply_jit_status")
+    private Integer applyJitStatus;
+
+    @Builder.Default
+    @Column(name = "suggest_close_jit")
+    private Boolean suggestCloseJit = false;
+
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "sku_ids_json", columnDefinition = "jsonb")
+    private String skuIdsJson;
+
+    @Column(name = "lifecycle_synced_at")
+    private LocalDateTime lifecycleSyncedAt;
+
     @Column(name = "long_transport")
     private Boolean longTransport;
 

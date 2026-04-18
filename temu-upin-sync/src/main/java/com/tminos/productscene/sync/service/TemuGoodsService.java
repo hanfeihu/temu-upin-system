@@ -42,7 +42,6 @@ public class TemuGoodsService {
     private final TemuGoodsSkuPriceRepository skuPriceRepository;
     private final TemuGoodsSkuPriceChangeRepository skuPriceChangeRepository;
     private final TemuGoodsSkuSitePriceRepository skuSitePriceRepository;
-    private final TemuGoodsLifecycleRepository lifecycleRepository;
     @SuppressWarnings("unused")
     private final TemuGoodsDecorationRepository decorationRepository;
     @SuppressWarnings("unused")
@@ -57,10 +56,9 @@ public class TemuGoodsService {
                              TemuGoodsSkuPriceRepository skuPriceRepository,
                              TemuGoodsSkuPriceChangeRepository skuPriceChangeRepository,
                              TemuGoodsSkuSitePriceRepository skuSitePriceRepository,
-                             TemuGoodsLifecycleRepository lifecycleRepository,
-                            TemuGoodsDecorationRepository decorationRepository,
-                            TemuFreightTemplateRepository freightTemplateRepository,
-                            TemuWarehouseRepository warehouseRepository) {
+                             TemuGoodsDecorationRepository decorationRepository,
+                             TemuFreightTemplateRepository freightTemplateRepository,
+                             TemuWarehouseRepository warehouseRepository) {
         this.goodsRepository = goodsRepository;
         this.propertyRepository = propertyRepository;
         this.siteRepository = siteRepository;
@@ -69,7 +67,6 @@ public class TemuGoodsService {
         this.skuPriceRepository = skuPriceRepository;
         this.skuPriceChangeRepository = skuPriceChangeRepository;
         this.skuSitePriceRepository = skuSitePriceRepository;
-        this.lifecycleRepository = lifecycleRepository;
         this.decorationRepository = decorationRepository;
         this.freightTemplateRepository = freightTemplateRepository;
         this.warehouseRepository = warehouseRepository;
@@ -235,14 +232,9 @@ public class TemuGoodsService {
         detail.setShipmentLimitSecond(goods.getShipmentLimitSecond());
         detail.setTemuCreatedAt(goods.getTemuCreatedAt());
         detail.setSyncedAt(goods.getSyncedAt());
-
-        // 生命周期
-        lifecycleRepository.findByShopIdAndSkcId(goods.getShopId(), goods.getProductSkcId())
-                .ifPresent(lc -> {
-                    detail.setSelectStatus(lc.getSelectStatus());
-                    detail.setApplyJitStatus(lc.getApplyJitStatus());
-                    detail.setSuggestCloseJit(lc.getSuggestCloseJit());
-                });
+        detail.setSelectStatus(goods.getSelectStatus());
+        detail.setApplyJitStatus(goods.getApplyJitStatus());
+        detail.setSuggestCloseJit(goods.getSuggestCloseJit());
 
         // 站点
         List<TemuGoodsSite> sites = siteRepository.findByGoodsId(safeGoodsId);
@@ -351,12 +343,6 @@ public class TemuGoodsService {
         }
 
         List<Long> goodsIds = goodsList.stream().map(TemuGoods::getId).filter(Objects::nonNull).toList();
-        List<Long> skcIds = goodsList.stream().map(TemuGoods::getProductSkcId).filter(Objects::nonNull).distinct().toList();
-
-        Map<Long, TemuGoodsLifecycle> lifecycleMap = skcIds.isEmpty()
-            ? Map.of()
-            : lifecycleRepository.findByShopIdAndSkcIdIn(shopId, skcIds).stream()
-            .collect(Collectors.toMap(TemuGoodsLifecycle::getSkcId, item -> item, (left, right) -> left, LinkedHashMap::new));
         Map<Long, List<TemuGoodsSite>> siteMap = goodsIds.isEmpty()
             ? Map.of()
             : siteRepository.findByGoodsIdIn(goodsIds).stream()
@@ -390,7 +376,6 @@ public class TemuGoodsService {
 
         List<ExportSkuRow> rows = new ArrayList<>();
         for (TemuGoods goods : goodsList) {
-            TemuGoodsLifecycle lifecycle = lifecycleMap.get(goods.getProductSkcId());
             String categoryPath = formatCategories(goods.getCategoriesJson());
             String siteSummary = formatSites(siteMap.get(goods.getId()));
             String propertySummary = formatProperties(propertyMap.get(goods.getId()));
@@ -404,9 +389,9 @@ public class TemuGoodsService {
                 null,
                         goods.getShopId(), toStringValue(goods.getId()), toStringValue(goods.getProductId()), toStringValue(goods.getProductSkcId()),
                         goods.getProductName(), goods.getExtCode(), goods.getMainImageUrl(), formatSkcSiteStatus(goods.getSkcSiteStatus()),
-                        toStringValue(goods.getLeafCatId()), goods.getLeafCatName(), categoryPath, toStringValue(lifecycle == null ? null : lifecycle.getSelectStatus()),
+                        toStringValue(goods.getLeafCatId()), goods.getLeafCatName(), categoryPath, toStringValue(goods.getSelectStatus()),
                         formatBoolean(goods.getMatchJitMode()), formatBoolean(goods.getMatchSkcJitMode()), formatBoolean(goods.getIsSupportPersonalization()),
-                        toStringValue(lifecycle == null ? null : lifecycle.getApplyJitStatus()), formatBoolean(lifecycle == null ? null : lifecycle.getSuggestCloseJit()),
+                        toStringValue(goods.getApplyJitStatus()), formatBoolean(goods.getSuggestCloseJit()),
                         goods.getFreightTemplateId(), toStringValue(goods.getShipmentLimitSecond()), formatEpochMillis(goods.getTemuCreatedAt()),
                         formatDateTime(goods.getSyncedAt()), siteSummary, propertySummary,
                 "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""));
@@ -428,9 +413,9 @@ public class TemuGoodsService {
                 sku.getProductSkuId(),
                         goods.getShopId(), toStringValue(goods.getId()), toStringValue(goods.getProductId()), toStringValue(goods.getProductSkcId()),
                         goods.getProductName(), goods.getExtCode(), goods.getMainImageUrl(), formatSkcSiteStatus(goods.getSkcSiteStatus()),
-                        toStringValue(goods.getLeafCatId()), goods.getLeafCatName(), categoryPath, toStringValue(lifecycle == null ? null : lifecycle.getSelectStatus()),
+                        toStringValue(goods.getLeafCatId()), goods.getLeafCatName(), categoryPath, toStringValue(goods.getSelectStatus()),
                         formatBoolean(goods.getMatchJitMode()), formatBoolean(goods.getMatchSkcJitMode()), formatBoolean(goods.getIsSupportPersonalization()),
-                        toStringValue(lifecycle == null ? null : lifecycle.getApplyJitStatus()), formatBoolean(lifecycle == null ? null : lifecycle.getSuggestCloseJit()),
+                        toStringValue(goods.getApplyJitStatus()), formatBoolean(goods.getSuggestCloseJit()),
                         goods.getFreightTemplateId(), toStringValue(goods.getShipmentLimitSecond()), formatEpochMillis(goods.getTemuCreatedAt()),
                         formatDateTime(goods.getSyncedAt()), siteSummary, propertySummary, toStringValue(sku.getId()), toStringValue(sku.getProductSkuId()),
                         sku.getExtCode(), formatSpecs(specMap.get(sku.getId())), toStringValue(sku.getVirtualStock()), toStringValue(sku.getWeightMg()),

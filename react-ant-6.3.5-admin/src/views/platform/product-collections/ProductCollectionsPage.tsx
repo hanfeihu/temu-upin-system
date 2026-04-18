@@ -4,12 +4,15 @@ import {
   Card,
   Checkbox,
   Dropdown,
+  Flex,
   Form,
   Image,
   Input,
   InputNumber,
   Modal,
   Radio,
+  Row,
+  Col,
   Select,
   Space,
   Table,
@@ -73,6 +76,15 @@ const statusOptions = [
   { label: '发布中', value: 1 },
   { label: '发布失败', value: 2 },
 ];
+
+const lineClampTextStyle = {
+  display: '-webkit-box',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  WebkitLineClamp: 2,
+  WebkitBoxOrient: 'vertical' as const,
+  lineHeight: 1.5,
+};
 
 function extractMoq(text?: string | null, moq?: number | null) {
   if (moq != null) {
@@ -153,6 +165,20 @@ function extractPublishFailLines(logs: PublishLogVO[]) {
     .filter((item) => String(item.level || '').toUpperCase() === 'INFO')
     .slice(-2)
     .map(pickLine);
+}
+
+function renderRangeInput(
+  minValue: number | undefined,
+  maxValue: number | undefined,
+  onChangeMin: (value: number | null) => void,
+  onChangeMax: (value: number | null) => void,
+) {
+  return (
+    <Space.Compact block>
+      <InputNumber value={minValue} min={0} placeholder="最小" style={{ width: '50%' }} onChange={onChangeMin} />
+      <InputNumber value={maxValue} min={0} placeholder="最大" style={{ width: '50%' }} onChange={onChangeMax} />
+    </Space.Compact>
+  );
 }
 
 const ProductCollectionsPage = () => {
@@ -534,8 +560,15 @@ const ProductCollectionsPage = () => {
       key: 'productName',
       width: 360,
       render: (_, record) => (
-        <Space direction="vertical" size={2}>
-          <Typography.Text strong ellipsis={{ tooltip: record.productName || '' }}>
+        <Space direction="vertical" size={2} style={{ width: '100%', minWidth: 0 }}>
+          <Typography.Text
+            strong
+            title={record.productName || ''}
+            style={{
+              ...lineClampTextStyle,
+              width: '100%',
+            }}
+          >
             {record.productName || '-'}
           </Typography.Text>
           <Space size={6} wrap>
@@ -640,7 +673,6 @@ const ProductCollectionsPage = () => {
       title: '操作',
       key: 'actions',
       width: 220,
-      fixed: 'right',
       render: (_, record) => {
         const menuItems: MenuProps['items'] = [
           {
@@ -706,143 +738,128 @@ const ProductCollectionsPage = () => {
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      <Card>
-        <Form layout="inline" onFinish={reload}>
-          <Form.Item label="关键词">
-            <Input
-              value={filters.q}
-              onChange={(event) => updateFilter('q', event.target.value)}
-              placeholder="商品名 / product_id"
-              style={{ width: 240 }}
-              allowClear
-              onPressEnter={reload}
-            />
-          </Form.Item>
-          <Form.Item label="平台">
-            <Input
-              value={filters.sourcePlatform}
-              onChange={(event) => updateFilter('sourcePlatform', event.target.value || undefined)}
-              placeholder="如 temu / 1688"
-              style={{ width: 160 }}
-              allowClear
-            />
-          </Form.Item>
-          <Form.Item label="店铺">
-            <Select
-              value={filters.targetShopId}
-              onChange={(value) => updateFilter('targetShopId', value)}
-              options={targetShopOptions}
-              loading={loadingTargetShops}
-              allowClear
-              showSearch
-              optionFilterProp="label"
-              placeholder="全部店铺"
-              style={{ width: 220 }}
-            />
-          </Form.Item>
-          <Form.Item label="状态">
-            <Select
-              value={filters.collectionStatus}
-              onChange={(value) => updateFilter('collectionStatus', value)}
-              options={statusOptions}
-              allowClear
-              placeholder="全部"
-              style={{ width: 140 }}
-            />
-          </Form.Item>
-          <Form.Item label="类目">
-            <Select
-              value={filters.temuCatid}
-              onChange={(value) => updateFilter('temuCatid', value)}
-              options={temuCategoryOptions}
-              loading={loadingTemuCategories}
-              allowClear
-              showSearch
-              optionFilterProp="label"
-              placeholder="请选择"
-              style={{ width: 240 }}
-            />
-          </Form.Item>
-          <Form.Item label="起批量">
-            <Space.Compact>
-              <InputNumber
-                value={filters.moqMin}
-                min={0}
-                placeholder="最小"
-                onChange={(value) => updateFilter('moqMin', value ?? undefined)}
-              />
-              <InputNumber
-                value={filters.moqMax}
-                min={0}
-                placeholder="最大"
-                onChange={(value) => updateFilter('moqMax', value ?? undefined)}
-              />
-            </Space.Compact>
-          </Form.Item>
-          <Form.Item label="轮播图数">
-            <Space.Compact>
-              <InputNumber
-                value={filters.carouselImageCountMin}
-                min={0}
-                placeholder="最小"
-                onChange={(value) => updateFilter('carouselImageCountMin', value ?? undefined)}
-              />
-              <InputNumber
-                value={filters.carouselImageCountMax}
-                min={0}
-                placeholder="最大"
-                onChange={(value) => updateFilter('carouselImageCountMax', value ?? undefined)}
-              />
-            </Space.Compact>
-          </Form.Item>
-          <Form.Item label="详情图数">
-            <Space.Compact>
-              <InputNumber
-                value={filters.detailImageCountMin}
-                min={0}
-                placeholder="最小"
-                onChange={(value) => updateFilter('detailImageCountMin', value ?? undefined)}
-              />
-              <InputNumber
-                value={filters.detailImageCountMax}
-                min={0}
-                placeholder="最大"
-                onChange={(value) => updateFilter('detailImageCountMax', value ?? undefined)}
-              />
-            </Space.Compact>
-          </Form.Item>
-          <Form.Item label="SKU数">
-            <Space.Compact>
-              <InputNumber
-                value={filters.skuCountMin}
-                min={0}
-                placeholder="最小"
-                onChange={(value) => updateFilter('skuCountMin', value ?? undefined)}
-              />
-              <InputNumber
-                value={filters.skuCountMax}
-                min={0}
-                placeholder="最大"
-                onChange={(value) => updateFilter('skuCountMax', value ?? undefined)}
-              />
-            </Space.Compact>
-          </Form.Item>
-          <Form.Item>
-            <Checkbox
-              checked={filters.showDeleted}
-              onChange={(event) => updateFilter('showDeleted', event.target.checked)}
-            >
-              显示已删除
-            </Checkbox>
-          </Form.Item>
-          <Form.Item>
-            <Space>
-              <Button type="primary" loading={loading} onClick={reload}>
-                查询
-              </Button>
-              <Button onClick={reset}>重置</Button>
-            </Space>
-          </Form.Item>
+      <Card bodyStyle={{ paddingBottom: 18 }}>
+        <Form layout="vertical" onFinish={reload}>
+          <Row gutter={[16, 8]}>
+            <Col xs={24} md={12} xl={6}>
+              <Form.Item label="关键词">
+                <Input
+                  value={filters.q}
+                  onChange={(event) => updateFilter('q', event.target.value)}
+                  placeholder="商品名 / product_id"
+                  allowClear
+                  onPressEnter={reload}
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12} xl={6}>
+              <Form.Item label="平台">
+                <Input
+                  value={filters.sourcePlatform}
+                  onChange={(event) => updateFilter('sourcePlatform', event.target.value || undefined)}
+                  placeholder="如 temu / 1688"
+                  allowClear
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12} xl={6}>
+              <Form.Item label="店铺">
+                <Select
+                  value={filters.targetShopId}
+                  onChange={(value) => updateFilter('targetShopId', value)}
+                  options={targetShopOptions}
+                  loading={loadingTargetShops}
+                  allowClear
+                  showSearch
+                  optionFilterProp="label"
+                  placeholder="全部店铺"
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12} xl={6}>
+              <Form.Item label="状态">
+                <Select
+                  value={filters.collectionStatus}
+                  onChange={(value) => updateFilter('collectionStatus', value)}
+                  options={statusOptions}
+                  allowClear
+                  placeholder="全部"
+                />
+              </Form.Item>
+            </Col>
+
+            <Col xs={24} md={12} xl={8}>
+              <Form.Item label="类目">
+                <Select
+                  value={filters.temuCatid}
+                  onChange={(value) => updateFilter('temuCatid', value)}
+                  options={temuCategoryOptions}
+                  loading={loadingTemuCategories}
+                  allowClear
+                  showSearch
+                  optionFilterProp="label"
+                  placeholder="请选择"
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12} xl={4}>
+              <Form.Item label="起批量">
+                {renderRangeInput(
+                  filters.moqMin,
+                  filters.moqMax,
+                  (value) => updateFilter('moqMin', value ?? undefined),
+                  (value) => updateFilter('moqMax', value ?? undefined),
+                )}
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12} xl={4}>
+              <Form.Item label="轮播图数">
+                {renderRangeInput(
+                  filters.carouselImageCountMin,
+                  filters.carouselImageCountMax,
+                  (value) => updateFilter('carouselImageCountMin', value ?? undefined),
+                  (value) => updateFilter('carouselImageCountMax', value ?? undefined),
+                )}
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12} xl={4}>
+              <Form.Item label="详情图数">
+                {renderRangeInput(
+                  filters.detailImageCountMin,
+                  filters.detailImageCountMax,
+                  (value) => updateFilter('detailImageCountMin', value ?? undefined),
+                  (value) => updateFilter('detailImageCountMax', value ?? undefined),
+                )}
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12} xl={4}>
+              <Form.Item label="SKU数">
+                {renderRangeInput(
+                  filters.skuCountMin,
+                  filters.skuCountMax,
+                  (value) => updateFilter('skuCountMin', value ?? undefined),
+                  (value) => updateFilter('skuCountMax', value ?? undefined),
+                )}
+              </Form.Item>
+            </Col>
+
+            <Col span={24}>
+              <Flex justify="space-between" align="center" wrap="wrap" gap={12}>
+                <Checkbox
+                  checked={filters.showDeleted}
+                  onChange={(event) => updateFilter('showDeleted', event.target.checked)}
+                >
+                  显示已删除
+                </Checkbox>
+                <Space>
+                  <Button type="primary" loading={loading} onClick={reload}>
+                    查询
+                  </Button>
+                  <Button onClick={reset}>重置</Button>
+                </Space>
+              </Flex>
+            </Col>
+          </Row>
         </Form>
       </Card>
 
@@ -852,6 +869,7 @@ const ProductCollectionsPage = () => {
           columns={columns}
           dataSource={rows}
           loading={loading}
+          tableLayout="fixed"
           scroll={{ x: 1760 }}
           pagination={{
             current: page,

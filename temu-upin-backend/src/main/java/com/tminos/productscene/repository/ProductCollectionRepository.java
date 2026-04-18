@@ -51,6 +51,8 @@ public interface ProductCollectionRepository extends JpaRepository<ProductCollec
                       x.last_publish_run_id,
                       x.collect_count,
                       x.company_name,
+                      x.target_shop_ids,
+                      x.target_shop_names,
                       x.product_main_image,
                       x.temu_catid,
                       x.temu_catname,
@@ -101,7 +103,37 @@ public interface ProductCollectionRepository extends JpaRepository<ProductCollec
                       where
                         (:showDeleted = true or pc.deleted = false)
                         and (:sourcePlatform is null or pc.source_platform = :sourcePlatform)
-                        and (:collectionStatus is null or pc.collection_status = :collectionStatus)
+                        and (
+                          :targetShopId is null
+                          or exists (
+                            select 1
+                            from jsonb_array_elements_text(
+                              case
+                                when pc.target_shop_ids is null or btrim(pc.target_shop_ids) = '' then cast('[]' as jsonb)
+                                when left(btrim(pc.target_shop_ids), 1) = '[' then cast(pc.target_shop_ids as jsonb)
+                                else cast('[]' as jsonb)
+                              end
+                            ) as shop_id(value)
+                            where shop_id.value = :targetShopId
+                          )
+                        )
+                        and (
+                          :collectionStatus is null
+                          or (
+                            :collectionStatus = 0
+                            and coalesce(pc.collection_status, 0) = 0
+                            and coalesce(pc.temu_published, false) = false
+                          )
+                          or (
+                            :collectionStatus <> 0
+                            and :collectionStatus <> 3
+                            and pc.collection_status = :collectionStatus
+                          )
+                          or (
+                            :collectionStatus = 3
+                            and coalesce(pc.temu_published, false) = true
+                          )
+                        )
                         and (:temuCatid is null or pc.temu_catid = :temuCatid)
                         and (:moqMin is null or pc.moq >= :moqMin)
                         and (:moqMax is null or pc.moq <= :moqMax)
@@ -155,7 +187,37 @@ public interface ProductCollectionRepository extends JpaRepository<ProductCollec
                       where
                         (:showDeleted = true or pc.deleted = false)
                         and (:sourcePlatform is null or pc.source_platform = :sourcePlatform)
-                        and (:collectionStatus is null or pc.collection_status = :collectionStatus)
+                        and (
+                          :targetShopId is null
+                          or exists (
+                            select 1
+                            from jsonb_array_elements_text(
+                              case
+                                when pc.target_shop_ids is null or btrim(pc.target_shop_ids) = '' then cast('[]' as jsonb)
+                                when left(btrim(pc.target_shop_ids), 1) = '[' then cast(pc.target_shop_ids as jsonb)
+                                else cast('[]' as jsonb)
+                              end
+                            ) as shop_id(value)
+                            where shop_id.value = :targetShopId
+                          )
+                        )
+                        and (
+                          :collectionStatus is null
+                          or (
+                            :collectionStatus = 0
+                            and coalesce(pc.collection_status, 0) = 0
+                            and coalesce(pc.temu_published, false) = false
+                          )
+                          or (
+                            :collectionStatus <> 0
+                            and :collectionStatus <> 3
+                            and pc.collection_status = :collectionStatus
+                          )
+                          or (
+                            :collectionStatus = 3
+                            and coalesce(pc.temu_published, false) = true
+                          )
+                        )
                         and (:temuCatid is null or pc.temu_catid = :temuCatid)
                         and (:moqMin is null or pc.moq >= :moqMin)
                         and (:moqMax is null or pc.moq <= :moqMax)
@@ -179,6 +241,7 @@ public interface ProductCollectionRepository extends JpaRepository<ProductCollec
     Page<Object[]> searchWithCounts(
             @Param("q") String q,
             @Param("sourcePlatform") String sourcePlatform,
+            @Param("targetShopId") String targetShopId,
             @Param("collectionStatus") Integer collectionStatus,
             @Param("showDeleted") boolean showDeleted,
             @Param("temuCatid") String temuCatid,

@@ -78,6 +78,12 @@ public class ProductDraft {
 
     private Integer reviewCount;
 
+    @Column(columnDefinition = "TEXT")
+    private String targetShopIds;
+
+    @Column(columnDefinition = "TEXT")
+    private String targetShopNames;
+
     private Long pushedCollectionId;
 
     @Column(nullable = false)

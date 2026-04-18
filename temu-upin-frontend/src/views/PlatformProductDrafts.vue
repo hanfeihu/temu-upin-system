@@ -9,6 +9,18 @@
           <a-form-item label="来源平台">
             <a-select v-model:value="filters.sourcePlatform" :options="platformOptions" allow-clear placeholder="全部" style="width: 160px" />
           </a-form-item>
+          <a-form-item label="店铺">
+            <a-select
+              v-model:value="filters.targetShopId"
+              :options="targetShopOptions"
+              :loading="loadingTargetShops"
+              allow-clear
+              show-search
+              :filter-option="filterTargetShopOption"
+              placeholder="全部店铺"
+              style="width: 220px"
+            />
+          </a-form-item>
           <a-form-item label="推送状态">
             <a-select v-model:value="filters.pushedToCollection" :options="pushStatusOptions" placeholder="全部" style="width: 160px" />
           </a-form-item>
@@ -59,6 +71,14 @@
                 <div class="name-sub mono">{{ record.productId || '-' }}</div>
               </div>
             </template>
+            <template v-else-if="column.key === 'targetShopNames'">
+              <div class="shop-tags-cell">
+                <a-tag v-for="shopName in (record.targetShopNames || [])" :key="shopName" color="blue">
+                  {{ shopName }}
+                </a-tag>
+                <span v-if="!(record.targetShopNames || []).length">-</span>
+              </div>
+            </template>
             <template v-else-if="column.key === 'pushedToCollection'">
               <a-tag v-if="record.pushedToCollection" color="green">已推送</a-tag>
               <a-tag v-else color="default">未推送</a-tag>
@@ -98,6 +118,18 @@
           <a-form-item label="提取补充 JSON（可选）">
             <a-textarea v-model:value="importForm.extractedJson" :rows="5" placeholder='例如：{"detailImages": [...]}' />
           </a-form-item>
+          <a-form-item label="目标店铺（可选）">
+            <a-select
+              v-model:value="importForm.targetShopIds"
+              mode="multiple"
+              :options="targetShopOptions"
+              :loading="loadingTargetShops"
+              allow-clear
+              show-search
+              :filter-option="filterTargetShopOption"
+              placeholder="不选则不绑定店铺"
+            />
+          </a-form-item>
         </a-form>
       </a-modal>
 
@@ -129,6 +161,7 @@
             <a-descriptions-item label="商品名" :span="2">{{ detail.productName || '-' }}</a-descriptions-item>
             <a-descriptions-item label="类目">{{ detail.productCategory || '-' }}</a-descriptions-item>
             <a-descriptions-item label="原始类目">{{ detail.originalCategory || '-' }}</a-descriptions-item>
+            <a-descriptions-item label="店铺" :span="2">{{ (detail.targetShopNames || []).join('，') || '-' }}</a-descriptions-item>
             <a-descriptions-item label="货源链接" :span="2">{{ detail.sourceUrl || '-' }}</a-descriptions-item>
             <a-descriptions-item label="销量">{{ detail.monthlySales || '-' }}</a-descriptions-item>
             <a-descriptions-item label="评论数">{{ detail.reviewCount ?? '-' }}</a-descriptions-item>
@@ -155,6 +188,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { message, Modal } from 'ant-design-vue'
 import ProLayout from '@/platform/components/ProLayout.vue'
 import { productDraftApi } from '@/platform/api/productDrafts'
+import { temuShopsApi } from '@/platform/api/temuShops'
 
 const loading = ref(false)
 const importing = ref(false)
@@ -172,17 +206,20 @@ const importOpen = ref(false)
 const editOpen = ref(false)
 const detailOpen = ref(false)
 const detail = ref(null)
+const PUSH_STATUS_ALL = '__ALL__'
 
 const filters = reactive({
   q: '',
   sourcePlatform: undefined,
-  pushedToCollection: false,
+  targetShopId: undefined,
+  pushedToCollection: PUSH_STATUS_ALL,
   showDeleted: false
 })
 
 const importForm = reactive({
   html: '',
-  extractedJson: ''
+  extractedJson: '',
+  targetShopIds: []
 })
 
 const editForm = reactive({
@@ -203,16 +240,44 @@ const platformOptions = [
   { label: '1688', value: '1688' }
 ]
 
+const loadingTargetShops = ref(false)
+const targetShopOptions = ref([])
+
+const filterTargetShopOption = (input, option) => {
+  const v = (option?.label ?? '').toString().toLowerCase()
+  return v.includes((input ?? '').toString().trim().toLowerCase())
+}
+
+const fetchTargetShops = async () => {
+  loadingTargetShops.value = true
+  try {
+    const res = await temuShopsApi.list({ enabled: true })
+    if (!res?.success) throw new Error(res?.message || '加载店铺失败')
+    const shopRows = Array.isArray(res.data) ? res.data : []
+    targetShopOptions.value = shopRows
+      .filter(item => item?.shopId && item?.shopName)
+      .map(item => ({
+        value: String(item.shopId),
+        label: String(item.shopName)
+      }))
+  } catch (e) {
+    message.error(e.message || '加载店铺失败')
+  } finally {
+    loadingTargetShops.value = false
+  }
+}
+
 const pushStatusOptions = [
+  { label: '全部', value: PUSH_STATUS_ALL },
   { label: '未推送', value: false },
-  { label: '已推送', value: true },
-  { label: '全部', value: undefined }
+  { label: '已推送', value: true }
 ]
 
 const columns = [
   { title: '主图', key: 'productMainImage', width: 90, fixed: 'left' },
   { title: '商品', key: 'productName', width: 280, fixed: 'left' },
   { title: '来源平台', key: 'sourcePlatform', width: 110 },
+  { title: '店铺', key: 'targetShopNames', width: 220 },
   { title: '类目', dataIndex: 'productCategory', key: 'productCategory', width: 150 },
   { title: '原始类目', dataIndex: 'originalCategory', key: 'originalCategory', width: 240 },
   { title: '销量', dataIndex: 'monthlySales', key: 'monthlySales', width: 110 },
@@ -252,7 +317,8 @@ const reload = async () => {
     const res = await productDraftApi.list({
       q: filters.q || undefined,
       sourcePlatform: filters.sourcePlatform || undefined,
-      pushedToCollection: filters.pushedToCollection,
+      targetShopId: filters.targetShopId || undefined,
+      pushedToCollection: filters.pushedToCollection === PUSH_STATUS_ALL ? undefined : filters.pushedToCollection,
       showDeleted: filters.showDeleted || undefined,
       page: page.value - 1,
       size: pageSize.value
@@ -272,7 +338,8 @@ const reload = async () => {
 const reset = () => {
   filters.q = ''
   filters.sourcePlatform = undefined
-  filters.pushedToCollection = false
+  filters.targetShopId = undefined
+  filters.pushedToCollection = PUSH_STATUS_ALL
   filters.showDeleted = false
   selectedRowKeys.value = []
   page.value = 1
@@ -289,6 +356,7 @@ const onTableChange = (pager) => {
 const openImport = () => {
   importForm.html = ''
   importForm.extractedJson = ''
+  importForm.targetShopIds = []
   importOpen.value = true
 }
 
@@ -298,7 +366,8 @@ const submitImport = async () => {
   try {
     const res = await productDraftApi.importDraft({
       html: importForm.html,
-      extractedJson: importForm.extractedJson || undefined
+      extractedJson: importForm.extractedJson || undefined,
+      targetShopIds: importForm.targetShopIds?.length ? importForm.targetShopIds : undefined
     })
     if (!res?.success) throw new Error(res?.message || '导入失败')
     message.success('已导入草稿库')
@@ -481,7 +550,10 @@ const confirmDelete = (record) => {
   })
 }
 
-onMounted(reload)
+onMounted(() => {
+  fetchTargetShops()
+  reload()
+})
 </script>
 
 <style scoped>
@@ -503,6 +575,12 @@ onMounted(reload)
   font-family: Menlo, Monaco, Consolas, monospace;
   font-size: 12px;
   color: #666;
+}
+
+.shop-tags-cell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .action-group {

@@ -260,26 +260,39 @@ public class TemuPriceReviewService {
 
         Map<Long, TemuGoodsSku> goodsSkuMap = goodsSkuRepository.findByShopIdAndProductSkuIdIn(shopId, productSkuIds)
                 .stream()
+                .filter(Objects::nonNull)
                 .filter(sku -> sku.getProductSkuId() != null)
                 .collect(Collectors.toMap(TemuGoodsSku::getProductSkuId, sku -> sku, (left, right) -> left, LinkedHashMap::new));
 
         List<Long> goodsIds = goodsSkuMap.values().stream()
-            .map(TemuGoodsSku::getGoodsId)
-            .filter(Objects::nonNull)
-            .distinct()
-            .toList();
-        Map<Long, String> goodsMainImageMap = goodsRepository.findAllById(new ArrayList<>(goodsIds))
-            .stream()
-            .filter(goods -> goods.getId() != null)
-            .collect(Collectors.toMap(TemuGoods::getId, TemuGoods::getMainImageUrl, (left, right) -> left, LinkedHashMap::new));
+                .map(TemuGoodsSku::getGoodsId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
 
-        Map<Long, String> imageUrlMap = goodsSkuMap.values().stream()
-            .filter(sku -> sku.getProductSkuId() != null)
-            .collect(Collectors.toMap(
-                TemuGoodsSku::getProductSkuId,
-                sku -> resolveSkuImageUrl(sku, goodsMainImageMap.get(sku.getGoodsId())),
-                (left, right) -> left,
-                LinkedHashMap::new));
+        Map<Long, String> goodsMainImageMap = new LinkedHashMap<>();
+        if (!goodsIds.isEmpty()) {
+            for (TemuGoods goods : goodsRepository.findAllById(new ArrayList<>(goodsIds))) {
+                if (goods == null || goods.getId() == null) {
+                    continue;
+                }
+                String mainImageUrl = goods.getMainImageUrl();
+                if (mainImageUrl != null && !mainImageUrl.isBlank()) {
+                    goodsMainImageMap.putIfAbsent(goods.getId(), mainImageUrl);
+                }
+            }
+        }
+
+        Map<Long, String> imageUrlMap = new LinkedHashMap<>();
+        for (TemuGoodsSku sku : goodsSkuMap.values()) {
+            if (sku == null || sku.getProductSkuId() == null) {
+                continue;
+            }
+            String resolvedImageUrl = resolveSkuImageUrl(sku, goodsMainImageMap.get(sku.getGoodsId()));
+            if (resolvedImageUrl != null && !resolvedImageUrl.isBlank()) {
+                imageUrlMap.putIfAbsent(sku.getProductSkuId(), resolvedImageUrl);
+            }
+        }
 
         List<Long> skuIds = goodsSkuMap.values().stream()
                 .map(TemuGoodsSku::getId)
@@ -287,16 +300,20 @@ public class TemuPriceReviewService {
                 .toList();
         Map<Long, String> specInfoMap = goodsSkuSpecRepository.findBySkuIdIn(skuIds)
                 .stream()
+                .filter(Objects::nonNull)
                 .filter(spec -> spec.getSkuId() != null)
                 .collect(Collectors.groupingBy(
                         TemuGoodsSkuSpec::getSkuId,
                         LinkedHashMap::new,
                         Collectors.mapping(spec -> spec.getParentSpecName() + ": " + spec.getSpecName(), Collectors.joining(" / "))));
 
-        Map<Long, Integer> currentSupplyPriceMap = goodsSkuPriceRepository.findByShopIdAndProductSkuIdIn(shopId, productSkuIds)
-                .stream()
-                .filter(price -> price.getProductSkuId() != null)
-                .collect(Collectors.toMap(TemuGoodsSkuPrice::getProductSkuId, TemuGoodsSkuPrice::getSupplierPrice, (left, right) -> left, LinkedHashMap::new));
+        Map<Long, Integer> currentSupplyPriceMap = new LinkedHashMap<>();
+        for (TemuGoodsSkuPrice price : goodsSkuPriceRepository.findByShopIdAndProductSkuIdIn(shopId, productSkuIds)) {
+            if (price == null || price.getProductSkuId() == null || price.getSupplierPrice() == null) {
+                continue;
+            }
+            currentSupplyPriceMap.putIfAbsent(price.getProductSkuId(), price.getSupplierPrice());
+        }
 
         return new ReviewSkuContext(goodsSkuMap, specInfoMap, currentSupplyPriceMap, imageUrlMap);
     }

@@ -1,6 +1,12 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { hasPlatformAuth } from '@/utils/platformAuth'
 
 const routes = [
+  {
+    path: '/login',
+    name: 'LoginPage',
+    component: () => import('@/views/LoginPage.vue')
+  },
   {
     path: '/',
     name: 'PlatformHome',
@@ -13,8 +19,7 @@ const routes = [
   },
   {
     path: '/platform/config',
-    name: 'PlatformConfig',
-    component: () => import('@/views/PlatformConfig.vue')
+    redirect: '/platform/temu-shops'
   },
   {
     path: '/platform/publish-logs',
@@ -171,6 +176,29 @@ const routes = [
 const router = createRouter({
   history: createWebHistory(),
   routes
+})
+
+router.beforeEach((to) => {
+  if (to.path === '/login') {
+    if (hasPlatformAuth()) {
+      return '/platform/product-collections'
+    }
+    return true
+  }
+
+  if (to.path.startsWith('/goods/')) {
+    return true
+  }
+
+  if (!hasPlatformAuth()) {
+    return '/login'
+  }
+
+  if (to.path === '/') {
+    return '/platform/product-collections'
+  }
+
+  return true
 })
 
 export default router

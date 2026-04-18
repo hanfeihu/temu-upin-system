@@ -37,7 +37,7 @@ public class AddGloGoodsRequest {
     private ProductWarehouseRouteReq productWarehouseRouteReq; // 仓库路由信息
     private Integer sellOutProductIdSrc;                     // 售罄商品来源 ID
     private List<GoodsModelReq> goodsModelReqs;              // 模特信息列表
-    private Integer sizeTemplateId;                          // 尺码表模板 ID
+    private Long sizeTemplateId;                             // 尺码表模板 ID
 
     private ProductOuterPackageReq productOuterPackageReq;   // 外包装信息
     private ProductShipmentReq productShipmentReq;           // 发货信息
@@ -56,9 +56,9 @@ public class AddGloGoodsRequest {
     private Integer cat10Id; // 十级类目 ID
 
     private String sellOutProductId;                         // 售罄商品 ID
-    private List<Integer> showSizeTemplateIds;               // 重点展示尺码表模板 ID 列表
+    private List<Long> showSizeTemplateIds;                  // 重点展示尺码表模板 ID 列表
     private List<CarouselImageI18nReq> carouselImageI18nReqs;// 商品轮播图多语言信息
-    private List<Integer> sizeTemplateIds;                   // 尺码表模板 ID 列表
+    private List<Long> sizeTemplateIds;                      // 尺码表模板 ID 列表
 
     private List<ProductSpecPropertyReq> productSpecPropertyReqs;    // 商品规格属性
     private ProductWhExtAttrReq productWhExtAttrReq;                 // 仓配及供应链扩展属性
