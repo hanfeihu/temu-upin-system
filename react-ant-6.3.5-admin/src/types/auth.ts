@@ -1,3 +1,5 @@
+import type { CurrentUserVO } from '@/types/api';
+
 export interface ApiResponse<T> {
   success: boolean;
   message: string;
@@ -17,8 +19,4 @@ export interface LoginResponse {
   expiresAt: number | null;
 }
 
-export interface CurrentUserResponse {
-  username: string;
-  displayName: string;
-  expiresAt: number | null;
-}
+export type CurrentUserResponse = CurrentUserVO;

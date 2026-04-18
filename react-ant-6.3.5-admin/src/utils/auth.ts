@@ -1,14 +1,11 @@
-import type { CurrentUserResponse, LoginResponse } from '@/types/auth';
+import type { CurrentUserVO } from '@/types/api';
+import type { LoginResponse } from '@/types/auth';
+import { clearToken, getToken, setToken } from '@/utils/request';
 
-const TOKEN_KEY = 'temu-upin-auth-token';
 const USER_KEY = 'temu-upin-auth-user';
 
-export function getAccessToken() {
-  return localStorage.getItem(TOKEN_KEY) || '';
-}
-
 export function hasAuthSession() {
-  return !!getAccessToken();
+  return !!getToken();
 }
 
 export function getStoredUser() {
@@ -18,15 +15,15 @@ export function getStoredUser() {
   }
 
   try {
-    return JSON.parse(raw) as CurrentUserResponse;
+    return JSON.parse(raw) as CurrentUserVO;
   } catch {
     return null;
   }
 }
 
-export function saveAuthSession(payload: LoginResponse | CurrentUserResponse, token?: string) {
+export function saveAuthSession(payload: LoginResponse | CurrentUserVO, token?: string) {
   if (token) {
-    localStorage.setItem(TOKEN_KEY, token);
+    setToken(token);
   }
 
   localStorage.setItem(
@@ -40,6 +37,6 @@ export function saveAuthSession(payload: LoginResponse | CurrentUserResponse, to
 }
 
 export function clearAuthSession() {
-  localStorage.removeItem(TOKEN_KEY);
+  clearToken();
   localStorage.removeItem(USER_KEY);
 }

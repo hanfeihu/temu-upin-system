@@ -1,10 +1,11 @@
 import client from '@/api/client';
+import type { ApiResponse } from '@/types/api';
 import type { CurrentUserResponse, LoginRequest, LoginResponse } from '@/types/auth';
 
-export async function login(payload: LoginRequest) {
-  return (await client.post<LoginResponse>('/auth/login', payload)) as unknown as LoginResponse;
+export function login(payload: LoginRequest) {
+  return client.post('/auth/login', payload) as Promise<ApiResponse<LoginResponse>>;
 }
 
-export async function getCurrentUser() {
-  return (await client.get<CurrentUserResponse>('/auth/me')) as unknown as CurrentUserResponse;
+export function getCurrentUser() {
+  return client.get('/auth/me') as Promise<ApiResponse<CurrentUserResponse>>;
 }

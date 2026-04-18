@@ -1,11 +1,12 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { getCurrentUser, login as loginApi } from '@/api/auth';
-import type { CurrentUserResponse } from '@/types/auth';
-import { clearAuthSession, getAccessToken, getStoredUser, saveAuthSession } from '@/utils/auth';
+import type { CurrentUserVO } from '@/types/api';
+import { clearAuthSession, getStoredUser, saveAuthSession } from '@/utils/auth';
+import { getToken } from '@/utils/request';
 
 interface AuthState {
-  user: CurrentUserResponse | null;
+  user: CurrentUserVO | null;
   loading: boolean;
   authenticated: boolean;
 }
@@ -21,13 +22,14 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [state, setState] = useState<AuthState>({
     user: getStoredUser(),
-    loading: !!getAccessToken(),
-    authenticated: !!getAccessToken(),
+    loading: !!getToken(),
+    authenticated: !!getToken(),
   });
 
   const fetchUser = useCallback(async () => {
     try {
-      const currentUser = await getCurrentUser();
+      const res = await getCurrentUser();
+      const currentUser = res.data;
       saveAuthSession(currentUser);
       setState({
         user: currentUser,
@@ -46,7 +48,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
   const login = useCallback(
     async (username: string, password: string) => {
-      const payload = await loginApi({ username, password });
+      const res = await loginApi({ username, password });
+      const payload = res.data;
       saveAuthSession(payload, payload.accessToken);
       setState({
         user: {
@@ -72,7 +75,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   }, []);
 
   useEffect(() => {
-    if (getAccessToken()) {
+    if (getToken()) {
       void fetchUser();
     }
   }, [fetchUser]);
