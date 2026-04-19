@@ -20,7 +20,6 @@ import com.tminos.temu.upin.sdk.v2.dto.AddGloGoodsResponse;
 import com.tminos.temu.upin.sdk.v2.dto.TemuApiResponse;
 import com.tminos.temu.upin.sdk.v2.goods.TemuGloGoodsV2Client;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
@@ -78,7 +77,6 @@ public class TemuPublishService {
         this.temuSizeChartService = temuSizeChartService;
     }
 
-    @Transactional
     public TemuPublishDTO.PublishResponse publish(Long spuId) {
         com.tminos.productscene.entity.TemuPublishRun run = publishLogService.startRun(spuId);
         Long runId = run == null ? null : run.getId();

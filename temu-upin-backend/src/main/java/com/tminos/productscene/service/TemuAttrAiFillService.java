@@ -12,6 +12,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
@@ -87,7 +88,7 @@ public class TemuAttrAiFillService {
         return taskRepo.findById(id).orElse(null);
     }
 
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public EnsureForPublishResult ensureReadyForPublish(Long spuId, boolean applyToProductWhenMissing) {
         if (spuId == null) throw new IllegalArgumentException("spuId is required");
         ProductCollection pc = productRepo.findById(spuId)
