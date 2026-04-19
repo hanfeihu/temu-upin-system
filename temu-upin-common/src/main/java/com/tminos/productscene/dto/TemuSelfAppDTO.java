@@ -14,6 +14,8 @@ public class TemuSelfAppDTO {
         @NotBlank(message = "App Secret 不能为空")
         private String appSecret;
 
+        private String appType;
+
         private Boolean enabled;
 
         public String getAppName() { return appName; }
@@ -22,6 +24,8 @@ public class TemuSelfAppDTO {
         public void setAppKey(String appKey) { this.appKey = appKey; }
         public String getAppSecret() { return appSecret; }
         public void setAppSecret(String appSecret) { this.appSecret = appSecret; }
+        public String getAppType() { return appType; }
+        public void setAppType(String appType) { this.appType = appType; }
         public Boolean getEnabled() { return enabled; }
         public void setEnabled(Boolean enabled) { this.enabled = enabled; }
     }
@@ -36,6 +40,8 @@ public class TemuSelfAppDTO {
         /** Optional; if empty, keep existing secret */
         private String appSecret;
 
+        private String appType;
+
         private Boolean enabled;
 
         public String getAppName() { return appName; }
@@ -44,6 +50,8 @@ public class TemuSelfAppDTO {
         public void setAppKey(String appKey) { this.appKey = appKey; }
         public String getAppSecret() { return appSecret; }
         public void setAppSecret(String appSecret) { this.appSecret = appSecret; }
+        public String getAppType() { return appType; }
+        public void setAppType(String appType) { this.appType = appType; }
         public Boolean getEnabled() { return enabled; }
         public void setEnabled(Boolean enabled) { this.enabled = enabled; }
     }
@@ -54,6 +62,7 @@ public class TemuSelfAppDTO {
         private String appName;
         private String appKey;
         private String appSecretMasked;
+        private String appType;
         private String createdAt;
         private String updatedAt;
 
@@ -67,6 +76,8 @@ public class TemuSelfAppDTO {
         public void setAppKey(String appKey) { this.appKey = appKey; }
         public String getAppSecretMasked() { return appSecretMasked; }
         public void setAppSecretMasked(String appSecretMasked) { this.appSecretMasked = appSecretMasked; }
+        public String getAppType() { return appType; }
+        public void setAppType(String appType) { this.appType = appType; }
         public String getCreatedAt() { return createdAt; }
         public void setCreatedAt(String createdAt) { this.createdAt = createdAt; }
         public String getUpdatedAt() { return updatedAt; }

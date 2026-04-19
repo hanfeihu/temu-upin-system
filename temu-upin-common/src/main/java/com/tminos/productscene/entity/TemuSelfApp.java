@@ -37,6 +37,11 @@ public class TemuSelfApp {
     @Column(name = "app_secret", nullable = false, length = 512)
     private String appSecret;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "app_type", length = 32)
+    @Builder.Default
+    private TemuAppType appType = TemuAppType.PRODUCT;
+
     @Builder.Default
     @Column(nullable = false)
     private Boolean enabled = true;
@@ -56,5 +61,6 @@ public class TemuSelfApp {
     public String getAppName() { return appName; }
     public String getAppKey() { return appKey; }
     public String getAppSecret() { return appSecret; }
+    public TemuAppType getAppType() { return appType == null ? TemuAppType.PRODUCT : appType; }
     public Boolean getEnabled() { return enabled; }
 }

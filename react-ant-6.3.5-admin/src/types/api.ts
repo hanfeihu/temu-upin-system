@@ -54,17 +54,111 @@ export interface ProductCollectionRow {
 
 export interface ProductCollectionDetailVO {
   id: number;
+  createdAt: string | number[] | null;
+  createdBy: number | null;
+  deleted: boolean | null;
+  updatedAt: string | number[] | null;
+  updatedBy: number | null;
+  version: number | null;
+  annualSales: string | null;
+  attributesData: string | null;
+  carouselImages: string | null;
+  collectCount: number | null;
+  collectionStatus: number | null;
+  execStatus: number | null;
+  execResult: string | null;
+  lastPublishRunId: number | null;
+  collectionTime: string | number[] | null;
+  companyLocation: string | null;
+  companyName: string | null;
   productId: string;
+  detailImages: string | null;
+  hasSevereInventory: boolean | null;
+  maxPrice: number | null;
+  minPrice: number | null;
+  monthlyConsignment: string | null;
+  monthlySales: string | null;
+  moq: number | null;
+  netWeight: number | null;
+  originalCategory: string | null;
+  originalContent: string | null;
+  packagingDimensions: string | null;
+  packagingHeight: number | null;
+  packagingLength: number | null;
+  packagingWeight: number | null;
+  packagingWidth: number | null;
+  productCategory: string | null;
+  productMainImage: string | null;
   productName: string;
+  productUrl: string | null;
+  ratingScore: number | null;
+  repeatCustomerRate: number | null;
+  reviewCount: number | null;
+  serviceScore: number | null;
+  shippingLocation: string | null;
+  skuData: string | null;
+  skuModel: string | null;
   sourcePlatform: string;
   temuCatid: string | null;
   temuCatname: string | null;
   temuAttributes: string | null;
-  temuOptimizedTitleEn?: string | null;
-  temuOptimizedTitleZh?: string | null;
-  temuCategoryKeywords?: string | null;
+  temuOptimizedTitleEn: string | null;
+  temuOptimizedTitleZh: string | null;
+  temuCategoryKeywords: string | null;
+  carouselThumbImages: string | null;
+  carouselVideo: string | null;
+  baseFreight: number | null;
+  customMadeSpecs: string | null;
+  shippingServicesInfo: string | null;
+  moqText: string | null;
+  priceSteps: string | null;
+  alibabaProductId: string | null;
+  originalHtml: string | null;
   targetShopIds: string[];
   targetShopNames: string[];
+  temuSkus: ProductCollectionTemuSkuVO[];
+  skuPropsExt: ProductCollectionSkuPropVO[];
+  skuRows: ProductCollectionSkuRowVO[];
+}
+
+export interface ProductCollectionSkuPropValueVO {
+  id: number;
+  value: string | null;
+  image: string | null;
+  sort: number | null;
+}
+
+export interface ProductCollectionSkuPropVO {
+  id: number;
+  fid: number | null;
+  name: string | null;
+  sort: number | null;
+  values: ProductCollectionSkuPropValueVO[];
+}
+
+export interface ProductCollectionSkuRowVO {
+  id: number;
+  skuId: string | null;
+  specKey: string | null;
+  specJson: string | null;
+  stock: number | null;
+  price: number | null;
+  image: string | null;
+}
+
+export interface ProductCollectionTemuSkuVO {
+  id: number;
+  temuSkuId: string | null;
+  originSkuId: string | null;
+  specKey: string | null;
+  specJson: string | null;
+  image: string | null;
+  originPrice: number | null;
+  supplyPrice: number | null;
+  weightG: number | null;
+  lengthCm: number | null;
+  widthCm: number | null;
+  heightCm: number | null;
 }
 
 export interface TemuCategoryOption {
@@ -108,6 +202,7 @@ export interface TemuAppVO {
   appName: string;
   appKey: string;
   appSecretMasked: string | null;
+  appType: string | null;
   createdAt: string | null;
   updatedAt: string | null;
 }
@@ -116,6 +211,7 @@ export interface TemuAppPayload {
   appName: string;
   appKey: string;
   appSecret?: string;
+  appType?: string;
   enabled: boolean;
 }
 
@@ -124,9 +220,13 @@ export interface TemuShopVO {
   enabled: boolean;
   shopName: string;
   shopId: string;
-  tokenMasked: string | null;
-  appId: number;
-  appName: string;
+  productTokenMasked: string | null;
+  orderTokenMasked: string | null;
+  productAppId: number | null;
+  productAppName: string | null;
+  orderAppId: number | null;
+  orderAppName: string | null;
+  dianxiaomiCookieMasked: string | null;
   siteId: number;
   warehouseId: string;
   defaultStock: number;
@@ -143,7 +243,10 @@ export interface TemuShopPayload {
   shopName: string;
   shopId: string;
   token?: string;
+  orderToken?: string;
+  dianxiaomiCookie?: string;
   appId: number | null;
+  orderAppId?: number | null;
   enabled: boolean;
   siteId: number | null;
   warehouseId: string;
@@ -153,6 +256,166 @@ export interface TemuShopPayload {
   originRegion2Id: number | null;
   freightTemplateId: string;
   shipmentLimitSecond: number | null;
+}
+
+export interface TemuOrderLogisticsVO {
+  providerCode: string | null;
+  providerName: string | null;
+  referenceNo: string | null;
+  shippingMethodNo: string | null;
+  trackingNumber: string | null;
+  destinationCountry: string | null;
+  trackStatus: string | null;
+  trackStatusName: string | null;
+  grossWeight: number | null;
+  volumeWeight: number | null;
+  chargeWeight: number | null;
+  firstLegLogisticsFee: number | null;
+  trackDetailsJson: string | null;
+  orderFeeDetailJson: string | null;
+  orderWeightInfoJson: string | null;
+  lastSyncedAt: string | number[] | null;
+}
+
+export interface TemuOrderVO {
+  id: number;
+  shopRecordId: number;
+  shopId: string;
+  shopName: string | null;
+  orderSn: string;
+  parentOrderSn: string | null;
+  dianxiaomiPackageNumber: string | null;
+  goodsId: string | null;
+  goodsName: string | null;
+  spec: string | null;
+  thumbUrl: string | null;
+  quantity: number | null;
+  orderStatus: number | null;
+  parentOrderStatus: number | null;
+  orderPaymentType: string | null;
+  orderTimeMs: number | null;
+  updateTimeMs: number | null;
+  matchedSpuId: number | null;
+  matchedTemuSkuId: string | null;
+  matchedOriginSkuId: string | null;
+  matchedSkuSpecName: string | null;
+  matchedProductName: string | null;
+  matchedSupplyPrice: number | null;
+  salesQuantity: number | null;
+  aftersaleQuantity: number | null;
+  aftersaleRate: number | null;
+  signedQuantity: number | null;
+  signedAftersaleQuantity: number | null;
+  matchStatus: string | null;
+  matchMessage: string | null;
+  logisticsTrackingNumber: string | null;
+  logisticsTrackStatusName: string | null;
+  firstLegLogisticsFee: number | null;
+  chargeWeight: number | null;
+  orderFeeDetailJson: string | null;
+  createdAt: string | number[] | null;
+  updatedAt: string | number[] | null;
+}
+
+export interface TemuOrderDetailVO extends TemuOrderVO {
+  inventoryDeductionWarehouseId: string | null;
+  inventoryDeductionWarehouseName: string | null;
+  earliestTimeGetShippingDocumentMs: number | null;
+  expectShipLatestTimeMs: number | null;
+  regionId: number | null;
+  siteId: number | null;
+  productSkusJson: string | null;
+  rawJson: string | null;
+  logistics: TemuOrderLogisticsVO | null;
+}
+
+export interface TemuOrderSyncPayload {
+  shopRecordId?: number | null;
+  fullSync?: boolean;
+  hoursBack?: number | null;
+}
+
+export interface TemuOrderSyncResultVO {
+  shopRecordId: number;
+  shopId: string;
+  shopName: string | null;
+  success: boolean;
+  totalCount: number;
+  createdCount: number;
+  updatedCount: number;
+  matchedCount: number;
+  logisticsRefreshedCount: number;
+  message: string | null;
+}
+
+export interface TemuOrderLogisticsRefreshPayload {
+  providerCode?: string;
+  referenceNo?: string;
+  shippingMethodNo?: string;
+  trackingNumber?: string;
+}
+
+export interface TemuOrderAftersaleVO {
+  id: number;
+  shopRecordId: number;
+  shopId: string;
+  shopName: string | null;
+  parentAfterSalesSn: string;
+  parentOrderSn: string | null;
+  afterSalesStatusGroup: number | null;
+  afterSalesStatusGroupName: string | null;
+  parentAfterSalesStatus: number | null;
+  parentAfterSalesStatusName: string | null;
+  afterSalesType: number | null;
+  afterSalesTypeName: string | null;
+  createAtMs: number | null;
+  updateAtMs: number | null;
+  createdAt: string | number[] | null;
+  updatedAt: string | number[] | null;
+}
+
+export interface TemuOrderAftersaleSyncPayload {
+  shopRecordId?: number | null;
+  fullSync?: boolean;
+  hoursBack?: number | null;
+}
+
+export interface TemuOrderAftersaleSyncResultVO {
+  shopRecordId: number;
+  shopId: string;
+  shopName: string | null;
+  success: boolean;
+  totalCount: number;
+  createdCount: number;
+  updatedCount: number;
+  message: string | null;
+}
+
+export interface LogisticsProviderConfigVO {
+  id: number;
+  providerCode: string;
+  providerName: string;
+  enabled: boolean;
+  baseUrl: string | null;
+  appTokenMasked: string | null;
+  appKeyMasked: string | null;
+  connectTimeoutMs: number | null;
+  readTimeoutMs: number | null;
+  extraConfigJson: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+export interface LogisticsProviderConfigPayload {
+  providerCode: string;
+  providerName: string;
+  enabled: boolean;
+  baseUrl?: string;
+  appToken?: string;
+  appKey?: string;
+  connectTimeoutMs?: number | null;
+  readTimeoutMs?: number | null;
+  extraConfigJson?: string;
 }
 
 export interface ProductDraftListItem {
@@ -390,6 +653,30 @@ export interface SyncTaskCreatePayload {
   priceAdjustSyncMode?: string;
 }
 
+export interface SyncGoodsRepairFailedPageVO {
+  page: number | null;
+  errorMessage?: string | null;
+  error?: string | null;
+}
+
+export interface SyncGoodsRepairJobVO {
+  jobId: string | null;
+  status: string | null;
+  shopId: string | null;
+  pageSize: number | null;
+  concurrency: number | null;
+  totalPages: number | null;
+  submittedPages: number | null;
+  completedPages: number | null;
+  runningPages: number[] | null;
+  scanned: number | null;
+  repaired: number | null;
+  skipped: number | null;
+  failedPages: SyncGoodsRepairFailedPageVO[] | null;
+  lastProgressAt: string | number[] | null;
+  message: string | null;
+}
+
 export interface SyncGoodsSiteItemVO {
   siteId: number | null;
   siteName: string | null;
@@ -464,6 +751,8 @@ export interface SyncGoodsListItemVO {
   matchJitMode: boolean | null;
   selectStatus: number | null;
   skuCount: number | null;
+  site100MinSupplierPrice: number | null;
+  site100MaxSupplierPrice: number | null;
   syncedAt: string | number[] | null;
 }
 

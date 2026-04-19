@@ -4,7 +4,7 @@ import type { ApiResponse } from '@/types/api';
 
 const TOKEN_KEY = 'temu-upin-auth-token';
 const USER_KEY = 'temu-upin-auth-user';
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? (import.meta.env.DEV ? '/api' : '');
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api';
 
 export function getToken() {
   return localStorage.getItem(TOKEN_KEY) || '';

@@ -72,7 +72,10 @@ public class TemuShopService {
         String name = trim(req.getShopName());
         String shopId = trim(req.getShopId());
         String token = trim(req.getToken());
+        String orderToken = trim(req.getOrderToken());
+        String dianxiaomiCookie = trim(req.getDianxiaomiCookie());
         Long appId = req.getAppId();
+        Long orderAppId = req.getOrderAppId();
 
         if (!StringUtils.hasText(name)) throw new IllegalArgumentException("店铺名称不能为空");
         if (!StringUtils.hasText(shopId)) throw new IllegalArgumentException("店铺ID不能为空");
@@ -88,6 +91,12 @@ public class TemuShopService {
         e.setShopId(shopId);
         e.setToken(token);
         e.setApp(app);
+        e.setOrderToken(orderToken);
+        e.setDianxiaomiCookie(dianxiaomiCookie);
+        if (orderAppId != null) {
+            TemuSelfApp orderApp = appRepo.findById(orderAppId).orElseThrow(() -> new EntityNotFoundException("order app not found"));
+            e.setOrderApp(orderApp);
+        }
         applyPublishConfig(
                 e,
                 req.getSiteId(),
@@ -122,10 +131,26 @@ public class TemuShopService {
         String token = trim(req.getToken());
         if (StringUtils.hasText(token)) e.setToken(token);
 
+        String orderToken = trim(req.getOrderToken());
+        if (StringUtils.hasText(orderToken)) {
+            e.setOrderToken(orderToken);
+        }
+        String dianxiaomiCookie = trim(req.getDianxiaomiCookie());
+        if (StringUtils.hasText(dianxiaomiCookie)) {
+            e.setDianxiaomiCookie(dianxiaomiCookie);
+        }
+
         Long appId = req.getAppId();
         if (appId == null) throw new IllegalArgumentException("应用ID不能为空");
         TemuSelfApp app = appRepo.findById(appId).orElseThrow(() -> new EntityNotFoundException("app not found"));
         e.setApp(app);
+
+        if (req.getOrderAppId() != null) {
+            TemuSelfApp orderApp = appRepo.findById(req.getOrderAppId()).orElseThrow(() -> new EntityNotFoundException("order app not found"));
+            e.setOrderApp(orderApp);
+        } else {
+            e.setOrderApp(null);
+        }
 
         applyPublishConfig(
                 e,
@@ -162,12 +187,30 @@ public class TemuShopService {
     }
 
     @Transactional(readOnly = true)
+    public TemuShop getEnabledShopByIdOrThrow(Long id) {
+        if (id == null) {
+            throw new IllegalStateException("TEMU 店铺记录ID为空");
+        }
+        TemuShop shop = repo.findById(id)
+                .orElseThrow(() -> new IllegalStateException("未找到对应的 TEMU 店铺记录: " + id));
+        if (!Boolean.TRUE.equals(shop.getEnabled())) {
+            throw new IllegalStateException("TEMU 店铺未启用: " + id);
+        }
+        return shop;
+    }
+
+    @Transactional(readOnly = true)
     public TemuShop getAnyEnabledShopOrThrow() {
         List<TemuShop> shops = repo.findByEnabledOrderByIdDesc(true);
         if (shops == null || shops.isEmpty()) {
             throw new IllegalStateException("未找到启用中的 TEMU 店铺，请先在【TEMU 店铺管理】中创建并启用店铺");
         }
         return shops.get(0);
+    }
+
+    @Transactional(readOnly = true)
+    public List<TemuShop> listEnabledShops() {
+        return repo.findByEnabledOrderByIdDesc(true);
     }
 
     @Transactional(readOnly = true)
@@ -187,6 +230,10 @@ public class TemuShopService {
         String s = token.trim();
         if (s.length() <= 10) return "********";
         return s.substring(0, 3) + "********" + s.substring(s.length() - 3);
+    }
+
+    private static String maskCookie(String cookie) {
+        return StringUtils.hasText(trim(cookie)) ? "已配置" : "";
     }
 
     private static void applyPublishConfig(TemuShop shop,
@@ -252,11 +299,17 @@ public class TemuShopService {
         v.setEnabled(e.getEnabled());
         v.setShopName(e.getShopName());
         v.setShopId(e.getShopId());
-        v.setTokenMasked(mask(e.getToken()));
+        v.setProductTokenMasked(mask(e.getToken()));
+        v.setOrderTokenMasked(mask(e.getOrderToken()));
+        v.setDianxiaomiCookieMasked(maskCookie(e.getDianxiaomiCookie()));
         try {
             if (e.getApp() != null) {
-                v.setAppId(e.getApp().getId());
-                v.setAppName(e.getApp().getAppName());
+                v.setProductAppId(e.getApp().getId());
+                v.setProductAppName(e.getApp().getAppName());
+            }
+            if (e.getOrderApp() != null) {
+                v.setOrderAppId(e.getOrderApp().getId());
+                v.setOrderAppName(e.getOrderApp().getAppName());
             }
         } catch (Exception ignored) {
         }

@@ -1,0 +1,55 @@
+.temu-orders-table .ant-table-tbody > tr > td {
+  vertical-align: top;
+}
+
+.temu-orders-cell {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.temu-orders-order-cell .ant-tag {
+  width: fit-content;
+}
+
+.temu-orders-goods {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.temu-orders-goods .ant-image {
+  flex: 0 0 48px;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.temu-orders-goods-content {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.temu-orders-title,
+.temu-orders-subtext {
+  margin-bottom: 0;
+}
+
+.temu-orders-title {
+  color: rgba(0, 0, 0, 0.88);
+  font-weight: 500;
+}
+
+.temu-orders-subtext {
+  color: rgba(0, 0, 0, 0.45);
+}
+
+@media (max-width: 1400px) {
+  .temu-orders-table .ant-table-tbody > tr > td {
+    padding-inline: 12px;
+  }
+}

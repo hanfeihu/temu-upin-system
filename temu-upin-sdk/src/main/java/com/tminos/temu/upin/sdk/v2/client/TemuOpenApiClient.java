@@ -64,7 +64,14 @@ public class TemuOpenApiClient {
     }
 
     public String callApi(String apiType, Map<String, Object> bizParams, String routerUrl) throws Exception {
-        Map<String, Object> params = baseParams(apiType);
+        return callApi(apiType, bizParams, routerUrl, true);
+    }
+
+    public String callApi(String apiType,
+                          Map<String, Object> bizParams,
+                          String routerUrl,
+                          boolean includeMallId) throws Exception {
+        Map<String, Object> params = baseParams(apiType, includeMallId);
         if (bizParams != null) {
             for (Map.Entry<String, Object> e : bizParams.entrySet()) {
                 if (!isReservedKey(e.getKey())) {
@@ -87,7 +94,14 @@ public class TemuOpenApiClient {
     }
 
     public ApiResult callApiParsed(String apiType, Map<String, Object> bizParams, String routerUrl) throws Exception {
-        String raw = callApi(apiType, bizParams, routerUrl);
+        return callApiParsed(apiType, bizParams, routerUrl, true);
+    }
+
+    public ApiResult callApiParsed(String apiType,
+                                   Map<String, Object> bizParams,
+                                   String routerUrl,
+                                   boolean includeMallId) throws Exception {
+        String raw = callApi(apiType, bizParams, routerUrl, includeMallId);
         return parseResult(raw);
     }
 
@@ -130,14 +144,19 @@ public class TemuOpenApiClient {
             if (map == null) return new ApiResult(false, "Empty response", null, null);
 
             boolean success = false;
-            Object errorCode = map.get("errorCode");
+            Object errorCode = map.containsKey("errorCode") ? map.get("errorCode") : map.get("error_code");
             if (errorCode instanceof Number n && n.intValue() == 1000000) {
+                success = true;
+            }
+            if (errorCode instanceof String s && "1000000".equals(s.trim())) {
                 success = true;
             }
             Object successFlag = map.get("success");
             if (Boolean.TRUE.equals(successFlag)) success = true;
 
-            String errorMsg = map.get("errorMsg") instanceof String s ? s : null;
+            String errorMsg = map.get("errorMsg") instanceof String s
+                    ? s
+                    : map.get("error_msg") instanceof String snake ? snake : null;
             Object result = map.get("result");
 
             return new ApiResult(success, errorMsg, result, raw);
@@ -148,12 +167,12 @@ public class TemuOpenApiClient {
 
     // ==================== 内部方法 ====================
 
-    private Map<String, Object> baseParams(String apiType) {
+    private Map<String, Object> baseParams(String apiType, boolean includeMallId) {
         Map<String, Object> m = new HashMap<>();
         m.put("type", apiType);
         m.put("app_key", creds.getAppKey());
         m.put("access_token", creds.getAccessToken());
-        if (creds.getShopId() != null && !creds.getShopId().isBlank()) {
+        if (includeMallId && creds.getShopId() != null && !creds.getShopId().isBlank()) {
             m.put("mall_id", creds.getShopId());
         }
         m.put("data_type", DATA_TYPE);

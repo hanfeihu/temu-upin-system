@@ -20,7 +20,7 @@ public class TemuOpenApiCredentialService {
 
     @Transactional(readOnly = true)
     public TemuOpenApiCredentials getDefaultTemuOpenApiCredentialsOrThrow() {
-        return toCredentials(shopService.getAnyEnabledShopOrThrow());
+        return toProductCredentials(shopService.getAnyEnabledShopOrThrow());
     }
 
     @Transactional(readOnly = true)
@@ -36,18 +36,56 @@ public class TemuOpenApiCredentialService {
         if (!StringUtils.hasText(shopId)) {
             throw new IllegalStateException("商品未绑定店铺，无法获取 TEMU 发布凭证");
         }
-        return toCredentials(shopService.getEnabledShopByShopIdOrThrow(shopId));
+        return toProductCredentials(shopService.getEnabledShopByShopIdOrThrow(shopId));
     }
 
-    private TemuOpenApiCredentials toCredentials(TemuShop shop) {
+    @Transactional(readOnly = true)
+    public TemuOpenApiCredentials getOrderTemuOpenApiCredentialsByShopIdOrThrow(String shopId) {
+        if (!StringUtils.hasText(shopId)) {
+            return getDefaultOrderTemuOpenApiCredentialsOrThrow();
+        }
+        return getOrderTemuOpenApiCredentialsByExactShopIdOrThrow(shopId);
+    }
+
+    @Transactional(readOnly = true)
+    public TemuOpenApiCredentials getOrderTemuOpenApiCredentialsByExactShopIdOrThrow(String shopId) {
+        if (!StringUtils.hasText(shopId)) {
+            throw new IllegalStateException("商品未绑定店铺，无法获取 TEMU 订单凭证");
+        }
+        return toOrderCredentials(shopService.getEnabledShopByShopIdOrThrow(shopId));
+    }
+
+    @Transactional(readOnly = true)
+    public TemuOpenApiCredentials getDefaultOrderTemuOpenApiCredentialsOrThrow() {
+        return toOrderCredentials(shopService.getAnyEnabledShopOrThrow());
+    }
+
+    private TemuOpenApiCredentials toProductCredentials(TemuShop shop) {
         TemuSelfApp app = null;
         try {
             app = shop.getApp();
         } catch (Exception ignored) {
         }
 
-        String shopId = shop.getShopId();
-        String token = shop.getToken();
+        return buildCredentials(shop, app, shop == null ? null : shop.getToken(), "TEMU 店铺产品TOKEN为空");
+    }
+
+    private TemuOpenApiCredentials toOrderCredentials(TemuShop shop) {
+        TemuSelfApp app = null;
+        String token = null;
+        try {
+            app = shop.getOrderApp() != null ? shop.getOrderApp() : shop.getApp();
+            token = StringUtils.hasText(shop.getOrderToken()) ? shop.getOrderToken() : shop.getToken();
+        } catch (Exception ignored) {
+        }
+        return buildCredentials(shop, app, token, "TEMU 店铺订单TOKEN为空");
+    }
+
+    private TemuOpenApiCredentials buildCredentials(TemuShop shop,
+                                                    TemuSelfApp app,
+                                                    String token,
+                                                    String tokenEmptyMessage) {
+        String shopId = shop == null ? null : shop.getShopId();
         String appKey = app == null ? null : app.getAppKey();
         String appSecret = app == null ? null : app.getAppSecret();
 
@@ -55,7 +93,7 @@ public class TemuOpenApiCredentialService {
             throw new IllegalStateException("TEMU 店铺ID为空");
         }
         if (!StringUtils.hasText(token)) {
-            throw new IllegalStateException("TEMU 店铺TOKEN为空");
+            throw new IllegalStateException(tokenEmptyMessage);
         }
         if (!StringUtils.hasText(appKey)) {
             throw new IllegalStateException("TEMU 应用 appKey 为空");

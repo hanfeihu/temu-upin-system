@@ -39,6 +39,14 @@ public class TemuShop {
     @Column(name = "token", nullable = false, length = 2000)
     private String token;
 
+    /** TEMU order API token for this shop */
+    @Column(name = "order_token", length = 2000)
+    private String orderToken;
+
+    /** 店小秘登录 cookie，用于按 PO 查询包裹号 */
+    @Column(name = "dianxiaomi_cookie", columnDefinition = "TEXT")
+    private String dianxiaomiCookie;
+
     @Column(name = "site_id", nullable = false)
     private Integer siteId;
 
@@ -67,6 +75,10 @@ public class TemuShop {
     @JoinColumn(name = "app_id", nullable = false)
     private TemuSelfApp app;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "order_app_id")
+    private TemuSelfApp orderApp;
+
     @Builder.Default
     @Column(nullable = false)
     private Boolean enabled = true;
@@ -86,6 +98,8 @@ public class TemuShop {
     public String getShopName() { return shopName; }
     public String getShopId() { return shopId; }
     public String getToken() { return token; }
+    public String getOrderToken() { return orderToken; }
+    public String getDianxiaomiCookie() { return dianxiaomiCookie; }
     public Integer getSiteId() { return siteId; }
     public String getWarehouseId() { return warehouseId; }
     public Integer getSkuDefaultStock() { return skuDefaultStock; }
@@ -95,5 +109,6 @@ public class TemuShop {
     public String getFreightTemplateId() { return freightTemplateId; }
     public Integer getShipmentLimitSecond() { return shipmentLimitSecond; }
     public TemuSelfApp getApp() { return app; }
+    public TemuSelfApp getOrderApp() { return orderApp; }
     public Boolean getEnabled() { return enabled; }
 }

@@ -1,6 +1,7 @@
 package com.tminos.productscene.service;
 
 import com.tminos.productscene.dto.TemuSelfAppDTO;
+import com.tminos.productscene.entity.TemuAppType;
 import com.tminos.productscene.entity.TemuSelfApp;
 import com.tminos.productscene.repository.TemuSelfAppRepository;
 import jakarta.persistence.EntityNotFoundException;
@@ -47,6 +48,7 @@ public class TemuSelfAppService {
         e.setAppName(name);
         e.setAppKey(key);
         e.setAppSecret(secret);
+        e.setAppType(parseAppType(req.getAppType()));
         if (req.getEnabled() != null) e.setEnabled(req.getEnabled());
         return toView(repo.save(e));
     }
@@ -68,6 +70,7 @@ public class TemuSelfAppService {
 
         e.setAppName(name);
         e.setAppKey(key);
+        e.setAppType(parseAppType(req.getAppType()));
 
         String secret = trim(req.getAppSecret());
         if (StringUtils.hasText(secret)) {
@@ -105,8 +108,20 @@ public class TemuSelfAppService {
         v.setAppName(e.getAppName());
         v.setAppKey(e.getAppKey());
         v.setAppSecretMasked(mask(e.getAppSecret()));
+        v.setAppType((e.getAppType() == null ? TemuAppType.PRODUCT : e.getAppType()).name());
         if (e.getCreatedAt() != null) v.setCreatedAt(e.getCreatedAt().format(FMT));
         if (e.getUpdatedAt() != null) v.setUpdatedAt(e.getUpdatedAt().format(FMT));
         return v;
+    }
+
+    private static TemuAppType parseAppType(String raw) {
+        if (!StringUtils.hasText(raw)) {
+            return TemuAppType.PRODUCT;
+        }
+        try {
+            return TemuAppType.valueOf(raw.trim().toUpperCase());
+        } catch (Exception ignored) {
+            throw new IllegalArgumentException("应用类型不合法，仅支持 PRODUCT / ORDER");
+        }
     }
 }

@@ -10,13 +10,12 @@ import {
   Modal,
   Select,
   Space,
-  Switch,
   Table,
   Tag,
   Typography,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { temuAppsApi } from '@/api/temuApps';
 import { temuShopsApi } from '@/api/temuShops';
 import type { TemuAppVO, TemuShopPayload, TemuShopVO } from '@/types/api';
@@ -37,7 +36,10 @@ const initialEditForm: TemuShopPayload & { id: number | null } = {
   shopName: '',
   shopId: '',
   token: '',
+  orderToken: '',
+  dianxiaomiCookie: '',
   appId: null,
+  orderAppId: null,
   enabled: true,
   siteId: SHOP_DEFAULTS.siteId,
   warehouseId: SHOP_DEFAULTS.warehouseId,
@@ -49,6 +51,13 @@ const initialEditForm: TemuShopPayload & { id: number | null } = {
   shipmentLimitSecond: SHOP_DEFAULTS.shipmentLimitSecond,
 };
 
+const appLabel = (record?: TemuAppVO | null) => {
+  if (!record) {
+    return '-';
+  }
+  return `${record.appName}（${record.appKey}）`;
+};
+
 const TemuShopsPage = () => {
   const { message } = App.useApp();
   const [loading, setLoading] = useState(false);
@@ -58,6 +67,15 @@ const TemuShopsPage = () => {
   const [editOpen, setEditOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editForm, setEditForm] = useState(initialEditForm);
+
+  const productApps = useMemo(
+    () => apps.filter((item) => !item.appType || item.appType === 'PRODUCT'),
+    [apps],
+  );
+  const orderApps = useMemo(
+    () => apps.filter((item) => item.appType === 'ORDER'),
+    [apps],
+  );
 
   async function loadApps() {
     setAppsLoading(true);
@@ -87,10 +105,7 @@ const TemuShopsPage = () => {
   }, []);
 
   function updateForm<K extends keyof typeof editForm>(key: K, value: (typeof editForm)[K]) {
-    setEditForm((current) => ({
-      ...current,
-      [key]: value,
-    }));
+    setEditForm((current) => ({ ...current, [key]: value }));
   }
 
   function openCreate() {
@@ -104,7 +119,10 @@ const TemuShopsPage = () => {
       shopName: record.shopName || '',
       shopId: record.shopId || '',
       token: '',
-      appId: record.appId,
+      orderToken: '',
+      dianxiaomiCookie: '',
+      appId: record.productAppId,
+      orderAppId: record.orderAppId ?? null,
       enabled: !!record.enabled,
       siteId: record.siteId ?? null,
       warehouseId: record.warehouseId || '',
@@ -121,8 +139,8 @@ const TemuShopsPage = () => {
   function validateForm() {
     if (!editForm.shopName.trim()) return '店铺名称不能为空';
     if (!editForm.shopId.trim()) return '店铺ID不能为空';
-    if (!editForm.id && !editForm.token?.trim()) return 'TOKEN 不能为空';
-    if (!editForm.appId) return '应用不能为空';
+    if (!editForm.id && !editForm.token?.trim()) return '产品 TOKEN 不能为空';
+    if (!editForm.appId) return '产品应用不能为空';
     if (!editForm.siteId) return '站点 ID 不能为空';
     if (!editForm.warehouseId.trim()) return '仓库 ID 不能为空';
     if (!editForm.defaultStock) return '默认库存不能为空';
@@ -147,7 +165,10 @@ const TemuShopsPage = () => {
         shopName: editForm.shopName.trim(),
         shopId: editForm.shopId.trim(),
         token: editForm.token?.trim() || undefined,
+        orderToken: editForm.orderToken?.trim() || undefined,
+        dianxiaomiCookie: editForm.dianxiaomiCookie?.trim() || undefined,
         appId: editForm.appId,
+        orderAppId: editForm.orderAppId ?? undefined,
         enabled: !!editForm.enabled,
         siteId: editForm.siteId,
         warehouseId: editForm.warehouseId.trim(),
@@ -199,8 +220,8 @@ const TemuShopsPage = () => {
   const columns: ColumnsType<TemuShopVO> = [
     {
       title: '店铺',
-      key: 'shopName',
-      width: 260,
+      key: 'shop',
+      width: 240,
       render: (_, record) => (
         <Space direction="vertical" size={2}>
           <Typography.Text strong>{record.shopName || '-'}</Typography.Text>
@@ -208,11 +229,43 @@ const TemuShopsPage = () => {
         </Space>
       ),
     },
-    { title: '应用', dataIndex: 'appName', key: 'appName', width: 220 },
+    {
+      title: '产品凭证',
+      key: 'productCredential',
+      width: 260,
+      render: (_, record) => (
+        <Space direction="vertical" size={2}>
+          <Typography.Text>{record.productAppName || '-'}</Typography.Text>
+          <Typography.Text type="secondary">{record.productTokenMasked || '未设置'}</Typography.Text>
+        </Space>
+      ),
+    },
+    {
+      title: '订单凭证',
+      key: 'orderCredential',
+      width: 260,
+      render: (_, record) => (
+        <Space direction="vertical" size={2}>
+          <Typography.Text>{record.orderAppName || '沿用产品应用'}</Typography.Text>
+          <Typography.Text type="secondary">{record.orderTokenMasked || '沿用产品 TOKEN'}</Typography.Text>
+        </Space>
+      ),
+    },
+    {
+      title: '店小秘',
+      key: 'dianxiaomi',
+      width: 180,
+      render: (_, record) => (
+        <Space direction="vertical" size={2}>
+          <Typography.Text>{record.dianxiaomiCookieMasked ? '已配置 Cookie' : '未配置'}</Typography.Text>
+          <Typography.Text type="secondary">PO 查询包裹号</Typography.Text>
+        </Space>
+      ),
+    },
     {
       title: '发布配置',
       key: 'publishConfig',
-      width: 520,
+      width: 420,
       render: (_, record) => (
         <Space size={[6, 6]} wrap>
           <Tag>站点 {record.siteId ?? '-'}</Tag>
@@ -220,20 +273,9 @@ const TemuShopsPage = () => {
           <Tag>
             库存 {record.defaultStock ?? '-'} / {record.maxStock ?? '-'}
           </Tag>
-          <Tag>
-            产地 {record.originRegion1ShortName || '-'} / {record.originRegion2Id ?? '-'}
-          </Tag>
-          <Tag>运费模板 {record.freightTemplateId || '-'}</Tag>
-          <Tag>发货时限 {record.shipmentLimitSecond ?? '-'}s</Tag>
+          <Tag>模板 {record.freightTemplateId || '-'}</Tag>
         </Space>
       ),
-    },
-    {
-      title: 'TOKEN',
-      dataIndex: 'tokenMasked',
-      key: 'tokenMasked',
-      width: 180,
-      render: (value: string | null) => value || '-',
     },
     {
       title: '启用',
@@ -265,8 +307,8 @@ const TemuShopsPage = () => {
       <Alert
         type="info"
         showIcon
-        message="平台配置已并入店铺配置"
-        description="发布站点、仓库、库存、产地、运费模板和发货时限现在都跟随店铺保存，发布商品时会按商品绑定店铺读取。"
+        message="发布与订单凭证已分离"
+        description="产品上架继续使用产品应用与产品 TOKEN；订单同步可单独配置订单应用与订单 TOKEN，不填时会自动回退到产品凭证。店小秘 Cookie 用于按 PO 自动查询包裹号并联动浩远物流。"
       />
 
       <Card>
@@ -287,7 +329,7 @@ const TemuShopsPage = () => {
           dataSource={rows}
           loading={loading}
           pagination={false}
-          scroll={{ x: 1600 }}
+          scroll={{ x: 1500 }}
         />
       </Card>
 
@@ -296,20 +338,33 @@ const TemuShopsPage = () => {
         title={editForm.id ? '编辑店铺' : '新增店铺'}
         confirmLoading={saving}
         width={920}
-        onOk={() => {
-          void save();
-        }}
+        onOk={() => void save()}
         onCancel={() => setEditOpen(false)}
       >
         <Form layout="vertical">
-          <Typography.Title level={5}>店铺凭证</Typography.Title>
+          <Typography.Title level={5}>基础信息</Typography.Title>
           <Form.Item label="店铺名称" required>
             <Input value={editForm.shopName} onChange={(event) => updateForm('shopName', event.target.value)} />
           </Form.Item>
           <Form.Item label="店铺ID" required>
             <Input value={editForm.shopId} onChange={(event) => updateForm('shopId', event.target.value)} />
           </Form.Item>
-          <Form.Item label="TOKEN" required={!editForm.id}>
+
+          <Divider />
+
+          <Typography.Title level={5}>产品凭证</Typography.Title>
+          <Form.Item label="产品应用" required>
+            <Select
+              value={editForm.appId}
+              onChange={(value) => updateForm('appId', value)}
+              options={productApps.map((item) => ({ value: item.id, label: appLabel(item) }))}
+              loading={appsLoading}
+              showSearch
+              optionFilterProp="label"
+              placeholder="请选择产品应用"
+            />
+          </Form.Item>
+          <Form.Item label="产品 TOKEN" required={!editForm.id}>
             <Input.Password
               value={editForm.token}
               onChange={(event) => updateForm('token', event.target.value)}
@@ -317,27 +372,47 @@ const TemuShopsPage = () => {
               autoComplete="new-password"
             />
           </Form.Item>
-          <Form.Item label="应用" required>
+
+          <Divider />
+
+          <Typography.Title level={5}>订单凭证</Typography.Title>
+          <Form.Item label="订单应用">
             <Select
-              value={editForm.appId}
-              onChange={(value) => updateForm('appId', value)}
-              options={apps.map((item) => ({
-                value: item.id,
-                label: `${item.appName}（${item.appKey}）`,
-              }))}
+              allowClear
+              value={editForm.orderAppId ?? undefined}
+              onChange={(value) => updateForm('orderAppId', value ?? null)}
+              options={orderApps.map((item) => ({ value: item.id, label: appLabel(item) }))}
               loading={appsLoading}
               showSearch
               optionFilterProp="label"
-              placeholder="请选择应用"
+              placeholder="不选则沿用产品应用"
             />
           </Form.Item>
-          <Form.Item label="启用">
-            <Switch checked={editForm.enabled} onChange={(checked) => updateForm('enabled', checked)} />
+          <Form.Item label="订单 TOKEN">
+            <Input.Password
+              value={editForm.orderToken}
+              onChange={(event) => updateForm('orderToken', event.target.value)}
+              placeholder="留空则沿用产品 TOKEN"
+              autoComplete="new-password"
+            />
           </Form.Item>
 
           <Divider />
 
-          <Typography.Title level={5}>店铺发布配置</Typography.Title>
+          <Typography.Title level={5}>店小秘配置</Typography.Title>
+          <Form.Item label="店小秘 Cookie">
+            <Input.TextArea
+              rows={5}
+              value={editForm.dianxiaomiCookie}
+              onChange={(event) => updateForm('dianxiaomiCookie', event.target.value)}
+              placeholder="登录店小秘后，将整段 cookie 粘贴到这里；留空则不启用 PO -> 店小秘单号自动查询"
+              autoComplete="off"
+            />
+          </Form.Item>
+
+          <Divider />
+
+          <Typography.Title level={5}>发布配置</Typography.Title>
           <Form.Item label="站点 ID" required>
             <InputNumber
               value={editForm.siteId}
@@ -369,10 +444,7 @@ const TemuShopsPage = () => {
             />
           </Form.Item>
           <Form.Item label="产地区域1简称" required>
-            <Input
-              value={editForm.originRegion1ShortName}
-              onChange={(event) => updateForm('originRegion1ShortName', event.target.value)}
-            />
+            <Input value={editForm.originRegion1ShortName} onChange={(event) => updateForm('originRegion1ShortName', event.target.value)} />
           </Form.Item>
           <Form.Item label="产地区域2 ID" required>
             <InputNumber
@@ -384,18 +456,25 @@ const TemuShopsPage = () => {
             />
           </Form.Item>
           <Form.Item label="运费模板 ID" required>
-            <Input
-              value={editForm.freightTemplateId}
-              onChange={(event) => updateForm('freightTemplateId', event.target.value)}
-            />
+            <Input value={editForm.freightTemplateId} onChange={(event) => updateForm('freightTemplateId', event.target.value)} />
           </Form.Item>
-          <Form.Item label="发货时限秒数" required>
+          <Form.Item label="发货时限（秒）" required>
             <InputNumber
               value={editForm.shipmentLimitSecond}
               min={1}
               precision={0}
               style={{ width: '100%' }}
               onChange={(value) => updateForm('shipmentLimitSecond', value ?? null)}
+            />
+          </Form.Item>
+          <Form.Item label="启用状态">
+            <Select
+              value={editForm.enabled ? 'enabled' : 'disabled'}
+              onChange={(value) => updateForm('enabled', value === 'enabled')}
+              options={[
+                { value: 'enabled', label: '启用' },
+                { value: 'disabled', label: '禁用' },
+              ]}
             />
           </Form.Item>
         </Form>

@@ -28,6 +28,15 @@ export function formatTimestamp(value: number | null | undefined) {
   return formatDateTime(new Date(value).toISOString());
 }
 
+export function formatTimestampMinute(value: number | null | undefined) {
+  if (!value) {
+    return '-';
+  }
+  const date = new Date(value);
+  const pad = (input: number) => String(input).padStart(2, '0');
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`;
+}
+
 export function formatPrice(value: number | string | null | undefined, divisor = 100) {
   if (value === null || value === undefined || value === '') {
     return '-';

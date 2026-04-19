@@ -25,7 +25,21 @@ public interface TemuGoodsRepository extends JpaRepository<TemuGoods, Long> {
     @Query("""
             select g from TemuGoods g
             where g.shopId = :shopId
-              and (:keywordPattern is null or lower(g.productName) like :keywordPattern)
+              and (
+                :keywordPattern is null
+                or lower(g.productName) like :keywordPattern
+                or lower(str(g.productId)) like :keywordPattern
+                or lower(str(g.productSkcId)) like :keywordPattern
+                or lower(coalesce(g.extCode, '')) like :keywordPattern
+                or exists (
+                    select 1 from TemuGoodsSku sku
+                    where sku.goodsId = g.id
+                      and (
+                        lower(str(sku.productSkuId)) like :keywordPattern
+                        or lower(coalesce(sku.extCode, '')) like :keywordPattern
+                      )
+                )
+              )
               and (:skcSiteStatus is null or coalesce(g.skcSiteStatus, 0) = :skcSiteStatus)
               and ((:minSupplierPrice is null and :maxSupplierPrice is null)
                 or exists (

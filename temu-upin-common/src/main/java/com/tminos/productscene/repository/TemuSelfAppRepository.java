@@ -16,4 +16,6 @@ public interface TemuSelfAppRepository extends JpaRepository<TemuSelfApp, Long> 
     boolean existsByAppKeyAndIdNot(String appKey, Long id);
 
     boolean existsByAppNameAndIdNot(String appName, Long id);
+
+    List<TemuSelfApp> findByEnabledAndAppTypeOrderByIdDesc(Boolean enabled, com.tminos.productscene.entity.TemuAppType appType);
 }

@@ -1,8 +1,22 @@
-import { App, Button, Card, Form, Input, Modal, Space, Switch, Table, Tag } from 'antd';
+import { App, Button, Card, Form, Input, Modal, Select, Space, Table, Tag } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useState } from 'react';
 import { temuAppsApi } from '@/api/temuApps';
-import type { TemuAppVO } from '@/types/api';
+import type { TemuAppPayload, TemuAppVO } from '@/types/api';
+
+const APP_TYPE_OPTIONS = [
+  { value: 'PRODUCT', label: '产品应用' },
+  { value: 'ORDER', label: '订单应用' },
+];
+
+const appTypeText = (value?: string | null) => {
+  if (value === 'ORDER') {
+    return '订单';
+  }
+  return '产品';
+};
+
+const appTypeColor = (value?: string | null) => (value === 'ORDER' ? 'cyan' : 'blue');
 
 const TemuAppsPage = () => {
   const { message } = App.useApp();
@@ -11,10 +25,11 @@ const TemuAppsPage = () => {
   const [editOpen, setEditOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [form, setForm] = useState({
+  const [form, setForm] = useState<TemuAppPayload>({
     appName: '',
     appKey: '',
     appSecret: '',
+    appType: 'PRODUCT',
     enabled: true,
   });
 
@@ -40,6 +55,7 @@ const TemuAppsPage = () => {
       appName: '',
       appKey: '',
       appSecret: '',
+      appType: 'PRODUCT',
       enabled: true,
     });
     setEditOpen(true);
@@ -51,27 +67,41 @@ const TemuAppsPage = () => {
       appName: record.appName || '',
       appKey: record.appKey || '',
       appSecret: '',
+      appType: record.appType || 'PRODUCT',
       enabled: !!record.enabled,
     });
     setEditOpen(true);
   }
 
   async function save() {
-    if (!form.appName.trim()) return message.error('请输入应用名称');
-    if (!form.appKey.trim()) return message.error('请输入 App Key');
-    if (!editingId && !form.appSecret.trim()) return message.error('请输入 App Secret');
+    if (!form.appName.trim()) {
+      message.error('请输入应用名称');
+      return;
+    }
+    if (!form.appKey.trim()) {
+      message.error('请输入 App Key');
+      return;
+    }
+    if (!editingId && !form.appSecret?.trim()) {
+      message.error('请输入 App Secret');
+      return;
+    }
 
     setSaving(true);
     try {
-      const payload = {
+      const payload: TemuAppPayload = {
         appName: form.appName.trim(),
         appKey: form.appKey.trim(),
-        appSecret: form.appSecret.trim() || undefined,
+        appSecret: form.appSecret?.trim() || undefined,
+        appType: form.appType || 'PRODUCT',
         enabled: !!form.enabled,
       };
 
-      if (editingId) await temuAppsApi.update(editingId, payload);
-      else await temuAppsApi.create(payload);
+      if (editingId) {
+        await temuAppsApi.update(editingId, payload);
+      } else {
+        await temuAppsApi.create(payload);
+      }
 
       message.success('已保存');
       setEditOpen(false);
@@ -86,7 +116,7 @@ const TemuAppsPage = () => {
   function deleteApp(record: TemuAppVO) {
     Modal.confirm({
       title: '删除应用？',
-      content: '删除后不可恢复。',
+      content: `确认删除应用“${record.appName}”吗？`,
       okText: '删除',
       cancelText: '取消',
       okButtonProps: { danger: true },
@@ -105,6 +135,12 @@ const TemuAppsPage = () => {
 
   const columns: ColumnsType<TemuAppVO> = [
     { title: '应用名称', dataIndex: 'appName', key: 'appName' },
+    {
+      title: '类型',
+      key: 'appType',
+      width: 120,
+      render: (_, record) => <Tag color={appTypeColor(record.appType)}>{appTypeText(record.appType)}</Tag>,
+    },
     { title: 'App Key', dataIndex: 'appKey', key: 'appKey', width: 240 },
     { title: 'App Secret', dataIndex: 'appSecretMasked', key: 'appSecretMasked', width: 180 },
     {
@@ -113,7 +149,6 @@ const TemuAppsPage = () => {
       width: 90,
       render: (_, record) => <Tag color={record.enabled ? 'green' : 'default'}>{record.enabled ? '启用' : '禁用'}</Tag>,
     },
-    { title: '创建时间', dataIndex: 'createdAt', key: 'createdAt', width: 170 },
     { title: '更新时间', dataIndex: 'updatedAt', key: 'updatedAt', width: 170 },
     {
       title: '操作',
@@ -149,19 +184,45 @@ const TemuAppsPage = () => {
         <Table<TemuAppVO> rowKey="id" columns={columns} dataSource={rows} loading={loading} pagination={false} />
       </Card>
 
-      <Modal open={editOpen} title={editingId ? '编辑应用' : '新增应用'} confirmLoading={saving} width={760} onOk={() => void save()} onCancel={() => setEditOpen(false)}>
+      <Modal
+        open={editOpen}
+        title={editingId ? '编辑应用' : '新增应用'}
+        confirmLoading={saving}
+        width={720}
+        onOk={() => void save()}
+        onCancel={() => setEditOpen(false)}
+      >
         <Form layout="vertical">
           <Form.Item label="应用名称" required>
-            <Input value={form.appName} onChange={(e) => setForm((current) => ({ ...current, appName: e.target.value }))} placeholder="例如：TEMU-自研-应用A" />
+            <Input value={form.appName} onChange={(event) => setForm((current) => ({ ...current, appName: event.target.value }))} />
+          </Form.Item>
+          <Form.Item label="应用类型" required>
+            <Select
+              value={form.appType || 'PRODUCT'}
+              onChange={(value) => setForm((current) => ({ ...current, appType: value }))}
+              options={APP_TYPE_OPTIONS}
+            />
           </Form.Item>
           <Form.Item label="App Key" required>
-            <Input value={form.appKey} onChange={(e) => setForm((current) => ({ ...current, appKey: e.target.value }))} placeholder="TEMU App Key" />
+            <Input value={form.appKey} onChange={(event) => setForm((current) => ({ ...current, appKey: event.target.value }))} />
           </Form.Item>
           <Form.Item label="App Secret" required={!editingId}>
-            <Input.Password value={form.appSecret} onChange={(e) => setForm((current) => ({ ...current, appSecret: e.target.value }))} placeholder="新增必填；编辑留空表示不修改" autoComplete="new-password" />
+            <Input.Password
+              value={form.appSecret}
+              onChange={(event) => setForm((current) => ({ ...current, appSecret: event.target.value }))}
+              placeholder="新增必填；编辑留空表示不修改"
+              autoComplete="new-password"
+            />
           </Form.Item>
           <Form.Item label="启用">
-            <Switch checked={form.enabled} onChange={(checked) => setForm((current) => ({ ...current, enabled: checked }))} />
+            <Select
+              value={form.enabled ? 'enabled' : 'disabled'}
+              onChange={(value) => setForm((current) => ({ ...current, enabled: value === 'enabled' }))}
+              options={[
+                { value: 'enabled', label: '启用' },
+                { value: 'disabled', label: '禁用' },
+              ]}
+            />
           </Form.Item>
         </Form>
       </Modal>

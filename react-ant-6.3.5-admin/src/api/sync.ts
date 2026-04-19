@@ -11,6 +11,7 @@ import type {
   PriceAdjustOrderVO,
   PriceReviewBatchPayload,
   PriceReviewOrderVO,
+  SyncGoodsRepairJobVO,
   SpringPage,
   SyncConfigResponse,
   SyncGoodsDetailVO,
@@ -74,11 +75,15 @@ export const syncApi = {
   },
 
   repairGoodsDetails(shopId: string) {
-    return client.post('/sync/goods/repair-details', null, { params: { shopId } }) as Promise<ApiResponse<Record<string, unknown>>>;
+    return client.post('/sync/goods/repair-details', null, { params: { shopId } }) as Promise<ApiResponse<SyncGoodsRepairJobVO>>;
+  },
+
+  getRepairGoodsDetailsStatus(jobId: string) {
+    return client.get('/sync/goods/repair-details/status', { params: { jobId } }) as Promise<ApiResponse<SyncGoodsRepairJobVO>>;
   },
 
   getLatestRepairGoodsDetailsStatus(shopId: string) {
-    return client.get('/sync/goods/repair-details/status/latest', { params: { shopId } }) as Promise<ApiResponse<Record<string, unknown>>>;
+    return client.get('/sync/goods/repair-details/status/latest', { params: { shopId } }) as Promise<ApiResponse<SyncGoodsRepairJobVO>>;
   },
 
   getPriceReviewList(params: {

@@ -487,7 +487,7 @@ const ProductCollectionsPage = () => {
   }
 
   function openDetail(record: ProductCollectionRow) {
-    window.open(`/platform/product-collections/${record.id}`, '_blank', 'noopener,noreferrer');
+    window.open(`${window.location.origin}/goods/${record.id}`, '_blank', 'noopener,noreferrer');
   }
 
   function renderStatus(record: ProductCollectionRow) {
@@ -624,6 +624,12 @@ const ProductCollectionsPage = () => {
       },
     },
     {
+      title: '发布状态',
+      key: 'status',
+      width: 110,
+      render: (_, record) => renderStatus(record),
+    },
+    {
       title: '起批量',
       key: 'moq',
       width: 90,
@@ -662,12 +668,6 @@ const ProductCollectionsPage = () => {
           {record.temuCatname || '-'}
         </Typography.Text>
       ),
-    },
-    {
-      title: '状态',
-      key: 'status',
-      width: 110,
-      render: (_, record) => renderStatus(record),
     },
     {
       title: '操作',
