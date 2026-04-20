@@ -15,6 +15,7 @@ import com.tminos.productscene.sync.repository.TemuGoodsSkuRepository;
 import com.tminos.productscene.sync.repository.TemuGoodsSkuSpecRepository;
 import com.tminos.productscene.sync.repository.TemuPriceReviewOrderRepository;
 import com.tminos.productscene.sync.repository.TemuPriceReviewSkuRepository;
+import com.tminos.productscene.sync.repository.TemuShopSkuPurchasePriceRepository;
 import com.tminos.temu.upin.sdk.v2.client.TemuOpenApiClient;
 import com.tminos.temu.upin.sdk.v2.common.TemuOpenApiCredentials;
 import org.slf4j.Logger;
@@ -41,6 +42,7 @@ public class TemuPriceReviewService {
     private final TemuGoodsSkuRepository goodsSkuRepository;
     private final TemuGoodsSkuSpecRepository goodsSkuSpecRepository;
     private final TemuGoodsSkuPriceRepository goodsSkuPriceRepository;
+    private final TemuShopSkuPurchasePriceRepository purchasePriceRepository;
     private final TemuOpenApiCredentialService credentialService;
 
     public TemuPriceReviewService(TemuGoodsRepository goodsRepository,
@@ -49,6 +51,7 @@ public class TemuPriceReviewService {
                                   TemuGoodsSkuRepository goodsSkuRepository,
                                   TemuGoodsSkuSpecRepository goodsSkuSpecRepository,
                                   TemuGoodsSkuPriceRepository goodsSkuPriceRepository,
+                                  TemuShopSkuPurchasePriceRepository purchasePriceRepository,
                                   TemuOpenApiCredentialService credentialService) {
         this.goodsRepository = goodsRepository;
         this.reviewOrderRepository = reviewOrderRepository;
@@ -56,6 +59,7 @@ public class TemuPriceReviewService {
         this.goodsSkuRepository = goodsSkuRepository;
         this.goodsSkuSpecRepository = goodsSkuSpecRepository;
         this.goodsSkuPriceRepository = goodsSkuPriceRepository;
+        this.purchasePriceRepository = purchasePriceRepository;
         this.credentialService = credentialService;
     }
 
@@ -238,6 +242,7 @@ public class TemuPriceReviewService {
                 si.setSpecInfo(skuContext.specInfoBySkuId().get(goodsSku.getId()));
                 si.setCurrentSupplyPrice(skuContext.currentSupplyPriceByProductSkuId().get(sku.getProductSkuId()));
             }
+            si.setPurchasePrice(skuContext.purchasePriceByProductSkuId().get(sku.getProductSkuId()));
             return si;
         }).collect(Collectors.toList()));
 
@@ -315,7 +320,13 @@ public class TemuPriceReviewService {
             currentSupplyPriceMap.putIfAbsent(price.getProductSkuId(), price.getSupplierPrice());
         }
 
-        return new ReviewSkuContext(goodsSkuMap, specInfoMap, currentSupplyPriceMap, imageUrlMap);
+        Map<Long, Integer> purchasePriceMap = purchasePriceRepository.findByShopIdAndProductSkuIdIn(shopId, productSkuIds)
+                .stream()
+                .filter(Objects::nonNull)
+                .filter(item -> item.getProductSkuId() != null && item.getPurchasePrice() != null)
+                .collect(Collectors.toMap(item -> item.getProductSkuId(), item -> item.getPurchasePrice(), (left, right) -> left, LinkedHashMap::new));
+
+        return new ReviewSkuContext(goodsSkuMap, specInfoMap, currentSupplyPriceMap, imageUrlMap, purchasePriceMap);
     }
 
     @SuppressWarnings("unchecked")
@@ -363,9 +374,10 @@ public class TemuPriceReviewService {
     private record ReviewSkuContext(Map<Long, TemuGoodsSku> goodsSkuByProductSkuId,
                                     Map<Long, String> specInfoBySkuId,
                                     Map<Long, Integer> currentSupplyPriceByProductSkuId,
-                                    Map<Long, String> imageUrlByProductSkuId) {
+                                    Map<Long, String> imageUrlByProductSkuId,
+                                    Map<Long, Integer> purchasePriceByProductSkuId) {
         private static ReviewSkuContext empty() {
-            return new ReviewSkuContext(Map.of(), Map.of(), Map.of(), Map.of());
+            return new ReviewSkuContext(Map.of(), Map.of(), Map.of(), Map.of(), Map.of());
         }
     }
 

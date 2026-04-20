@@ -29,6 +29,9 @@ import type {
 } from '@/types/api';
 import { formatDateTime, formatTimestamp, prettyJson } from '@/utils/format';
 import { getToken } from '@/utils/request';
+import { loadStoredShopFilter, resolveStoredShopFilter, saveStoredShopFilter } from '@/utils/shopFilter';
+
+const SHOP_FILTER_STORAGE_KEY = 'sync-goods';
 
 function boolText(value?: boolean | null) {
   if (value === null || value === undefined) {
@@ -100,7 +103,7 @@ function renderSitePrices(sitePrices?: SyncGoodsSitePriceVO[]) {
 const SyncGoodsPage = () => {
   const { message } = App.useApp();
   const [shops, setShops] = useState<Array<{ value: string; label: string }>>([]);
-  const [shopId, setShopId] = useState<string>();
+  const [shopId, setShopId] = useState<string | undefined>(() => loadStoredShopFilter(SHOP_FILTER_STORAGE_KEY));
   const [keyword, setKeyword] = useState('');
   const [skcSiteStatus, setSkcSiteStatus] = useState<number | undefined>(1);
   const [minSupplierPrice, setMinSupplierPrice] = useState<number>();
@@ -123,10 +126,15 @@ const SyncGoodsPage = () => {
       .filter((item: TemuShopVO) => item.shopId && item.shopName)
       .map((item: TemuShopVO) => ({ value: item.shopId, label: `${item.shopName} ${item.shopId}` }));
     setShops(options);
-    if (!shopId && options[0]) {
-      setShopId(options[0].value);
-      await load(1, 20, options[0].value, keyword, 1, minSupplierPrice, maxSupplierPrice);
+    const nextShopId = resolveStoredShopFilter(options, shopId);
+    if (!nextShopId) {
+      setShopId(undefined);
+      saveStoredShopFilter(SHOP_FILTER_STORAGE_KEY, undefined);
+      return;
     }
+    setShopId(nextShopId);
+    saveStoredShopFilter(SHOP_FILTER_STORAGE_KEY, nextShopId);
+    await load(1, 20, nextShopId, keyword, skcSiteStatus, minSupplierPrice, maxSupplierPrice);
   }
 
   async function load(
@@ -462,6 +470,7 @@ const SyncGoodsPage = () => {
             value={shopId}
             onChange={(value) => {
               setShopId(value);
+              saveStoredShopFilter(SHOP_FILTER_STORAGE_KEY, value);
               setPage(1);
               void load(1, pageSize, value, keyword, skcSiteStatus, minSupplierPrice, maxSupplierPrice);
             }}

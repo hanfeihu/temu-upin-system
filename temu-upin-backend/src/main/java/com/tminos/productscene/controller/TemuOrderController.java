@@ -24,6 +24,7 @@ public class TemuOrderController {
             @RequestParam(value = "shopRecordId", required = false) Long shopRecordId,
             @RequestParam(value = "shopId", required = false) String shopId,
             @RequestParam(value = "keyword", required = false) String keyword,
+            @RequestParam(value = "matchedTemuSkuIdLike", required = false) String matchedTemuSkuIdLike,
             @RequestParam(value = "cancelState", required = false) String cancelState,
             @RequestParam(value = "aftersaleState", required = false) String aftersaleState,
             @RequestParam(value = "orderStatus", required = false) Integer orderStatus,
@@ -36,7 +37,7 @@ public class TemuOrderController {
             @RequestParam(value = "pageSize", defaultValue = "20") int pageSize
     ) {
         return ResponseEntity.ok(ApiResponse.success(
-                orderService.list(shopRecordId, shopId, keyword, cancelState, aftersaleState, orderStatus, matchStatus,
+                orderService.list(shopRecordId, shopId, keyword, matchedTemuSkuIdLike, cancelState, aftersaleState, orderStatus, matchStatus,
                         orderTimeStartMs, orderTimeEndMs, updateTimeStartMs, updateTimeEndMs,
                         page, pageSize)
         ));

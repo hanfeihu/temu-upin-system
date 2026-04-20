@@ -46,6 +46,7 @@ public class PriceReviewDTO {
         private String extCode;
         private String specInfo;
         private Integer currentSupplyPrice;
+        private Integer purchasePrice;
     }
 
     @Data

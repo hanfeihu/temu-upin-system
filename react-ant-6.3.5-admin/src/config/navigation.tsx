@@ -101,6 +101,13 @@ const navigationTree: AppNavItem[] = [
         icon: <DeploymentUnitOutlined />,
       },
       {
+        key: '/platform/shop-skus',
+        path: '/platform/shop-skus',
+        label: '店铺SKU',
+        description: '按店铺查看已加站 SKU，并维护采购价。',
+        icon: <TagsOutlined />,
+      },
+      {
         key: '/platform/temu-orders',
         path: '/platform/temu-orders',
         label: 'TEMU 订单',

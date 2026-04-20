@@ -46,6 +46,7 @@ public class TemuPublishService {
     private final AITemuAttrFillerConfig aiTemuAttrFillerConfig;
     private final TemuOpenApiCredentialService temuOpenApiCredentialService;
     private final TemuSizeChartService temuSizeChartService;
+    private final TargetShopBindingService targetShopBindingService;
 
     public TemuPublishService(ProductCollectionService productCollectionService,
                              ProductCollectionRepository productCollectionRepository,
@@ -60,7 +61,8 @@ public class TemuPublishService {
                              ObjectMapper objectMapper,
                              AITemuAttrFillerConfig aiTemuAttrFillerConfig,
                              TemuOpenApiCredentialService temuOpenApiCredentialService,
-                             TemuSizeChartService temuSizeChartService) {
+                             TemuSizeChartService temuSizeChartService,
+                             TargetShopBindingService targetShopBindingService) {
         this.productCollectionService = productCollectionService;
         this.productCollectionRepository = productCollectionRepository;
         this.temuSkuRepository = temuSkuRepository;
@@ -75,6 +77,7 @@ public class TemuPublishService {
         this.aiTemuAttrFillerConfig = aiTemuAttrFillerConfig;
         this.temuOpenApiCredentialService = temuOpenApiCredentialService;
         this.temuSizeChartService = temuSizeChartService;
+        this.targetShopBindingService = targetShopBindingService;
     }
 
     public TemuPublishDTO.PublishResponse publish(Long spuId) {
@@ -971,7 +974,14 @@ public class TemuPublishService {
             return null;
         }
 
-        List<String> shopNames = parseJsonStringList(pc.getTargetShopNames());
+        List<String> shopNames;
+        try {
+            TargetShopBindingService.TargetShopBinding binding = targetShopBindingService.resolve(shopIds);
+            shopIds = new ArrayList<>(binding.shopIds());
+            shopNames = new ArrayList<>(binding.shopNames());
+        } catch (Exception ignored) {
+            shopNames = parseJsonStringList(pc.getTargetShopNames());
+        }
         String selectedShopId = shopIds.get(0);
         String selectedShopName = shopNames.size() > 0 && StringUtils.hasText(shopNames.get(0))
                 ? shopNames.get(0)

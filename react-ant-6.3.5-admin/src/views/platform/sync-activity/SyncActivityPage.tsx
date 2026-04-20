@@ -30,6 +30,7 @@ import type {
   TemuShopVO,
 } from '@/types/api';
 import { formatDateTime, formatPrice } from '@/utils/format';
+import { loadStoredShopFilter, resolveStoredShopFilter, saveStoredShopFilter } from '@/utils/shopFilter';
 
 interface MatchedProductFormVO extends ActivityMatchedProductVO {
   activityStock?: number | null;
@@ -70,10 +71,12 @@ const enrollStatusOptions = [
   { value: 6, label: '报名活动已下线' },
 ];
 
+const SHOP_FILTER_STORAGE_KEY = 'sync-activity';
+
 const SyncActivityPage = () => {
   const { message } = App.useApp();
   const [shops, setShops] = useState<Array<{ value: string; label: string }>>([]);
-  const [shopId, setShopId] = useState<string>();
+  const [shopId, setShopId] = useState<string | undefined>(() => loadStoredShopFilter(SHOP_FILTER_STORAGE_KEY));
   const [activityType, setActivityType] = useState<number | undefined>(undefined);
   const [enrollStatus, setEnrollStatus] = useState<number | undefined>(undefined);
   const [loadingActivities, setLoadingActivities] = useState(false);
@@ -118,10 +121,15 @@ const SyncActivityPage = () => {
       .filter((item: TemuShopVO) => item.shopId && item.shopName)
       .map((item: TemuShopVO) => ({ value: item.shopId, label: item.shopName }));
     setShops(options);
-    if (!shopId && options[0]) {
-      setShopId(options[0].value);
-      await Promise.all([loadActivities(options[0].value, activityType), loadEnrollments(1, 20, options[0].value, activityType, enrollStatus)]);
+    const nextShopId = resolveStoredShopFilter(options, shopId);
+    if (!nextShopId) {
+      setShopId(undefined);
+      saveStoredShopFilter(SHOP_FILTER_STORAGE_KEY, undefined);
+      return;
     }
+    setShopId(nextShopId);
+    saveStoredShopFilter(SHOP_FILTER_STORAGE_KEY, nextShopId);
+    await Promise.all([loadActivities(nextShopId, activityType), loadEnrollments(1, 20, nextShopId, activityType, enrollStatus)]);
   }
 
   async function loadActivities(nextShopId = shopId, nextActivityType = activityType) {
@@ -473,6 +481,7 @@ const SyncActivityPage = () => {
                     value={shopId}
                     onChange={(value) => {
                       setShopId(value);
+                      saveStoredShopFilter(SHOP_FILTER_STORAGE_KEY, value);
                       void Promise.all([loadActivities(value, activityType), loadEnrollments(1, enrollmentPageSize, value, activityType, enrollStatus)]);
                     }}
                     placeholder="店铺"

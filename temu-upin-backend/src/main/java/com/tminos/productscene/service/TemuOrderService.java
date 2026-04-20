@@ -105,6 +105,7 @@ public class TemuOrderService {
     public Page<TemuOrderDTO.ListItem> list(Long shopRecordId,
                                             String shopId,
                                             String keyword,
+                                            String matchedTemuSkuIdLike,
                                             String cancelState,
                                             String aftersaleState,
                                             Integer orderStatus,
@@ -118,7 +119,7 @@ public class TemuOrderService {
         int safePage = Math.max(page, 1);
         int safePageSize = Math.max(pageSize, 1);
         Page<TemuOrder> rows = orderRepository.findAll(
-                buildListSpec(shopRecordId, shopId, keyword, cancelState, aftersaleState, orderStatus, matchStatus,
+                buildListSpec(shopRecordId, shopId, keyword, matchedTemuSkuIdLike, cancelState, aftersaleState, orderStatus, matchStatus,
                         orderTimeStartMs, orderTimeEndMs, updateTimeStartMs, updateTimeEndMs),
                 PageRequest.of(safePage - 1, safePageSize, Sort.by(
                         Sort.Order.desc("orderTimeMs").nullsLast(),
@@ -366,6 +367,7 @@ public class TemuOrderService {
     private Specification<TemuOrder> buildListSpec(Long shopRecordId,
                                                    String shopId,
                                                    String keyword,
+                                                   String matchedTemuSkuIdLike,
                                                    String cancelState,
                                                    String aftersaleState,
                                                    Integer orderStatus,
@@ -423,6 +425,10 @@ public class TemuOrderService {
                         cb.like(cb.lower(root.get("goodsName")), like),
                         cb.like(cb.lower(root.get("matchedProductName")), like)
                 ));
+            }
+            if (StringUtils.hasText(matchedTemuSkuIdLike)) {
+                String like = "%" + matchedTemuSkuIdLike.trim().toLowerCase() + "%";
+                predicates.add(cb.like(cb.lower(root.get("matchedTemuSkuId")), like));
             }
             if (orderTimeStartMs != null) {
                 predicates.add(cb.greaterThanOrEqualTo(root.get("orderTimeMs"), orderTimeStartMs));

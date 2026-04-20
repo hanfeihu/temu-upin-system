@@ -6,6 +6,7 @@ import { syncApi } from '@/api/sync';
 import { temuShopsApi } from '@/api/temuShops';
 import type { PriceReviewBatchPayload, PriceReviewOrderVO, PriceReviewSkuVO, TemuShopVO } from '@/types/api';
 import { formatDateTime, formatPrice, safeJsonParse } from '@/utils/format';
+import { loadStoredShopFilter, resolveStoredShopFilter, saveStoredShopFilter } from '@/utils/shopFilter';
 
 interface EditableReviewOrder extends PriceReviewOrderVO {
   skuList: Array<PriceReviewSkuVO & { editNewPrice?: number | null }>;
@@ -26,10 +27,32 @@ const reviewColorMap: Record<string, string> = {
   PENDING: 'processing',
 };
 
+function summarizePurchasePrice(skus?: PriceReviewSkuVO[] | null) {
+  const prices = Array.from(
+    new Set(
+      (skus || [])
+        .map((item) => item.purchasePrice)
+        .filter((item): item is number => item !== null && item !== undefined),
+    ),
+  );
+
+  if (!prices.length) {
+    return '采购价未配置';
+  }
+
+  if (prices.length === 1) {
+    return `采购价（${formatPrice(prices[0])}）`;
+  }
+
+  return `采购价（${formatPrice(Math.min(...prices))} 起）`;
+}
+
+const SHOP_FILTER_STORAGE_KEY = 'sync-price-review';
+
 const SyncPriceReviewPage = () => {
   const { message } = App.useApp();
   const [shops, setShops] = useState<Array<{ value: string; label: string }>>([]);
-  const [shopId, setShopId] = useState<string>();
+  const [shopId, setShopId] = useState<string | undefined>(() => loadStoredShopFilter(SHOP_FILTER_STORAGE_KEY));
   const [orderStatus, setOrderStatus] = useState<number>(1);
   const [reviewAction, setReviewAction] = useState<string>('PENDING');
   const [loading, setLoading] = useState(false);
@@ -56,10 +79,15 @@ const SyncPriceReviewPage = () => {
       .filter((item: TemuShopVO) => item.shopId && item.shopName)
       .map((item: TemuShopVO) => ({ value: item.shopId, label: item.shopName }));
     setShops(options);
-    if (!shopId && options[0]) {
-      setShopId(options[0].value);
-      await load(1, 20, options[0].value, orderStatus, reviewAction);
+    const nextShopId = resolveStoredShopFilter(options, shopId);
+    if (!nextShopId) {
+      setShopId(undefined);
+      saveStoredShopFilter(SHOP_FILTER_STORAGE_KEY, undefined);
+      return;
     }
+    setShopId(nextShopId);
+    saveStoredShopFilter(SHOP_FILTER_STORAGE_KEY, nextShopId);
+    await load(1, 20, nextShopId, orderStatus, reviewAction);
   }
 
   async function load(nextPage = page, nextPageSize = pageSize, nextShopId = shopId, nextOrderStatus = orderStatus, nextReviewAction = reviewAction) {
@@ -274,6 +302,7 @@ const SyncPriceReviewPage = () => {
         <Space direction="vertical" size={2} style={{ alignItems: 'center', width: '100%' }}>
           <Typography.Text strong>{formatPrice(record.suggestSupplyPrice)}</Typography.Text>
           <Typography.Text type="secondary">→ {formatPrice(record.supplyPrice)}</Typography.Text>
+          <Typography.Text type="secondary">{summarizePurchasePrice(record.skuList || [])}</Typography.Text>
         </Space>
       ),
     },
@@ -301,6 +330,7 @@ const SyncPriceReviewPage = () => {
     { title: 'SKU', dataIndex: 'productSkuId', key: 'productSkuId', width: 120 },
     { title: '编码', dataIndex: 'extCode', key: 'extCode', width: 120 },
     { title: '规格', dataIndex: 'specInfo', key: 'specInfo' },
+    { title: '采购价', key: 'purchasePrice', width: 120, render: (_, record) => record.purchasePrice !== null && record.purchasePrice !== undefined ? formatPrice(record.purchasePrice) : '未配置' },
     { title: '当前供货价', key: 'currentSupplyPrice', width: 140, render: (_, record) => formatPrice(record.currentSupplyPrice) },
     { title: '建议新价', key: 'newPrice', width: 140, render: (_, record) => formatPrice(record.newPrice) },
   ];
@@ -313,6 +343,7 @@ const SyncPriceReviewPage = () => {
             value={shopId}
             onChange={(value) => {
               setShopId(value);
+              saveStoredShopFilter(SHOP_FILTER_STORAGE_KEY, value);
               setPage(1);
               void load(1, pageSize, value, orderStatus, reviewAction);
             }}
@@ -382,6 +413,7 @@ const SyncPriceReviewPage = () => {
                 <span>站点: {formatSites(detail.siteNamesJson)}</span>
                 <span>申报价: {formatPrice(detail.supplyPrice)}</span>
                 <span>建议价: {formatPrice(detail.suggestSupplyPrice)}</span>
+                <span>{summarizePurchasePrice(detail.skuList || [])}</span>
                 <span>审核状态: {reviewText(detail.reviewAction)}</span>
               </Space>
             </Card>
@@ -422,6 +454,7 @@ const SyncPriceReviewPage = () => {
                     columns={[
                       { title: 'SKU', dataIndex: 'productSkuId', key: 'productSkuId', width: 120 },
                       { title: '规格', dataIndex: 'specInfo', key: 'specInfo' },
+                      { title: '采购价', key: 'purchasePrice', width: 120, render: (_, record) => record.purchasePrice !== null && record.purchasePrice !== undefined ? formatPrice(record.purchasePrice) : '未配置' },
                       { title: '当前供货价', key: 'currentSupplyPrice', width: 140, render: (_, record) => formatPrice(record.currentSupplyPrice) },
                       {
                         title: '新的申报价(分)',

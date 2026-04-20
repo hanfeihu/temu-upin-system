@@ -2,6 +2,7 @@ package com.tminos.productscene.sync.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.tminos.productscene.repository.TemuShopRepository;
 import com.tminos.productscene.service.TemuOpenApiCredentialService;
 import com.tminos.productscene.sync.dto.PriceAdjustDTO;
 import com.tminos.productscene.sync.entity.TemuGoods;
@@ -16,6 +17,7 @@ import com.tminos.productscene.sync.repository.TemuGoodsSkuRepository;
 import com.tminos.productscene.sync.repository.TemuGoodsSkuSpecRepository;
 import com.tminos.productscene.sync.repository.TemuPriceAdjustOrderRepository;
 import com.tminos.productscene.sync.repository.TemuPriceAdjustSkuRepository;
+import com.tminos.productscene.sync.repository.TemuShopSkuPurchasePriceRepository;
 import com.tminos.temu.upin.sdk.v2.client.TemuOpenApiClient;
 import com.tminos.temu.upin.sdk.v2.common.TemuOpenApiCredentials;
 import org.slf4j.Logger;
@@ -24,9 +26,13 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -36,6 +42,110 @@ public class TemuPriceAdjustService {
 
     private static final Logger log = LoggerFactory.getLogger(TemuPriceAdjustService.class);
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final int PRICE_ADJUST_QUERY_PAGE_SIZE = 100;
+    private static final String SALES_QUANTITY_SQL = """
+            select o.matched_temu_sku_id as product_sku_id, coalesce(sum(o.quantity), 0) as quantity
+            from temu_orders o
+            where o.shop_record_id = :shopRecordId
+              and o.matched_temu_sku_id in (:skuIds)
+              and (o.order_status is null or o.order_status <> 3)
+            group by o.matched_temu_sku_id
+            """;
+    private static final String AFTERSALE_QUANTITY_SQL = """
+            select o.matched_temu_sku_id as product_sku_id, coalesce(sum(o.quantity), 0) as quantity
+            from temu_orders o
+            where o.shop_record_id = :shopRecordId
+              and o.matched_temu_sku_id in (:skuIds)
+              and (o.order_status is null or o.order_status <> 3)
+              and exists (
+                  select 1
+                  from temu_order_aftersales a
+                  where a.shop_record_id = o.shop_record_id
+                    and a.parent_order_sn = o.parent_order_sn
+                    and a.parent_after_sales_status = 5
+              )
+            group by o.matched_temu_sku_id
+            """;
+    private static final String SIGNED_QUANTITY_SQL = """
+            select o.matched_temu_sku_id as product_sku_id, coalesce(sum(o.quantity), 0) as quantity
+            from temu_orders o
+            where o.shop_record_id = :shopRecordId
+              and o.matched_temu_sku_id in (:skuIds)
+              and o.order_status in (5, 51)
+            group by o.matched_temu_sku_id
+            """;
+    private static final String LATEST_SINGLE_ITEM_FIRST_LEG_FEE_SQL = """
+            with latest_logistics as (
+                select distinct on (l.shop_record_id, l.parent_order_sn)
+                    l.shop_record_id,
+                    l.parent_order_sn,
+                    l.first_leg_logistics_fee,
+                    l.updated_at,
+                    l.id
+                from temu_order_logistics l
+                where l.shop_record_id = :shopRecordId
+                order by l.shop_record_id, l.parent_order_sn, l.updated_at desc, l.id desc
+            ),
+            qualified_orders as (
+                select
+                    o.matched_temu_sku_id as product_sku_id,
+                    logistics.first_leg_logistics_fee as first_leg_logistics_fee,
+                    row_number() over (
+                        partition by o.matched_temu_sku_id
+                        order by coalesce(o.order_time_ms, o.update_time_ms, 0) desc, o.id desc
+                    ) as rn
+                from temu_orders o
+                join latest_logistics logistics
+                  on logistics.shop_record_id = o.shop_record_id
+                 and logistics.parent_order_sn = o.parent_order_sn
+                where o.shop_record_id = :shopRecordId
+                  and o.matched_temu_sku_id in (:skuIds)
+                  and o.quantity = 1
+                  and logistics.first_leg_logistics_fee is not null
+                  and not exists (
+                      select 1
+                      from temu_orders sibling
+                      where sibling.shop_record_id = o.shop_record_id
+                        and sibling.parent_order_sn = o.parent_order_sn
+                        and sibling.id <> o.id
+                  )
+            )
+            select product_sku_id, first_leg_logistics_fee
+            from qualified_orders
+            where rn = 1
+            """;
+    private static final String LATEST_REFRESHABLE_LOGISTICS_ORDER_SQL = """
+            with qualified_orders as (
+                select
+                    o.id as order_id,
+                    o.matched_temu_sku_id as product_sku_id,
+                    row_number() over (
+                        partition by o.matched_temu_sku_id
+                        order by
+                            case
+                                when o.order_status in (5, 51) then 0
+                                when o.order_status in (4, 41, 2) then 1
+                                else 2
+                            end,
+                            coalesce(o.order_time_ms, o.update_time_ms, 0) desc,
+                            o.id desc
+                    ) as rn
+                from temu_orders o
+                where o.shop_record_id = :shopRecordId
+                  and o.matched_temu_sku_id in (:skuIds)
+                  and o.quantity = 1
+                  and not exists (
+                      select 1
+                      from temu_orders sibling
+                      where sibling.shop_record_id = o.shop_record_id
+                        and sibling.parent_order_sn = o.parent_order_sn
+                        and sibling.id <> o.id
+                  )
+            )
+            select product_sku_id, order_id
+            from qualified_orders
+            where rn = 1
+            """;
 
     private final TemuGoodsRepository goodsRepository;
     private final TemuGoodsSkuRepository goodsSkuRepository;
@@ -43,7 +153,10 @@ public class TemuPriceAdjustService {
     private final TemuGoodsSkuPriceRepository goodsSkuPriceRepository;
     private final TemuPriceAdjustOrderRepository adjustOrderRepository;
     private final TemuPriceAdjustSkuRepository adjustSkuRepository;
+    private final TemuShopSkuPurchasePriceRepository purchasePriceRepository;
+    private final TemuShopRepository shopRepository;
     private final TemuOpenApiCredentialService credentialService;
+    private final NamedParameterJdbcTemplate namedParameterJdbcTemplate;
 
     public TemuPriceAdjustService(TemuGoodsRepository goodsRepository,
                                   TemuGoodsSkuRepository goodsSkuRepository,
@@ -51,14 +164,20 @@ public class TemuPriceAdjustService {
                                   TemuGoodsSkuPriceRepository goodsSkuPriceRepository,
                                   TemuPriceAdjustOrderRepository adjustOrderRepository,
                                   TemuPriceAdjustSkuRepository adjustSkuRepository,
-                                  TemuOpenApiCredentialService credentialService) {
+                                  TemuShopSkuPurchasePriceRepository purchasePriceRepository,
+                                  TemuShopRepository shopRepository,
+                                  TemuOpenApiCredentialService credentialService,
+                                  NamedParameterJdbcTemplate namedParameterJdbcTemplate) {
         this.goodsRepository = goodsRepository;
         this.goodsSkuRepository = goodsSkuRepository;
         this.goodsSkuSpecRepository = goodsSkuSpecRepository;
         this.goodsSkuPriceRepository = goodsSkuPriceRepository;
         this.adjustOrderRepository = adjustOrderRepository;
         this.adjustSkuRepository = adjustSkuRepository;
+        this.purchasePriceRepository = purchasePriceRepository;
+        this.shopRepository = shopRepository;
         this.credentialService = credentialService;
+        this.namedParameterJdbcTemplate = namedParameterJdbcTemplate;
     }
 
     // ==================== 查询 ====================
@@ -168,6 +287,12 @@ public class TemuPriceAdjustService {
             }
             String specInfo = skuContext.specInfoByProductSkuId().get(sku.getProductSkuId());
             si.setSpecInfo((specInfo == null || specInfo.isBlank()) ? sku.getSpec() : specInfo);
+            si.setPurchasePrice(skuContext.purchasePriceByProductSkuId().get(sku.getProductSkuId()));
+            si.setSalesQuantity(skuContext.salesQuantityByProductSkuId().getOrDefault(sku.getProductSkuId(), 0L));
+            si.setAftersaleQuantity(skuContext.aftersaleQuantityByProductSkuId().getOrDefault(sku.getProductSkuId(), 0L));
+            si.setSignedQuantity(skuContext.signedQuantityByProductSkuId().getOrDefault(sku.getProductSkuId(), 0L));
+            si.setFirstLegLogisticsFee(skuContext.firstLegLogisticsFeeByProductSkuId().get(sku.getProductSkuId()));
+            si.setLogisticsRefreshOrderId(skuContext.logisticsRefreshOrderIdByProductSkuId().get(sku.getProductSkuId()));
             return si;
         }).collect(Collectors.toList());
     }
@@ -238,7 +363,102 @@ public class TemuPriceAdjustService {
             currentSupplyPriceMap.putIfAbsent(price.getProductSkuId(), price.getSupplierPrice());
         }
 
-        return new AdjustSkuContext(goodsSkuMap, specInfoByProductSkuId, currentSupplyPriceMap, imageUrlMap);
+        Map<Long, Integer> purchasePriceMap = purchasePriceRepository.findByShopIdAndProductSkuIdIn(shopId, productSkuIds)
+                .stream()
+                .filter(Objects::nonNull)
+                .filter(item -> item.getProductSkuId() != null && item.getPurchasePrice() != null)
+                .collect(Collectors.toMap(item -> item.getProductSkuId(), item -> item.getPurchasePrice(), (left, right) -> left, LinkedHashMap::new));
+
+        AdjustSkuOrderStats orderStats = loadAdjustSkuOrderStats(shopId, productSkuIds);
+
+        return new AdjustSkuContext(
+                goodsSkuMap,
+                specInfoByProductSkuId,
+                currentSupplyPriceMap,
+                imageUrlMap,
+                purchasePriceMap,
+                orderStats.salesQuantityByProductSkuId(),
+                orderStats.aftersaleQuantityByProductSkuId(),
+                orderStats.signedQuantityByProductSkuId(),
+                orderStats.firstLegLogisticsFeeByProductSkuId(),
+                orderStats.logisticsRefreshOrderIdByProductSkuId()
+        );
+    }
+
+    private AdjustSkuOrderStats loadAdjustSkuOrderStats(String shopId, List<Long> productSkuIds) {
+        if (!StringUtils.hasText(shopId) || productSkuIds == null || productSkuIds.isEmpty()) {
+            return AdjustSkuOrderStats.empty();
+        }
+
+        Long shopRecordId = shopRepository.findByShopId(shopId.trim())
+                .map(com.tminos.productscene.entity.TemuShop::getId)
+                .orElse(null);
+        if (shopRecordId == null) {
+            return AdjustSkuOrderStats.empty();
+        }
+
+        List<String> skuIds = productSkuIds.stream()
+                .filter(Objects::nonNull)
+                .map(String::valueOf)
+                .distinct()
+                .toList();
+        if (skuIds.isEmpty()) {
+            return AdjustSkuOrderStats.empty();
+        }
+
+        MapSqlParameterSource params = new MapSqlParameterSource()
+                .addValue("shopRecordId", shopRecordId)
+                .addValue("skuIds", skuIds);
+
+        return new AdjustSkuOrderStats(
+                loadSkuQuantityMap(SALES_QUANTITY_SQL, params),
+                loadSkuQuantityMap(AFTERSALE_QUANTITY_SQL, params),
+                loadSkuQuantityMap(SIGNED_QUANTITY_SQL, params),
+                loadSkuFeeMap(LATEST_SINGLE_ITEM_FIRST_LEG_FEE_SQL, params),
+                loadSkuOrderIdMap(LATEST_REFRESHABLE_LOGISTICS_ORDER_SQL, params)
+        );
+    }
+
+    private Map<Long, Long> loadSkuQuantityMap(String sql, MapSqlParameterSource params) {
+        return namedParameterJdbcTemplate.query(sql, params, rs -> {
+            Map<Long, Long> quantityMap = new LinkedHashMap<>();
+            while (rs.next()) {
+                Long productSkuId = toLong(rs.getString("product_sku_id"));
+                if (productSkuId == null) {
+                    continue;
+                }
+                quantityMap.put(productSkuId, rs.getLong("quantity"));
+            }
+            return quantityMap;
+        });
+    }
+
+    private Map<Long, BigDecimal> loadSkuFeeMap(String sql, MapSqlParameterSource params) {
+        return namedParameterJdbcTemplate.query(sql, params, rs -> {
+            Map<Long, BigDecimal> feeMap = new LinkedHashMap<>();
+            while (rs.next()) {
+                Long productSkuId = toLong(rs.getString("product_sku_id"));
+                if (productSkuId == null) {
+                    continue;
+                }
+                feeMap.put(productSkuId, rs.getBigDecimal("first_leg_logistics_fee"));
+            }
+            return feeMap;
+        });
+    }
+
+    private Map<Long, Long> loadSkuOrderIdMap(String sql, MapSqlParameterSource params) {
+        return namedParameterJdbcTemplate.query(sql, params, rs -> {
+            Map<Long, Long> orderIdMap = new LinkedHashMap<>();
+            while (rs.next()) {
+                Long productSkuId = toLong(rs.getString("product_sku_id"));
+                if (productSkuId == null) {
+                    continue;
+                }
+                orderIdMap.put(productSkuId, rs.getLong("order_id"));
+            }
+            return orderIdMap;
+        });
     }
 
     private String resolveSkuImageUrl(TemuGoodsSku goodsSku, String fallbackImageUrl) {
@@ -297,10 +517,27 @@ public class TemuPriceAdjustService {
     private record AdjustSkuContext(Map<Long, TemuGoodsSku> goodsSkuByProductSkuId,
                                     Map<Long, String> specInfoByProductSkuId,
                                     Map<Long, Integer> currentSupplyPriceByProductSkuId,
-                                    Map<Long, String> imageUrlByProductSkuId) {
+                                    Map<Long, String> imageUrlByProductSkuId,
+                                    Map<Long, Integer> purchasePriceByProductSkuId,
+                                    Map<Long, Long> salesQuantityByProductSkuId,
+                                    Map<Long, Long> aftersaleQuantityByProductSkuId,
+                                    Map<Long, Long> signedQuantityByProductSkuId,
+                                    Map<Long, BigDecimal> firstLegLogisticsFeeByProductSkuId,
+                                    Map<Long, Long> logisticsRefreshOrderIdByProductSkuId) {
 
         private static AdjustSkuContext empty() {
-            return new AdjustSkuContext(Map.of(), Map.of(), Map.of(), Map.of());
+            return new AdjustSkuContext(Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of());
+        }
+    }
+
+    private record AdjustSkuOrderStats(Map<Long, Long> salesQuantityByProductSkuId,
+                                       Map<Long, Long> aftersaleQuantityByProductSkuId,
+                                       Map<Long, Long> signedQuantityByProductSkuId,
+                                       Map<Long, BigDecimal> firstLegLogisticsFeeByProductSkuId,
+                                       Map<Long, Long> logisticsRefreshOrderIdByProductSkuId) {
+
+        private static AdjustSkuOrderStats empty() {
+            return new AdjustSkuOrderStats(Map.of(), Map.of(), Map.of(), Map.of(), Map.of());
         }
     }
 
@@ -391,6 +628,8 @@ public class TemuPriceAdjustService {
             Map<String, Object> remoteResult = result.resultAsMap();
             Set<String> successOrderSns = resolveSuccessOrderSns(remoteResult, submitOrders, result.success);
             Map<String, String> failedOrders = parseFailedOrders(remoteResult == null ? null : remoteResult.get("failedOrders"));
+            Map<String, PriceAdjustOrderRefreshResult> refreshedFailedOrders = refreshFailedOrdersIfNeeded(shopId, client, failedOrders);
+            Map<String, String> displayFailedOrders = mergeFailedOrdersWithRefresh(failedOrders, refreshedFailedOrders);
 
             Map<String, Object> resultMap = new LinkedHashMap<>();
             resultMap.put("success", result.success);
@@ -422,15 +661,26 @@ public class TemuPriceAdjustService {
                 int failCount = Math.max(0, submitOrders.size() - successCount);
                 resultMap.put("successCount", successCount);
                 resultMap.put("failCount", failCount);
-                if (!failedOrders.isEmpty()) {
-                    resultMap.put("failedOrders", failedOrders);
+                if (!displayFailedOrders.isEmpty()) {
+                    resultMap.put("failedOrders", displayFailedOrders);
+                }
+                if (!refreshedFailedOrders.isEmpty()) {
+                    resultMap.put("refreshedFailedOrders", toRefreshResultPayload(refreshedFailedOrders));
                 }
                 resultMap.put("success", failCount == 0);
-                resultMap.put("message", buildBatchReviewMessage(action, successCount, failCount, failedOrders));
+                resultMap.put("message", buildBatchReviewMessage(action, successCount, failCount, displayFailedOrders));
             } else {
                 resultMap.put("successCount", 0);
                 resultMap.put("failCount", submitOrders.size());
-                resultMap.put("message", buildReviewFailureMessage(reviewAttempt));
+                if (!displayFailedOrders.isEmpty()) {
+                    resultMap.put("failedOrders", displayFailedOrders);
+                    resultMap.put("message", buildBatchReviewMessage(action, 0, submitOrders.size(), displayFailedOrders));
+                } else {
+                    resultMap.put("message", buildReviewFailureMessage(reviewAttempt));
+                }
+                if (!refreshedFailedOrders.isEmpty()) {
+                    resultMap.put("refreshedFailedOrders", toRefreshResultPayload(refreshedFailedOrders));
+                }
             }
             return resultMap;
         } catch (Exception e) {
@@ -527,6 +777,200 @@ public class TemuPriceAdjustService {
             values.put(key, entry.getValue() == null ? "TEMU接口返回失败" : String.valueOf(entry.getValue()).trim());
         }
         return values;
+    }
+
+    private Map<String, PriceAdjustOrderRefreshResult> refreshFailedOrdersIfNeeded(String shopId,
+                                                                                   TemuOpenApiClient client,
+                                                                                   Map<String, String> failedOrders) {
+        if (failedOrders == null || failedOrders.isEmpty()) {
+            return Map.of();
+        }
+
+        List<String> refreshTargets = failedOrders.entrySet().stream()
+                .filter(entry -> shouldRefreshLatestState(entry.getValue()))
+                .map(Map.Entry::getKey)
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(value -> !value.isEmpty())
+                .distinct()
+                .toList();
+        if (refreshTargets.isEmpty()) {
+            return Map.of();
+        }
+
+        try {
+            return syncLatestOrdersByPriceOrderSn(shopId, client, refreshTargets);
+        } catch (Exception e) {
+            log.warn("按调价单号同步最新状态失败, shopId={}, orderSns={}, message={}",
+                    shopId,
+                    refreshTargets,
+                    e.getMessage());
+            Map<String, PriceAdjustOrderRefreshResult> fallback = new LinkedHashMap<>();
+            for (String orderSn : refreshTargets) {
+                fallback.put(orderSn, PriceAdjustOrderRefreshResult.syncFailed(orderSn, "同步最新状态失败: " + defaultIfBlank(e.getMessage(), "未知异常")));
+            }
+            return fallback;
+        }
+    }
+
+    private boolean shouldRefreshLatestState(String failureMessage) {
+        if (failureMessage == null || failureMessage.isBlank()) {
+            return false;
+        }
+        String normalized = failureMessage.trim();
+        return normalized.contains("非待确认状态")
+                || normalized.contains("刷新页面重试")
+                || normalized.contains("请刷新页面");
+    }
+
+    private Map<String, PriceAdjustOrderRefreshResult> syncLatestOrdersByPriceOrderSn(String shopId,
+                                                                                       TemuOpenApiClient client,
+                                                                                       Collection<String> priceOrderSns) throws Exception {
+        List<String> targetOrderSns = priceOrderSns == null
+                ? List.of()
+                : priceOrderSns.stream()
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(value -> !value.isEmpty())
+                .distinct()
+                .toList();
+        if (targetOrderSns.isEmpty()) {
+            return Map.of();
+        }
+
+        Map<String, Object> params = new LinkedHashMap<>();
+        params.put("priceOrderSn", targetOrderSns);
+        params.put("pageNo", 1);
+        params.put("pageSize", Math.min(PRICE_ADJUST_QUERY_PAGE_SIZE, Math.max(targetOrderSns.size(), 20)));
+
+        TemuOpenApiClient.ApiResult apiResult = client.callApiParsed(TemuOpenApiClient.API_PRICE_ADJUST_QUERY, params);
+        if (!apiResult.success) {
+            throw new IllegalStateException(defaultIfBlank(apiResult.errorMsg, "TEMU调价单查询失败"));
+        }
+
+        Map<String, Object> resultMap = apiResult.resultAsMap();
+        List<Map<String, Object>> orderList = extractMapList(resultMap, "priceAdjustOrderList", "orderList");
+        Map<String, PriceAdjustOrderRefreshResult> refreshedOrders = new LinkedHashMap<>();
+        Set<String> notSynced = new LinkedHashSet<>(targetOrderSns);
+        if (orderList != null) {
+            for (Map<String, Object> rawOrder : orderList) {
+                String priceOrderSn = trimToNull(toStr(rawOrder.get("priceOrderSn")));
+                if (priceOrderSn == null || !notSynced.contains(priceOrderSn)) {
+                    continue;
+                }
+                refreshedOrders.put(priceOrderSn, syncAdjustOrderFromRemote(shopId, rawOrder));
+                notSynced.remove(priceOrderSn);
+            }
+        }
+
+        for (String priceOrderSn : notSynced) {
+            refreshedOrders.put(priceOrderSn, PriceAdjustOrderRefreshResult.notFound(priceOrderSn));
+        }
+        return refreshedOrders;
+    }
+
+    private PriceAdjustOrderRefreshResult syncAdjustOrderFromRemote(String shopId, Map<String, Object> raw) {
+        String priceOrderSn = trimToNull(toStr(raw.get("priceOrderSn")));
+        if (priceOrderSn == null) {
+            throw new IllegalArgumentException("TEMU返回的调价单缺少 priceOrderSn");
+        }
+
+        TemuPriceAdjustOrder order = adjustOrderRepository.findByShopIdAndPriceOrderSn(shopId, priceOrderSn)
+                .orElse(new TemuPriceAdjustOrder());
+
+        order.setShopId(shopId);
+        order.setPriceOrderSn(priceOrderSn);
+        order.setSkcId(toLong(raw.get("skcId")));
+        order.setProductName(toStr(raw.get("productName")));
+        order.setPriceType(toInt(raw.get("priceType")));
+        order.setSource(toStr(raw.get("source")));
+        order.setAdjustReason(toStr(raw.get("adjustReason")));
+        order.setNewSupplyPrice(toStr(raw.get("newSupplyPrice")));
+        order.setPriceCurrency(toStr(raw.get("priceCurrency")));
+        order.setRejectReason(toStr(raw.get("rejectReason")));
+        order.setTrafficLowExpose(Boolean.TRUE.equals(toBool(raw.get("trafficLowExpose"))));
+        order.setStatus(toInt(raw.get("status")));
+        order.setSiteNamesJson(toJsonString(getFirst(raw, "siteNameList", "siteNames")));
+        order.setSyncedAt(LocalDateTime.now());
+
+        adjustOrderRepository.save(order);
+        adjustSkuRepository.deleteByAdjustOrderId(order.getId());
+        List<TemuPriceAdjustSku> skuRows = buildAdjustSkuRows(order.getId(), raw);
+        if (!skuRows.isEmpty()) {
+            adjustSkuRepository.saveAll(skuRows);
+        }
+
+        return PriceAdjustOrderRefreshResult.synced(priceOrderSn, order.getId(), order.getStatus(), order.getReviewAction());
+    }
+
+    private List<TemuPriceAdjustSku> buildAdjustSkuRows(Long adjustOrderId, Map<String, Object> raw) {
+        Object skuInfoList = getFirst(raw, "skuInfoList", "skuList");
+        if (!(skuInfoList instanceof List<?> rawList) || rawList.isEmpty()) {
+            return List.of();
+        }
+
+        List<TemuPriceAdjustSku> rows = new ArrayList<>();
+        Set<String> seenKeys = new LinkedHashSet<>();
+        for (Object item : rawList) {
+            if (!(item instanceof Map<?, ?> skuRawMap)) {
+                continue;
+            }
+            Long productSkuId = toLong(skuRawMap.get("productSkuId"));
+            if (productSkuId == null) {
+                continue;
+            }
+            Integer price = toInt(skuRawMap.get("price"));
+            String spec = toStr(skuRawMap.get("spec"));
+            String dedupeKey = productSkuId + "|" + price + "|" + spec;
+            if (!seenKeys.add(dedupeKey)) {
+                continue;
+            }
+            rows.add(TemuPriceAdjustSku.builder()
+                    .adjustOrderId(adjustOrderId)
+                    .productSkuId(productSkuId)
+                    .price(price)
+                    .spec(spec)
+                    .build());
+        }
+        return rows;
+    }
+
+    private Map<String, String> mergeFailedOrdersWithRefresh(Map<String, String> failedOrders,
+                                                             Map<String, PriceAdjustOrderRefreshResult> refreshedFailedOrders) {
+        if (failedOrders == null || failedOrders.isEmpty()) {
+            return Map.of();
+        }
+        if (refreshedFailedOrders == null || refreshedFailedOrders.isEmpty()) {
+            return new LinkedHashMap<>(failedOrders);
+        }
+
+        Map<String, String> merged = new LinkedHashMap<>();
+        for (Map.Entry<String, String> entry : failedOrders.entrySet()) {
+            String priceOrderSn = entry.getKey();
+            String failureMessage = defaultIfBlank(entry.getValue(), "TEMU接口返回失败");
+            PriceAdjustOrderRefreshResult refreshResult = refreshedFailedOrders.get(priceOrderSn);
+            if (refreshResult != null && refreshResult.message() != null && !refreshResult.message().isBlank()) {
+                merged.put(priceOrderSn, failureMessage + "（" + refreshResult.message() + "）");
+            } else {
+                merged.put(priceOrderSn, failureMessage);
+            }
+        }
+        return merged;
+    }
+
+    private Map<String, Object> toRefreshResultPayload(Map<String, PriceAdjustOrderRefreshResult> refreshedFailedOrders) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        for (Map.Entry<String, PriceAdjustOrderRefreshResult> entry : refreshedFailedOrders.entrySet()) {
+            PriceAdjustOrderRefreshResult value = entry.getValue();
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("priceOrderSn", value.priceOrderSn());
+            item.put("orderId", value.orderId());
+            item.put("status", value.status());
+            item.put("reviewAction", value.reviewAction());
+            item.put("message", value.message());
+            payload.put(entry.getKey(), item);
+        }
+        return payload;
     }
 
     private String buildBatchReviewMessage(String action,
@@ -643,6 +1087,143 @@ public class TemuPriceAdjustService {
             return fallback;
         }
         return value;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> extractMapList(Map<String, Object> resultMap, String... preferredKeys) {
+        if (resultMap == null || preferredKeys == null) {
+            return null;
+        }
+        for (String key : preferredKeys) {
+            Object val = resultMap.get(key);
+            if (val instanceof List<?> list && !list.isEmpty() && list.get(0) instanceof Map<?, ?>) {
+                return (List<Map<String, Object>>) list;
+            }
+        }
+        for (Object value : resultMap.values()) {
+            if (value instanceof List<?> list && !list.isEmpty() && list.get(0) instanceof Map<?, ?>) {
+                return (List<Map<String, Object>>) list;
+            }
+        }
+        return null;
+    }
+
+    private String trimToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private Long toLong(Object obj) {
+        if (obj == null) {
+            return null;
+        }
+        if (obj instanceof Number n) {
+            return n.longValue();
+        }
+        try {
+            return Long.parseLong(String.valueOf(obj));
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private Integer toInt(Object obj) {
+        if (obj == null) {
+            return null;
+        }
+        if (obj instanceof Number n) {
+            return n.intValue();
+        }
+        try {
+            return Integer.parseInt(String.valueOf(obj));
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private String toStr(Object obj) {
+        return obj == null ? null : String.valueOf(obj);
+    }
+
+    private Boolean toBool(Object obj) {
+        if (obj == null) {
+            return null;
+        }
+        if (obj instanceof Boolean bool) {
+            return bool;
+        }
+        return Boolean.parseBoolean(String.valueOf(obj));
+    }
+
+    private Object getFirst(Map<String, Object> raw, String... keys) {
+        if (raw == null || keys == null) {
+            return null;
+        }
+        for (String key : keys) {
+            if (key != null && raw.containsKey(key)) {
+                Object value = raw.get(key);
+                if (value != null) {
+                    return value;
+                }
+            }
+        }
+        return null;
+    }
+
+    private String toJsonString(Object value) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            return OBJECT_MAPPER.writeValueAsString(value);
+        } catch (Exception e) {
+            log.warn("序列化调价单字段失败: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    private static String formatAdjustStatus(Integer status) {
+        if (status == null) {
+            return "未知状态";
+        }
+        return switch (status) {
+            case 0 -> "待核价";
+            case 1 -> "待供应商确认";
+            case 2 -> "调价成功";
+            case 3 -> "调价失败";
+            default -> "状态" + status;
+        };
+    }
+
+    private record PriceAdjustOrderRefreshResult(String priceOrderSn,
+                                                 Long orderId,
+                                                 Integer status,
+                                                 String reviewAction,
+                                                 String message) {
+
+        private static PriceAdjustOrderRefreshResult synced(String priceOrderSn,
+                                                            Long orderId,
+                                                            Integer status,
+                                                            String reviewAction) {
+            return new PriceAdjustOrderRefreshResult(
+                    priceOrderSn,
+                    orderId,
+                    status,
+                    reviewAction,
+                    "已同步本地最新状态为" + formatAdjustStatus(status)
+            );
+        }
+
+        private static PriceAdjustOrderRefreshResult notFound(String priceOrderSn) {
+            return new PriceAdjustOrderRefreshResult(priceOrderSn, null, null, null, "已调用TEMU查询，但未查到该调价单");
+        }
+
+        private static PriceAdjustOrderRefreshResult syncFailed(String priceOrderSn, String message) {
+            return new PriceAdjustOrderRefreshResult(priceOrderSn, null, null, null, message);
+        }
     }
 
     private record ReviewApiAttemptResult(TemuOpenApiClient.ApiResult result,

@@ -19,6 +19,7 @@ import type {
   SyncTaskCreatePayload,
   SyncTaskProgressVO,
   SyncTaskVO,
+  ShopSkuItemVO,
 } from '@/types/api';
 
 export const syncApi = {
@@ -72,6 +73,21 @@ export const syncApi = {
 
   getGoodsDetail(id: number) {
     return client.get(`/sync/goods/${id}`) as Promise<ApiResponse<SyncGoodsDetailVO>>;
+  },
+
+  getShopSkuList(params: {
+    shopId: string;
+    productSkcId?: number;
+    productSkuId?: number;
+    skuExtCode?: string;
+    page?: number;
+    pageSize?: number;
+  }) {
+    return client.get('/sync/shop-skus', { params }) as Promise<ApiResponse<SpringPage<ShopSkuItemVO>>>;
+  },
+
+  updateShopSkuPurchasePrice(productSkuId: number, payload: { shopId: string; purchasePrice?: number | null }) {
+    return client.put(`/sync/shop-skus/${productSkuId}/purchase-price`, payload) as Promise<ApiResponse<ShopSkuItemVO>>;
   },
 
   repairGoodsDetails(shopId: string) {

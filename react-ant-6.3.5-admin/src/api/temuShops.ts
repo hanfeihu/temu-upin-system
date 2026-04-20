@@ -1,5 +1,5 @@
 import client from '@/api/client';
-import type { ApiResponse, TemuShopPayload, TemuShopVO } from '@/types/api';
+import type { ApiResponse, TemuShopFreightTemplateOption, TemuShopPayload, TemuShopVO } from '@/types/api';
 
 export const temuShopsApi = {
   list(params?: { enabled?: boolean }) {
@@ -14,6 +14,10 @@ export const temuShopsApi = {
 
   update(id: number, payload: TemuShopPayload) {
     return client.put(`/platform/temu-shops/${id}`, payload) as Promise<ApiResponse<TemuShopVO>>;
+  },
+
+  listFreightTemplates(id: number) {
+    return client.get(`/platform/temu-shops/${id}/freight-templates`) as Promise<ApiResponse<TemuShopFreightTemplateOption[]>>;
   },
 
   delete(id: number) {

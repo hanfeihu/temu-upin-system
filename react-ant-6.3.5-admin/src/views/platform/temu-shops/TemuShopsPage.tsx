@@ -18,7 +18,7 @@ import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useMemo, useState } from 'react';
 import { temuAppsApi } from '@/api/temuApps';
 import { temuShopsApi } from '@/api/temuShops';
-import type { TemuAppVO, TemuShopPayload, TemuShopVO } from '@/types/api';
+import type { TemuAppVO, TemuShopFreightTemplateOption, TemuShopPayload, TemuShopVO } from '@/types/api';
 
 const SHOP_DEFAULTS = {
   siteId: 100,
@@ -51,6 +51,42 @@ const initialEditForm: TemuShopPayload & { id: number | null } = {
   shipmentLimitSecond: SHOP_DEFAULTS.shipmentLimitSecond,
 };
 
+const buildFreightTemplateOptions = (
+  items: TemuShopFreightTemplateOption[],
+  currentTemplateId?: string | null,
+) => {
+  const merged = new Map<string, TemuShopFreightTemplateOption>();
+  const normalizedCurrentId = currentTemplateId?.trim();
+
+  if (normalizedCurrentId) {
+    merged.set(normalizedCurrentId, {
+      freightTemplateId: normalizedCurrentId,
+      templateName: null,
+    });
+  }
+
+  items.forEach((item) => {
+    const freightTemplateId = item.freightTemplateId?.trim();
+    if (!freightTemplateId) {
+      return;
+    }
+    const current = merged.get(freightTemplateId);
+    merged.set(freightTemplateId, {
+      freightTemplateId,
+      templateName: item.templateName?.trim() || current?.templateName || null,
+    });
+  });
+
+  return Array.from(merged.values());
+};
+
+const freightTemplateLabel = (item: TemuShopFreightTemplateOption) => {
+  if (item.templateName?.trim()) {
+    return `${item.templateName.trim()}（${item.freightTemplateId}）`;
+  }
+  return item.freightTemplateId;
+};
+
 const appLabel = (record?: TemuAppVO | null) => {
   if (!record) {
     return '-';
@@ -67,6 +103,18 @@ const TemuShopsPage = () => {
   const [editOpen, setEditOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editForm, setEditForm] = useState(initialEditForm);
+  const [freightTemplatesLoading, setFreightTemplatesLoading] = useState(false);
+  const [freightTemplateOptions, setFreightTemplateOptions] = useState<TemuShopFreightTemplateOption[]>(
+    buildFreightTemplateOptions(
+      [
+        {
+          freightTemplateId: SHOP_DEFAULTS.freightTemplateId,
+          templateName: null,
+        },
+      ],
+      SHOP_DEFAULTS.freightTemplateId,
+    ),
+  );
 
   const productApps = useMemo(
     () => apps.filter((item) => !item.appType || item.appType === 'PRODUCT'),
@@ -75,6 +123,14 @@ const TemuShopsPage = () => {
   const orderApps = useMemo(
     () => apps.filter((item) => item.appType === 'ORDER'),
     [apps],
+  );
+  const freightTemplateSelectOptions = useMemo(
+    () =>
+      freightTemplateOptions.map((item) => ({
+        value: item.freightTemplateId,
+        label: freightTemplateLabel(item),
+      })),
+    [freightTemplateOptions],
   );
 
   async function loadApps() {
@@ -108,13 +164,27 @@ const TemuShopsPage = () => {
     setEditForm((current) => ({ ...current, [key]: value }));
   }
 
+  async function loadFreightTemplates(shopRecordId: number, currentTemplateId?: string | null) {
+    setFreightTemplatesLoading(true);
+    try {
+      const res = await temuShopsApi.listFreightTemplates(shopRecordId);
+      setFreightTemplateOptions(buildFreightTemplateOptions(Array.isArray(res.data) ? res.data : [], currentTemplateId));
+    } catch (error) {
+      setFreightTemplateOptions(buildFreightTemplateOptions([], currentTemplateId));
+      message.error(error instanceof Error ? error.message : '运费模板加载失败');
+    } finally {
+      setFreightTemplatesLoading(false);
+    }
+  }
+
   function openCreate() {
     setEditForm(initialEditForm);
+    setFreightTemplateOptions(buildFreightTemplateOptions([], SHOP_DEFAULTS.freightTemplateId));
     setEditOpen(true);
   }
 
   function openEdit(record: TemuShopVO) {
-    setEditForm({
+    const nextForm = {
       id: record.id,
       shopName: record.shopName || '',
       shopId: record.shopId || '',
@@ -132,8 +202,11 @@ const TemuShopsPage = () => {
       originRegion2Id: record.originRegion2Id ?? null,
       freightTemplateId: record.freightTemplateId || '',
       shipmentLimitSecond: record.shipmentLimitSecond ?? null,
-    });
+    };
+    setEditForm(nextForm);
+    setFreightTemplateOptions(buildFreightTemplateOptions([], nextForm.freightTemplateId));
     setEditOpen(true);
+    void loadFreightTemplates(record.id, nextForm.freightTemplateId);
   }
 
   function validateForm() {
@@ -455,8 +528,31 @@ const TemuShopsPage = () => {
               onChange={(value) => updateForm('originRegion2Id', value ?? null)}
             />
           </Form.Item>
-          <Form.Item label="运费模板 ID" required>
-            <Input value={editForm.freightTemplateId} onChange={(event) => updateForm('freightTemplateId', event.target.value)} />
+          <Form.Item
+            label="运费模板"
+            required
+            extra={editForm.id ? '模板列表按当前店铺凭证从 TEMU 实时查询。' : '新增完成后再编辑，可从 TEMU 拉取该店铺的模板列表。'}
+          >
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Select
+                style={{ flex: 1 }}
+                value={editForm.freightTemplateId || undefined}
+                onChange={(value) => updateForm('freightTemplateId', value)}
+                options={freightTemplateSelectOptions}
+                loading={freightTemplatesLoading}
+                showSearch
+                optionFilterProp="label"
+                placeholder={editForm.id ? '请选择运费模板' : '新增后可从 TEMU 拉取'}
+                notFoundContent={editForm.id ? '暂无可选运费模板' : '请先保存店铺'}
+              />
+              <Button
+                onClick={() => editForm.id && void loadFreightTemplates(editForm.id, editForm.freightTemplateId)}
+                loading={freightTemplatesLoading}
+                disabled={!editForm.id}
+              >
+                刷新模板
+              </Button>
+            </div>
           </Form.Item>
           <Form.Item label="发货时限（秒）" required>
             <InputNumber

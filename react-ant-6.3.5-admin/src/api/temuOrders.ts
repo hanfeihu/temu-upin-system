@@ -15,6 +15,7 @@ export const temuOrdersApi = {
     shopRecordId?: number;
     shopId?: string;
     keyword?: string;
+    matchedTemuSkuIdLike?: string;
     cancelState?: string;
     aftersaleState?: string;
     orderStatus?: number;

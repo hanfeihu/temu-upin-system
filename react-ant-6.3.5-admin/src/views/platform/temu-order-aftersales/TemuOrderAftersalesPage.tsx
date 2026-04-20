@@ -6,8 +6,11 @@ import { temuOrderAftersalesApi } from '@/api/temuOrderAftersales';
 import { temuShopsApi } from '@/api/temuShops';
 import type { TemuOrderAftersaleVO, TemuShopVO } from '@/types/api';
 import { formatTimestamp } from '@/utils/format';
+import { loadStoredNumericShopFilter, resolveStoredShopFilter, saveStoredShopFilter } from '@/utils/shopFilter';
 
 type DateRangeValue = [Dayjs, Dayjs] | null;
+
+const SHOP_FILTER_STORAGE_KEY = 'temu-order-aftersales';
 
 const AFTERSALE_STATUS_GROUP_META: Record<number, { label: string; color: string; description: string }> = {
   1: { label: '待处理', color: 'gold', description: '售后还在等待平台或商家处理。' },
@@ -64,7 +67,7 @@ const TemuOrderAftersalesPage = () => {
   const { RangePicker } = DatePicker;
   const { message } = App.useApp();
   const [shops, setShops] = useState<Array<{ value: number; label: string }>>([]);
-  const [shopRecordId, setShopRecordId] = useState<number>();
+  const [shopRecordId, setShopRecordId] = useState<number | undefined>(() => loadStoredNumericShopFilter(SHOP_FILTER_STORAGE_KEY));
   const [keyword, setKeyword] = useState('');
   const [afterSalesStatusGroup, setAfterSalesStatusGroup] = useState<number>();
   const [createAtRange, setCreateAtRange] = useState<DateRangeValue>(null);
@@ -82,10 +85,15 @@ const TemuOrderAftersalesPage = () => {
       .filter((item: TemuShopVO) => item.id && item.shopName)
       .map((item: TemuShopVO) => ({ value: item.id, label: `${item.shopName}（${item.shopId}）` }));
     setShops(options);
-    if (!shopRecordId && options[0]) {
-      setShopRecordId(options[0].value);
-      await load(1, pageSize, options[0].value, keyword, afterSalesStatusGroup, createAtRange, updateAtRange);
+    const nextShopRecordId = resolveStoredShopFilter(options, shopRecordId);
+    if (!nextShopRecordId) {
+      setShopRecordId(undefined);
+      saveStoredShopFilter(SHOP_FILTER_STORAGE_KEY, undefined);
+      return;
     }
+    setShopRecordId(nextShopRecordId);
+    saveStoredShopFilter(SHOP_FILTER_STORAGE_KEY, nextShopRecordId);
+    await load(1, pageSize, nextShopRecordId, keyword, afterSalesStatusGroup, createAtRange, updateAtRange);
   }
 
   async function load(
@@ -196,6 +204,7 @@ const TemuOrderAftersalesPage = () => {
             value={shopRecordId}
             onChange={(value) => {
               setShopRecordId(value);
+              saveStoredShopFilter(SHOP_FILTER_STORAGE_KEY, value);
               setPage(1);
               void load(1, pageSize, value, keyword, afterSalesStatusGroup, createAtRange, updateAtRange);
             }}

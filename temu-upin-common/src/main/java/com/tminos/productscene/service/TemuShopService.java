@@ -174,6 +174,15 @@ public class TemuShopService {
     }
 
     @Transactional(readOnly = true)
+    public TemuShop getByIdOrThrow(Long id) {
+        if (id == null) {
+            throw new IllegalStateException("TEMU 店铺记录ID为空");
+        }
+        return repo.findById(id)
+                .orElseThrow(() -> new EntityNotFoundException("shop not found"));
+    }
+
+    @Transactional(readOnly = true)
     public TemuShop getEnabledShopByShopIdOrThrow(String shopId) {
         if (!StringUtils.hasText(shopId)) {
             throw new IllegalStateException("TEMU 店铺ID为空");

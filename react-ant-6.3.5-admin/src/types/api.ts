@@ -147,7 +147,7 @@ export interface ProductCollectionSkuRowVO {
 }
 
 export interface ProductCollectionTemuSkuVO {
-  id: number;
+  id: number | null;
   temuSkuId: string | null;
   originSkuId: string | null;
   specKey: string | null;
@@ -256,6 +256,11 @@ export interface TemuShopPayload {
   originRegion2Id: number | null;
   freightTemplateId: string;
   shipmentLimitSecond: number | null;
+}
+
+export interface TemuShopFreightTemplateOption {
+  freightTemplateId: string;
+  templateName: string | null;
 }
 
 export interface TemuOrderLogisticsVO {
@@ -771,6 +776,22 @@ export interface SyncGoodsDetailVO extends SyncGoodsListItemVO {
   priceChangeList: SyncGoodsPriceChangeVO[];
 }
 
+export interface ShopSkuItemVO {
+  id: number;
+  shopId: string;
+  productId: number | null;
+  productName: string | null;
+  productSkcId: number | null;
+  productSkuId: number | null;
+  skuExtCode: string | null;
+  skuSpecName: string | null;
+  mainImageUrl: string | null;
+  virtualStock: number | null;
+  purchasePrice: number | null;
+  referenceSupplierPrice: number | null;
+  usSiteSupplierPrice: number | null;
+}
+
 export interface PriceReviewSkuVO {
   id: number;
   productSkuId: number | null;
@@ -779,6 +800,7 @@ export interface PriceReviewSkuVO {
   extCode: string | null;
   specInfo: string | null;
   currentSupplyPrice: number | null;
+  purchasePrice: number | null;
 }
 
 export interface PriceReviewOrderVO {
@@ -831,6 +853,12 @@ export interface PriceAdjustSkuVO {
   extCode: string | null;
   specInfo: string | null;
   currentSupplyPrice: number | null;
+  purchasePrice: number | null;
+  salesQuantity: number | null;
+  aftersaleQuantity: number | null;
+  signedQuantity: number | null;
+  firstLegLogisticsFee: number | null;
+  logisticsRefreshOrderId: number | null;
 }
 
 export interface PriceAdjustOrderVO {

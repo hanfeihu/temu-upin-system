@@ -40,6 +40,11 @@ public class TemuOpenApiCredentialService {
     }
 
     @Transactional(readOnly = true)
+    public TemuOpenApiCredentials getTemuOpenApiCredentialsByShopRecordIdOrThrow(Long shopRecordId) {
+        return toProductCredentials(shopService.getByIdOrThrow(shopRecordId));
+    }
+
+    @Transactional(readOnly = true)
     public TemuOpenApiCredentials getOrderTemuOpenApiCredentialsByShopIdOrThrow(String shopId) {
         if (!StringUtils.hasText(shopId)) {
             return getDefaultOrderTemuOpenApiCredentialsOrThrow();

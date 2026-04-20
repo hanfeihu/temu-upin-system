@@ -24,7 +24,10 @@ import { temuOrdersApi } from '@/api/temuOrders';
 import { temuShopsApi } from '@/api/temuShops';
 import type { TemuOrderDetailVO, TemuOrderLogisticsRefreshPayload, TemuOrderVO, TemuShopVO } from '@/types/api';
 import { formatTimestampMinute, prettyJson } from '@/utils/format';
+import { loadStoredNumericShopFilter, resolveStoredShopFilter, saveStoredShopFilter } from '@/utils/shopFilter';
 import './TemuOrdersPage.css';
+
+const SHOP_FILTER_STORAGE_KEY = 'temu-orders';
 
 const orderStatusText = (value?: number | null) => {
   switch (value) {
@@ -144,8 +147,9 @@ const TemuOrdersPage = () => {
   const { RangePicker } = DatePicker;
   const { message } = App.useApp();
   const [shops, setShops] = useState<Array<{ value: number; label: string; shopId: string }>>([]);
-  const [shopRecordId, setShopRecordId] = useState<number>();
+  const [shopRecordId, setShopRecordId] = useState<number | undefined>(() => loadStoredNumericShopFilter(SHOP_FILTER_STORAGE_KEY));
   const [keyword, setKeyword] = useState('');
+  const [matchedTemuSkuIdLike, setMatchedTemuSkuIdLike] = useState('');
   const [cancelState, setCancelState] = useState<'ACTIVE' | 'CANCELLED' | 'ALL'>('ACTIVE');
   const [aftersaleState, setAftersaleState] = useState<'ALL' | 'REFUNDED' | 'NOT_REFUNDED'>('ALL');
   const [orderStatus, setOrderStatus] = useState<number>();
@@ -234,21 +238,27 @@ const TemuOrdersPage = () => {
         shopId: item.shopId,
       }));
     setShops(options);
-    if (!shopRecordId && options[0]) {
-      setShopRecordId(options[0].value);
-      await load(
-        1,
-        pageSize,
-        options[0].value,
-        keyword,
-        cancelState,
-        aftersaleState,
-        orderStatus,
-        matchStatus,
-        orderTimeRange,
-        updateTimeRange,
-      );
+    const nextShopRecordId = resolveStoredShopFilter(options, shopRecordId);
+    if (!nextShopRecordId) {
+      setShopRecordId(undefined);
+      saveStoredShopFilter(SHOP_FILTER_STORAGE_KEY, undefined);
+      return;
     }
+    setShopRecordId(nextShopRecordId);
+    saveStoredShopFilter(SHOP_FILTER_STORAGE_KEY, nextShopRecordId);
+    await load(
+      1,
+      pageSize,
+      nextShopRecordId,
+      keyword,
+      matchedTemuSkuIdLike,
+      cancelState,
+      aftersaleState,
+      orderStatus,
+      matchStatus,
+      orderTimeRange,
+      updateTimeRange,
+    );
   }
 
   async function load(
@@ -256,6 +266,7 @@ const TemuOrdersPage = () => {
     nextPageSize = pageSize,
     nextShopRecordId = shopRecordId,
     nextKeyword = keyword,
+    nextMatchedTemuSkuIdLike = matchedTemuSkuIdLike,
     nextCancelState = cancelState,
     nextAftersaleState = aftersaleState,
     nextOrderStatus = orderStatus,
@@ -273,6 +284,7 @@ const TemuOrdersPage = () => {
       const res = await temuOrdersApi.list({
         shopRecordId: nextShopRecordId,
         keyword: nextKeyword.trim() || undefined,
+        matchedTemuSkuIdLike: nextMatchedTemuSkuIdLike.trim() || undefined,
         cancelState: nextCancelState === 'ALL' ? undefined : nextCancelState,
         aftersaleState: nextAftersaleState === 'ALL' ? undefined : nextAftersaleState,
         orderStatus: nextOrderStatus,
@@ -471,8 +483,9 @@ const TemuOrdersPage = () => {
             value={shopRecordId}
             onChange={(value) => {
               setShopRecordId(value);
+              saveStoredShopFilter(SHOP_FILTER_STORAGE_KEY, value);
               setPage(1);
-              void load(1, pageSize, value, keyword, cancelState, aftersaleState, orderStatus, matchStatus, orderTimeRange, updateTimeRange);
+              void load(1, pageSize, value, keyword, matchedTemuSkuIdLike, cancelState, aftersaleState, orderStatus, matchStatus, orderTimeRange, updateTimeRange);
             }}
             options={shops}
             style={{ width: 280 }}
@@ -497,6 +510,7 @@ const TemuOrdersPage = () => {
                 pageSize,
                 shopRecordId,
                 keyword,
+                matchedTemuSkuIdLike,
                 nextValue,
                 aftersaleState,
                 nextValue === 'CANCELLED' && orderStatus !== undefined && orderStatus !== 3
@@ -526,6 +540,7 @@ const TemuOrdersPage = () => {
                 pageSize,
                 shopRecordId,
                 keyword,
+                matchedTemuSkuIdLike,
                 cancelState,
                 nextValue,
                 orderStatus,
@@ -545,6 +560,12 @@ const TemuOrdersPage = () => {
             onChange={(event) => setKeyword(event.target.value)}
             placeholder="PO号 / 店小秘单号 / 子订单号 / 商品名"
             style={{ width: 240 }}
+          />
+          <Input
+            value={matchedTemuSkuIdLike}
+            onChange={(event) => setMatchedTemuSkuIdLike(event.target.value)}
+            placeholder="SKUID 模糊筛选"
+            style={{ width: 180 }}
           />
           <Select
             allowClear
@@ -611,6 +632,7 @@ const TemuOrdersPage = () => {
           <Button
             onClick={() => {
               setKeyword('');
+              setMatchedTemuSkuIdLike('');
               setCancelState('ACTIVE');
               setAftersaleState('ALL');
               setOrderStatus(undefined);
@@ -618,7 +640,7 @@ const TemuOrdersPage = () => {
               setOrderTimeRange(null);
               setUpdateTimeRange(null);
               setPage(1);
-              void load(1, pageSize, shopRecordId, '', 'ACTIVE', 'ALL', undefined, undefined, null, null);
+              void load(1, pageSize, shopRecordId, '', '', 'ACTIVE', 'ALL', undefined, undefined, null, null);
             }}
           >
             重置

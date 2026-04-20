@@ -215,6 +215,8 @@ public class ProductCollectionService {
     private ProductCollectionResponse mapRowToResponse(Object[] r) {
         if (r == null || r.length < 30) return null;
         // Column order defined in ProductCollectionRepository.searchWithCounts
+        List<String> targetShopIds = parseJsonStringArraySafe(asString(r[10]));
+        List<String> targetShopNames = resolveTargetShopNames(targetShopIds, parseJsonStringArraySafe(asString(r[11])));
         return ProductCollectionResponse.builder()
                 .id(asLong(r[0]))
                 .productId(asString(r[1]))
@@ -226,8 +228,8 @@ public class ProductCollectionService {
                 .lastPublishRunId(asLong(r[7]))
                 .collectCount(asInteger(r[8]))
                 .companyName(asString(r[9]))
-                .targetShopIds(parseJsonStringArraySafe(asString(r[10])))
-                .targetShopNames(parseJsonStringArraySafe(asString(r[11])))
+                .targetShopIds(targetShopIds)
+                .targetShopNames(targetShopNames)
                 .productMainImage(asString(r[12]))
                 .temuCatid(asString(r[13]))
                 .temuCatname(asString(r[14]))
@@ -329,6 +331,8 @@ public class ProductCollectionService {
         skuRows.sort(Comparator.comparing(ProductCollectionSku::getId, Comparator.nullsLast(Long::compareTo)));
 
         List<ProductCollectionTemuSku> temuSkus = temuSkuRepo.findBySpuIdOrderByIdAsc(id);
+        List<String> targetShopIds = parseJsonStringArraySafe(pc.getTargetShopIds());
+        List<String> targetShopNames = resolveTargetShopNames(targetShopIds, parseJsonStringArraySafe(pc.getTargetShopNames()));
 
         return ProductCollectionDetailResponse.builder()
                 .id(pc.getId())
@@ -349,8 +353,8 @@ public class ProductCollectionService {
                 .collectionTime(pc.getCollectionTime())
                 .companyLocation(pc.getCompanyLocation())
                 .companyName(pc.getCompanyName())
-                .targetShopIds(parseJsonStringArraySafe(pc.getTargetShopIds()))
-                .targetShopNames(parseJsonStringArraySafe(pc.getTargetShopNames()))
+                .targetShopIds(targetShopIds)
+                .targetShopNames(targetShopNames)
                 .detailImages(pc.getDetailImages())
                 .hasSevereInventory(pc.getHasSevereInventory())
                 .maxPrice(pc.getMaxPrice())
@@ -398,6 +402,21 @@ public class ProductCollectionService {
                 .skuPropsExt(buildSkuPropResponses(props, propValueMap))
                 .skuRows(buildSkuResponses(skuRows))
                 .build();
+    }
+
+    private List<String> resolveTargetShopNames(List<String> targetShopIds, List<String> storedTargetShopNames) {
+        if (targetShopIds == null || targetShopIds.isEmpty()) {
+            return storedTargetShopNames == null ? Collections.emptyList() : storedTargetShopNames;
+        }
+        try {
+            TargetShopBindingService.TargetShopBinding binding = targetShopBindingService.resolve(targetShopIds);
+            if (binding != null && binding.shopNames() != null && !binding.shopNames().isEmpty()) {
+                return binding.shopNames();
+            }
+        } catch (Exception ignored) {
+            // Fall back to stored names if current shop mapping can't be resolved.
+        }
+        return storedTargetShopNames == null ? Collections.emptyList() : storedTargetShopNames;
     }
 
     @Transactional(readOnly = true)

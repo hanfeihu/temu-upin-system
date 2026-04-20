@@ -17,6 +17,7 @@ import ProductCollectionsPage from '@/views/platform/product-collections/Product
 import ProductDraftsPage from '@/views/platform/product-drafts/ProductDraftsPage';
 import PublishLogsPage from '@/views/platform/publish-logs/PublishLogsPage';
 import PublishSuccessCasesPage from '@/views/platform/publish-success-cases/PublishSuccessCasesPage';
+import ShopSkuPage from '@/views/platform/shop-skus/ShopSkuPage';
 import ParentSpecMappingsPage from '@/views/platform/spec-mappings/parent-spec-mappings/ParentSpecMappingsPage';
 import SyncActivityPage from '@/views/platform/sync-activity/SyncActivityPage';
 import SyncConfigPage from '@/views/platform/sync-config/SyncConfigPage';
@@ -47,6 +48,7 @@ const routeElementMap: Record<string, JSX.Element> = {
   '/platform/product-drafts': <ProductDraftsPage />,
   '/platform/publish-logs': <PublishLogsPage />,
   '/platform/publish-success-cases': <PublishSuccessCasesPage />,
+  '/platform/shop-skus': <ShopSkuPage />,
   '/platform/spec-mappings/parent-spec-mappings': <ParentSpecMappingsPage />,
   '/platform/sync-activity': <SyncActivityPage />,
   '/platform/sync-config': <SyncConfigPage />,

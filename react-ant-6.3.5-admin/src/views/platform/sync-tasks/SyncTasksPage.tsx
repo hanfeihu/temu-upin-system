@@ -33,6 +33,7 @@ import type {
   TemuShopVO,
 } from '@/types/api';
 import { formatDateTime } from '@/utils/format';
+import { loadStoredShopFilter, saveStoredShopFilter } from '@/utils/shopFilter';
 import './SyncTasksPage.css';
 
 interface ShopOption {
@@ -41,6 +42,8 @@ interface ShopOption {
   shopId: string;
   shopName: string;
 }
+
+const SHOP_FILTER_STORAGE_KEY = 'sync-tasks';
 
 const syncTypeMap: Record<string, string> = {
   GOODS: '商品信息',
@@ -289,7 +292,7 @@ const SyncTasksPage = () => {
 
   const [shopsLoading, setShopsLoading] = useState(false);
   const [shops, setShops] = useState<ShopOption[]>([]);
-  const [shopId, setShopId] = useState<string>();
+  const [shopId, setShopId] = useState<string | undefined>(() => loadStoredShopFilter(SHOP_FILTER_STORAGE_KEY));
 
   const [loading, setLoading] = useState(false);
   const [rows, setRows] = useState<SyncTaskVO[]>([]);
@@ -425,6 +428,7 @@ const SyncTasksPage = () => {
       const firstShopId = options[0]?.value;
       if (!firstShopId) {
         setShopId(undefined);
+        saveStoredShopFilter(SHOP_FILTER_STORAGE_KEY, undefined);
         setRows([]);
         setTotal(0);
         setRepairResult(null);
@@ -433,6 +437,7 @@ const SyncTasksPage = () => {
 
       const nextShopId = shopId && options.some((item) => item.value === shopId) ? shopId : firstShopId;
       setShopId(nextShopId);
+      saveStoredShopFilter(SHOP_FILTER_STORAGE_KEY, nextShopId);
       await Promise.all([fetchList(1, pageSize, nextShopId, syncType), loadLatestRepairStatus(nextShopId)]);
     } catch (error) {
       message.error(error instanceof Error ? error.message : '加载店铺失败');
@@ -777,6 +782,7 @@ const SyncTasksPage = () => {
           activeKey={shopId}
           onChange={(value) => {
             setShopId(value);
+            saveStoredShopFilter(SHOP_FILTER_STORAGE_KEY, value);
             setPage(1);
             void Promise.all([fetchList(1, pageSize, value, syncType), loadLatestRepairStatus(value)]);
           }}

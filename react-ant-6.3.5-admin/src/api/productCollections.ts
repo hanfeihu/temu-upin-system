@@ -3,7 +3,9 @@ import type {
   ApiResponse,
   ProductCollectionDetailVO,
   ProductCollectionRow,
+  ProductCollectionTemuSkuVO,
   SpringPage,
+  TemuAttrRuleVO,
   TemuCategoryOption,
   TemuCategorySummary,
   TemuTitleOptimizationResponseVO,
@@ -35,6 +37,11 @@ interface MatchCategoryResponse {
 interface PublishToTemuResponse {
   runId?: number;
   goodsId?: string;
+}
+
+interface TemuSkuImageUploadResponse {
+  originalUrl?: string;
+  imageUrl?: string;
 }
 
 export interface ProductCollectionUpdatePayload {
@@ -198,6 +205,50 @@ export const productCollectionsApi = {
     return client.post(`/platform/product-collections/${id}/temu-category/save`, payload) as Promise<
       ApiResponse<null>
     >;
+  },
+
+  getTemuCategoryAttributes(id: number) {
+    return client.post(`/platform/product-collections/${id}/temu-category/attributes`) as Promise<ApiResponse<string>>;
+  },
+
+  saveTemuAttributes(id: number, temuAttributes: Record<string, unknown>) {
+    return client.post(`/platform/product-collections/${id}/temu-attributes/save`, { temuAttributes }) as Promise<
+      ApiResponse<null>
+    >;
+  },
+
+  aiFillTemuAttributes(id: number) {
+    return client.post(`/platform/product-collections/${id}/temu-attributes/ai-fill`, null, {
+      timeout: 240000,
+    }) as Promise<ApiResponse<Record<string, unknown>>>;
+  },
+
+  listTemuSkus(id: number) {
+    return client.get(`/platform/product-collections/${id}/temu/skus`) as Promise<
+      ApiResponse<ProductCollectionTemuSkuVO[]>
+    >;
+  },
+
+  initTemuSkus(id: number, force = false) {
+    return client.post(`/platform/product-collections/${id}/temu/skus/init`, { force }, { timeout: 240000 }) as Promise<
+      ApiResponse<ProductCollectionTemuSkuVO[]>
+    >;
+  },
+
+  saveTemuSkus(id: number, skus: ProductCollectionTemuSkuVO[]) {
+    return client.post(`/platform/product-collections/${id}/temu/skus/save`, { skus }, { timeout: 240000 }) as Promise<
+      ApiResponse<ProductCollectionTemuSkuVO[]>
+    >;
+  },
+
+  uploadTemuSkuImage(id: number, imageUrl: string) {
+    return client.post(`/platform/product-collections/${id}/temu/skus/image/upload`, { imageUrl }, { timeout: 240000 }) as Promise<
+      ApiResponse<TemuSkuImageUploadResponse>
+    >;
+  },
+
+  listTemuAttrRules(params: { enabled?: boolean; leafCatId?: string } = {}) {
+    return client.get('/platform/temu-attr-rules', { params }) as Promise<ApiResponse<TemuAttrRuleVO[]>>;
   },
 
   generateTemuTitleOptimization(id: number) {

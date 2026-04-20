@@ -27,6 +27,8 @@ import { productCollectionsApi } from '@/api/productCollections';
 import { publishLogsApi } from '@/api/publishLogs';
 import { temuShopsApi } from '@/api/temuShops';
 import type { ProductCollectionRow, PublishLogVO, TemuCategoryOption, TemuCategorySummary, TemuShopVO } from '@/types/api';
+import TemuAttributesModal from './components/TemuAttributesModal';
+import TemuSkuConverterModal from './components/TemuSkuConverterModal';
 
 interface CollectionFilters {
   q: string;
@@ -202,6 +204,10 @@ const ProductCollectionsPage = () => {
   const [matchOptions, setMatchOptions] = useState<TemuCategoryOption[]>([]);
   const [selectedMatchKey, setSelectedMatchKey] = useState<string>();
   const [savingMatch, setSavingMatch] = useState(false);
+  const [temuAttrOpen, setTemuAttrOpen] = useState(false);
+  const [temuAttrRecord, setTemuAttrRecord] = useState<ProductCollectionRow | null>(null);
+  const [skuConvertOpen, setSkuConvertOpen] = useState(false);
+  const [skuConvertRecord, setSkuConvertRecord] = useState<ProductCollectionRow | null>(null);
   const [publishTipState, setPublishTipState] = useState<Record<string, PublishTipStateItem>>({});
 
   async function loadTargetShops() {
@@ -490,6 +496,16 @@ const ProductCollectionsPage = () => {
     window.open(`${window.location.origin}/goods/${record.id}`, '_blank', 'noopener,noreferrer');
   }
 
+  function openTemuAttributes(record: ProductCollectionRow) {
+    setTemuAttrRecord(record);
+    setTemuAttrOpen(true);
+  }
+
+  function openSkuConvert(record: ProductCollectionRow) {
+    setSkuConvertRecord(record);
+    setSkuConvertOpen(true);
+  }
+
   function renderStatus(record: ProductCollectionRow) {
     if (record.collectionStatus === 1) {
       return <Tag color="processing">发布中</Tag>;
@@ -672,12 +688,20 @@ const ProductCollectionsPage = () => {
     {
       title: '操作',
       key: 'actions',
-      width: 220,
+      width: 240,
       render: (_, record) => {
         const menuItems: MenuProps['items'] = [
           {
             key: 'match',
             label: '匹配TEMU类目',
+          },
+          {
+            key: 'temu-attributes',
+            label: 'TEMU属性',
+          },
+          {
+            key: 'sku-convert',
+            label: 'SKU 转换',
           },
           {
             key: 'edit',
@@ -718,6 +742,12 @@ const ProductCollectionsPage = () => {
                   }
                   if (key === 'edit') {
                     openEdit(record);
+                  }
+                  if (key === 'temu-attributes') {
+                    openTemuAttributes(record);
+                  }
+                  if (key === 'sku-convert') {
+                    openSkuConvert(record);
                   }
                   if (key === 'requeue') {
                     requeue(record);
@@ -945,6 +975,24 @@ const ProductCollectionsPage = () => {
           )}
         </Space>
       </Modal>
+
+      <TemuAttributesModal
+        open={temuAttrOpen}
+        record={temuAttrRecord}
+        onClose={() => {
+          setTemuAttrOpen(false);
+          setTemuAttrRecord(null);
+        }}
+      />
+
+      <TemuSkuConverterModal
+        open={skuConvertOpen}
+        record={skuConvertRecord}
+        onClose={() => {
+          setSkuConvertOpen(false);
+          setSkuConvertRecord(null);
+        }}
+      />
     </Space>
   );
 };
