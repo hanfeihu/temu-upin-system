@@ -104,20 +104,16 @@ public class AddGloGoodsRequest {
         private String type;       // 楼层类型，image 或 text
         private Integer priority;  // 楼层优先级
         private List<GoodsLayerContent> contentList; // 楼层内容
+        // IMPORTANT: TEMU expects this field on GoodsLayerDecorationReq.
+        // Do not move it to GoodsLayerContent again.
+        private String key;        // 内容标识，默认 DecImage
 
         @Data @NoArgsConstructor @AllArgsConstructor
         public static class GoodsLayerContent {
             private String imgUrl;                      // 图片 URL
             private TextModuleDetails textModuleDetails;// 文字模块详情
-            private String backgroundColor;             // 背景色
-            private Integer fontFamily;                 // 字体族
-            private Integer fontSize;                   // 字号
-            private String align;                       // 对齐方式：left/right/center/justify
-            private String fontColor;                   // 字体颜色
             private Integer width;                      // 宽度
-            private String text;                        // 文本内容
             private Integer height;                     // 高度
-            private String key;                         // 内容标识，默认 DecImage
         }
 
         @Data @NoArgsConstructor @AllArgsConstructor
@@ -127,10 +123,7 @@ public class AddGloGoodsRequest {
             private Integer fontSize;       // 字号
             private String align;           // 对齐方式
             private String fontColor;       // 字体颜色
-            private Integer width;          // 宽度
-            private String text;            // 文本内容
-            private Integer height;         // 高度
-            private String key;             // 模块标识
+
         }
     }
 

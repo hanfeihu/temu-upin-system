@@ -258,6 +258,99 @@ export interface TemuShopPayload {
   shipmentLimitSecond: number | null;
 }
 
+export interface AiVariantPublishRawRequest {
+  shopRecordId: number | null;
+  sourceType: string;
+  sourceBizType?: string | null;
+  sourceBizId?: number | null;
+  sourceBizName?: string | null;
+  sourceNote: string;
+  requestPayload: string;
+}
+
+export interface AiVariantPublishGenerateDraftRequest {
+  shopRecordId: number | null;
+  sourceSpuId: number | null;
+}
+
+export interface AiVariantPublishSkuPreview {
+  skcExtCode: string | null;
+  skuExtCode: string | null;
+  thumbUrl: string | null;
+  supplierPriceText: string | null;
+  siteSupplierPriceText: string | null;
+  specNames: string[];
+}
+
+export interface AiVariantPublishPreview {
+  productName: string | null;
+  mainImageUrl: string | null;
+  carouselImageUrls: string[];
+  detailImageUrls: string[];
+  skcCount: number;
+  skuCount: number;
+  skuList: AiVariantPublishSkuPreview[];
+}
+
+export interface AiVariantPublishRecordSummary {
+  id: number;
+  shopRecordId: number;
+  shopId: string | null;
+  shopName: string | null;
+  sourceType: string | null;
+  sourceBizType: string | null;
+  sourceBizId: number | null;
+  sourceBizName: string | null;
+  sourceNote: string | null;
+  status: string | null;
+  goodsId: string | null;
+  errorMessage: string | null;
+  createdAt: string | number[] | null;
+  updatedAt: string | number[] | null;
+  preview: AiVariantPublishPreview | null;
+}
+
+export interface AiVariantPublishRecordDetail {
+  id: number;
+  shopRecordId: number;
+  shopId: string | null;
+  shopName: string | null;
+  sourceType: string | null;
+  sourceBizType: string | null;
+  sourceBizId: number | null;
+  sourceBizName: string | null;
+  sourceNote: string | null;
+  status: string | null;
+  goodsId: string | null;
+  errorMessage: string | null;
+  createdAt: string | number[] | null;
+  updatedAt: string | number[] | null;
+  requestPayload: string | null;
+  responsePayload: string | null;
+  responseSuccess: boolean | null;
+  responseErrorCode: number | null;
+  responseErrorMsg: string | null;
+  requestId: string | null;
+  preview: AiVariantPublishPreview | null;
+}
+
+export interface AiVariantPublishDraftResponse {
+  shopRecordId: number;
+  shopId: string | null;
+  shopName: string | null;
+  sourceSpuId: number;
+  sourceProductName: string | null;
+  sourceProductMainImage: string | null;
+  sourceType: string | null;
+  sourceBizType: string | null;
+  sourceBizId: number | null;
+  sourceBizName: string | null;
+  sourceNote: string | null;
+  requestPayload: string;
+  warnings: string[];
+  preview: AiVariantPublishPreview | null;
+}
+
 export interface TemuShopFreightTemplateOption {
   freightTemplateId: string;
   templateName: string | null;
@@ -351,6 +444,45 @@ export interface TemuOrderSyncResultVO {
   matchedCount: number;
   logisticsRefreshedCount: number;
   message: string | null;
+}
+
+export interface TemuOrderDashboardDailyValueVO {
+  date: string;
+  value: number;
+}
+
+export interface TemuOrderDashboardDailyCompareValueVO {
+  date: string;
+  signedValue: number;
+  aftersaleValue: number;
+}
+
+export interface TemuOrderDashboardWindowVO {
+  startDate: string;
+  endDate: string;
+  days: number;
+  label: string;
+}
+
+export interface TemuOrderDashboardTotalsVO {
+  recentChildOrderCount: number;
+  recentQuantity: number;
+  historicalSignedParentCount: number;
+  historicalAftersaleParentCount: number;
+}
+
+export interface TemuOrderDashboardResponseVO {
+  shop: {
+    shopRecordId: number;
+    shopId: string;
+    shopName: string;
+  };
+  recent30Window: TemuOrderDashboardWindowVO;
+  historicalWindow: TemuOrderDashboardWindowVO;
+  totals: TemuOrderDashboardTotalsVO;
+  recentOrderCountSeries: TemuOrderDashboardDailyValueVO[];
+  recentQuantitySeries: TemuOrderDashboardDailyValueVO[];
+  historicalSignedAftersaleSeries: TemuOrderDashboardDailyCompareValueVO[];
 }
 
 export interface TemuOrderLogisticsRefreshPayload {

@@ -49,6 +49,9 @@ public class TemuPublishLogService {
     }
 
     private void save(Long runId, String stage, String level, String message, Object data) {
+        if (runId == null) {
+            return;
+        }
         TemuPublishLog l = new TemuPublishLog();
         l.setRunId(runId);
         l.setStage(stage == null ? "" : stage);
@@ -65,6 +68,7 @@ public class TemuPublishLogService {
     }
 
     public void finishSuccess(Long runId, String goodsId, String requestJson, String responseRaw) {
+        if (runId == null) return;
         TemuPublishRun r = runRepo.findById(runId).orElse(null);
         if (r == null) return;
         r.setStatus("SUCCEEDED");
@@ -76,6 +80,7 @@ public class TemuPublishLogService {
     }
 
     public void finishFailed(Long runId, String error, String requestJson, String responseRaw) {
+        if (runId == null) return;
         TemuPublishRun r = runRepo.findById(runId).orElse(null);
         if (r == null) return;
         r.setStatus("FAILED");

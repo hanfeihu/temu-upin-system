@@ -6,10 +6,12 @@ import NotFound from '@/views/exception/NotFound';
 import Login from '@/views/auth/Login';
 import ModulePage from '@/views/modules/ModulePage';
 import AIChannelsPage from '@/views/platform/ai-channels/AIChannelsPage';
+import AiVariantPublishPage from '@/views/platform/ai-variant-publish/AiVariantPublishPage';
 import BizLogsPage from '@/views/platform/biz-logs/BizLogsPage';
 import ImageTranslateRecordsPage from '@/views/platform/image-translate-records/ImageTranslateRecordsPage';
 import OcrFilterWordsPage from '@/views/platform/ocr-filter-words/OcrFilterWordsPage';
 import OcrTasksPage from '@/views/platform/ocr-tasks/OcrTasksPage';
+import OrderDashboardPage from '@/views/platform/order-dashboard/OrderDashboardPage';
 import ParserTestPage from '@/views/platform/parser-test/ParserTestPage';
 import PostImportLogsPage from '@/views/platform/post-import-logs/PostImportLogsPage';
 import ProductCollectionDetailPage from '@/views/platform/product-collections/ProductCollectionDetailPage';
@@ -37,6 +39,7 @@ import TitleFilterWordsPage from '@/views/platform/title-filter-words/TitleFilte
 
 const routeElementMap: Record<string, JSX.Element> = {
   '/platform/ai-channels': <AIChannelsPage />,
+  '/platform/ai-variant-publish': <AiVariantPublishPage />,
   '/platform/biz-logs': <BizLogsPage />,
   '/platform/image-translate-records': <ImageTranslateRecordsPage />,
   '/platform/ocr-filter-words': <OcrFilterWordsPage />,
@@ -77,6 +80,14 @@ const router = createBrowserRouter([
     element: (
       <AuthGuard>
         <ProductCollectionDetailPage />
+      </AuthGuard>
+    ),
+  },
+  {
+    path: '/platform/order-dashboard',
+    element: (
+      <AuthGuard>
+        <OrderDashboardPage />
       </AuthGuard>
     ),
   },

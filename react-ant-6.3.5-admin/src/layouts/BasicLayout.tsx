@@ -1,5 +1,6 @@
 import {
   DownloadOutlined,
+  LineChartOutlined,
   LogoutOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
@@ -20,6 +21,7 @@ import { useAuth } from '@/context/AuthContext';
 const { Header, Sider, Content } = Layout;
 const { Text } = Typography;
 const PLUGIN_DOWNLOAD_PATH = '/downloads/tminos-1688-collector-latest.zip';
+const ORDER_DASHBOARD_PATH = '/platform/order-dashboard';
 
 const BasicLayout = () => {
   const navigate = useNavigate();
@@ -33,6 +35,7 @@ const BasicLayout = () => {
 
   const matchedRoute = getMatchedRouteMeta(location.pathname);
   const selectedMenuKey = getSelectedMenuKey(location.pathname);
+  const pageTitle = matchedRoute?.title || 'TMINOS';
 
   useEffect(() => {
     if (collapsed) {
@@ -56,6 +59,10 @@ const BasicLayout = () => {
 
   function downloadPlugin() {
     window.open(PLUGIN_DOWNLOAD_PATH, '_blank', 'noopener,noreferrer');
+  }
+
+  function openOrderDashboard() {
+    window.open(ORDER_DASHBOARD_PATH, '_blank', 'noopener,noreferrer');
   }
 
   return (
@@ -109,13 +116,16 @@ const BasicLayout = () => {
                 {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
               </div>
               <Text strong style={{ fontSize: 15 }}>
-                {matchedRoute?.title || 'TMINOS'}
+                {pageTitle}
               </Text>
             </Flex>
 
             <Flex align="center" gap={12}>
               <Button icon={<DownloadOutlined />} onClick={downloadPlugin}>
                 下载插件
+              </Button>
+              <Button icon={<LineChartOutlined />} onClick={openOrderDashboard}>
+                订单大屏
               </Button>
               <Dropdown
                 menu={{

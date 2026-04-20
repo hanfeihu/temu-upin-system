@@ -1,7 +1,9 @@
 package com.tminos.productscene.controller;
 
 import com.tminos.productscene.dto.ApiResponse;
+import com.tminos.productscene.dto.TemuOrderDashboardDTO;
 import com.tminos.productscene.dto.TemuOrderDTO;
+import com.tminos.productscene.service.TemuOrderDashboardService;
 import com.tminos.productscene.service.TemuOrderService;
 import org.springframework.data.domain.Page;
 import org.springframework.http.ResponseEntity;
@@ -14,9 +16,12 @@ import java.util.List;
 public class TemuOrderController {
 
     private final TemuOrderService orderService;
+    private final TemuOrderDashboardService orderDashboardService;
 
-    public TemuOrderController(TemuOrderService orderService) {
+    public TemuOrderController(TemuOrderService orderService,
+                               TemuOrderDashboardService orderDashboardService) {
         this.orderService = orderService;
+        this.orderDashboardService = orderDashboardService;
     }
 
     @GetMapping
@@ -41,6 +46,14 @@ public class TemuOrderController {
                         orderTimeStartMs, orderTimeEndMs, updateTimeStartMs, updateTimeEndMs,
                         page, pageSize)
         ));
+    }
+
+    @GetMapping("/dashboard")
+    public ResponseEntity<ApiResponse<TemuOrderDashboardDTO.Response>> dashboard(
+            @RequestParam(value = "shopRecordId", required = false) Long shopRecordId,
+            @RequestParam(value = "shopId", required = false) String shopId
+    ) {
+        return ResponseEntity.ok(ApiResponse.success(orderDashboardService.getDashboard(shopRecordId, shopId)));
     }
 
     @GetMapping("/{id}")

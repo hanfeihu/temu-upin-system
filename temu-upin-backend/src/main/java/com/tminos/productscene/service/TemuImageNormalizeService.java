@@ -131,6 +131,14 @@ public class TemuImageNormalizeService {
         return r;
     }
 
+    public ImageSize probeImageSize(String url) throws Exception {
+        if (!StringUtils.hasText(url)) {
+            throw new IllegalArgumentException("image url is required");
+        }
+        ImageInfo info = probe(normalizeUrlString(url));
+        return new ImageSize(info.width, info.height);
+    }
+
     private String parseUploadedImageUrlOrThrow(String raw) {
         if (!StringUtils.hasText(raw)) {
             throw new IllegalStateException("TEMU upload response empty");
@@ -322,6 +330,9 @@ public class TemuImageNormalizeService {
         public void setChanged(Boolean changed) { this.changed = changed; }
         public String getReason() { return reason; }
         public void setReason(String reason) { this.reason = reason; }
+    }
+
+    public record ImageSize(int width, int height) {
     }
 
 }

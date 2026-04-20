@@ -1,6 +1,7 @@
 import client from '@/api/client';
 import type {
   ApiResponse,
+  TemuOrderDashboardResponseVO,
   SpringPage,
   TemuOrderDetailVO,
   TemuOrderLogisticsRefreshPayload,
@@ -28,6 +29,13 @@ export const temuOrdersApi = {
     pageSize?: number;
   }) {
     return client.get('/platform/temu-orders', { params }) as Promise<ApiResponse<SpringPage<TemuOrderVO>>>;
+  },
+
+  dashboard(params?: {
+    shopRecordId?: number;
+    shopId?: string;
+  }) {
+    return client.get('/platform/temu-orders/dashboard', { params }) as Promise<ApiResponse<TemuOrderDashboardResponseVO>>;
   },
 
   detail(id: number) {

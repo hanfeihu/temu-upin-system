@@ -185,6 +185,13 @@ const navigationTree: AppNavItem[] = [
     icon: <RobotOutlined />,
     children: [
       {
+        key: '/platform/ai-variant-publish',
+        path: '/platform/ai-variant-publish',
+        label: 'AI变体发布',
+        description: '直接调用原始 TEMU 发布接口并查看发布记录。',
+        icon: <RobotOutlined />,
+      },
+      {
         key: '/platform/temu-attr-ai-fill',
         path: '/platform/temu-attr-ai-fill',
         label: '类目属性AI填写',

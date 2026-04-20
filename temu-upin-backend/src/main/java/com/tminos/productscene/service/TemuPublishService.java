@@ -31,6 +31,18 @@ import java.util.*;
 @SuppressWarnings("unused")
 public class TemuPublishService {
 
+    public record GeneratedDraftResult(
+            Long sourceSpuId,
+            Long shopRecordId,
+            String shopId,
+            String shopName,
+            String sourceProductName,
+            String sourceProductMainImage,
+            String requestJson,
+            List<String> warnings
+    ) {
+    }
+
 
     private final ProductCollectionService productCollectionService;
     private final ProductCollectionRepository productCollectionRepository;
@@ -322,8 +334,7 @@ public class TemuPublishService {
         if (carousel != null && !carousel.isEmpty()) {
             req.setCarouselImageUrls(new ArrayList<>(carousel));
         }
-        List<AddGloGoodsRequest.GoodsLayerDecorationReq> goodsLayerDecorationReqs = buildGoodsLayerDecorationReqs(detail);
-        if (!goodsLayerDecorationReqs.isEmpty()) {
+        if (detail != null && !detail.isEmpty()) {
             warnings.add("goodsLayerDecorationReqs skipped before publish to avoid floor validation errors");
             publishLogService.info(runId, "DETAIL", "skip goodsLayerDecorationReqs before publish");
         }
@@ -564,6 +575,234 @@ public class TemuPublishService {
         }
 
         return new TemuPublishDTO.PublishResponse(success, success ? "OK" : "TEMU 返回失败", runId, goodsId, raw, null, warnings);
+    }
+
+    public GeneratedDraftResult generatePublishableDraft(Long spuId, Long shopRecordId) throws Exception {
+        Long runId = null;
+        List<String> warnings = new ArrayList<>();
+        ProductCollection pc = productCollectionService.get(spuId);
+
+        if (!StringUtils.hasText(pc.getTemuCatid()) || !StringUtils.hasText(pc.getTemuCatname())) {
+            throw new IllegalStateException("temu 类目为空，请先匹配并保存");
+        }
+
+        try {
+            TemuAttrAiFillService.EnsureForPublishResult ensure = temuAttrAiFillService.ensureReadyForPublish(spuId, true);
+            if (ensure != null && ensure.appliedToProduct()) {
+                pc = productCollectionService.get(spuId);
+                warnings.add("draft auto-filled TEMU attributes from AI task result");
+            }
+        } catch (Exception e) {
+            warnings.add("ensure temu attr ai task failed: " + safeErrMessage(e));
+        }
+
+        if (!StringUtils.hasText(pc.getTemuAttributes())) {
+            throw new IllegalStateException("TEMU 属性为空，请先填写并保存");
+        }
+
+        List<ProductCollectionTemuSku> temuSkus = temuSkuRepository.findBySpuIdOrderByIdAsc(spuId);
+        if (temuSkus == null || temuSkus.isEmpty()) {
+            throw new IllegalStateException("TEMU SKU 为空，请先做 SKU 转换");
+        }
+
+        if (shopRecordId == null) {
+            throw new IllegalStateException("店铺不能为空");
+        }
+
+        com.tminos.productscene.entity.TemuShop shop = temuShopService.getEnabledShopByIdOrThrow(shopRecordId);
+        String publishShopId = shop.getShopId();
+        if (!StringUtils.hasText(publishShopId)) {
+            throw new IllegalStateException("TEMU 店铺ID为空");
+        }
+
+        TemuShopService.PublishConfig shopConfig = temuShopService.getPublishConfigByShopIdOrThrow(publishShopId);
+        int siteId = shopConfig.siteId();
+        String warehouseId = shopConfig.warehouseId();
+        String originRegion1 = shopConfig.originRegion1ShortName();
+        long originRegion2Id = shopConfig.originRegion2Id();
+        String freightTemplateId = shopConfig.freightTemplateId();
+        int limitSecond = shopConfig.shipmentLimitSecond();
+
+        TemuOpenApiCredentials creds = temuOpenApiCredentialService.getTemuOpenApiCredentialsByShopRecordIdOrThrow(shopRecordId);
+        CategoryApiClient categoryClient = new CategoryApiClient(creds);
+
+        List<String> carousel = parseJsonStringList(pc.getCarouselImages());
+        List<String> detail = parseJsonStringList(pc.getDetailImages());
+        List<String> allImageUrls = new ArrayList<>();
+        if (StringUtils.hasText(pc.getProductMainImage())) allImageUrls.add(pc.getProductMainImage().trim());
+        for (String u : carousel) if (StringUtils.hasText(u)) allImageUrls.add(u.trim());
+        for (String u : detail) if (StringUtils.hasText(u)) allImageUrls.add(u.trim());
+        for (ProductCollectionTemuSku sku : temuSkus) {
+            if (sku != null && StringUtils.hasText(sku.getImage())) {
+                allImageUrls.add(sku.getImage().trim());
+            }
+        }
+        Map<String, TemuImageMeta> imageMetaCache = temuImageMetaService.getByUrls(allImageUrls);
+
+        String mainImage = normalizeOneStrict(pc.getProductMainImage(), "productMainImage", warnings, runId, imageMetaCache);
+        if (carousel.isEmpty() && StringUtils.hasText(mainImage)) {
+            carousel = List.of(mainImage);
+            warnings.add("carouselImages empty, fallback to productMainImage");
+        }
+        if (!carousel.isEmpty()) {
+            List<String> normalized = new ArrayList<>();
+            for (int i = 0; i < carousel.size(); i++) {
+                normalized.add(normalizeOneStrict(carousel.get(i), "carouselImages[" + i + "]", warnings, runId, imageMetaCache));
+            }
+            carousel = normalized;
+        }
+        if (!detail.isEmpty()) {
+            List<String> normalized = new ArrayList<>();
+            for (int i = 0; i < detail.size(); i++) {
+                normalized.add(normalizeOneStrict(detail.get(i), "detailImages[" + i + "]", warnings, runId, imageMetaCache));
+            }
+            detail = normalized;
+        }
+
+        boolean imagesChanged = false;
+        if (StringUtils.hasText(mainImage) && !Objects.equals(mainImage, pc.getProductMainImage())) {
+            pc.setProductMainImage(mainImage);
+            imagesChanged = true;
+        }
+        String newCarouselJson = writeJson(carousel);
+        if (newCarouselJson != null && !Objects.equals(newCarouselJson, pc.getCarouselImages())) {
+            pc.setCarouselImages(newCarouselJson);
+            imagesChanged = true;
+        }
+        String newDetailJson = writeJson(detail);
+        if (newDetailJson != null && !Objects.equals(newDetailJson, pc.getDetailImages())) {
+            pc.setDetailImages(newDetailJson);
+            imagesChanged = true;
+        }
+        for (ProductCollectionTemuSku sku : temuSkus) {
+            if (sku == null || !StringUtils.hasText(sku.getImage())) {
+                continue;
+            }
+            String normalized = normalizeOneStrict(sku.getImage(), "temuSku.image", warnings, runId, imageMetaCache);
+            if (StringUtils.hasText(normalized) && !Objects.equals(normalized, sku.getImage())) {
+                sku.setImage(normalized);
+                imagesChanged = true;
+            }
+        }
+        if (imagesChanged) {
+            productCollectionRepository.save(pc);
+            temuSkuRepository.saveAll(temuSkus);
+        }
+
+        SpecMappingDraftGate draftGate = ensureSpecMappingDraftReadyForPublish(
+                spuId,
+                runId,
+                warnings,
+                categoryClient,
+                temuSkus,
+                pc,
+                siteId,
+                warehouseId,
+                shopConfig.skuDefaultStock(),
+                shopConfig.skuMaxStock()
+        );
+        if (!draftGate.ready()) {
+            throw new IllegalStateException(firstNonBlank(draftGate.message(), "规格映射草案缺失，请先检查 SKU 映射"));
+        }
+
+        AddGloGoodsRequest req = new AddGloGoodsRequest();
+        String enTitle = sanitizeEnglishName(firstNonBlank(pc.getTemuOptimizedTitleEn(), pc.getProductName()), warnings);
+        req.setProductName(enTitle);
+        req.setProductI18nReqs(new ArrayList<>(List.of(new AddGloGoodsRequest.ProductI18nReq("en", enTitle))));
+        req.setProductCustomReq(new AddGloGoodsRequest.ProductCustomReq(null, Boolean.TRUE, null));
+
+        String materialImg = firstNonBlank(mainImage, (carousel.isEmpty() ? null : carousel.get(0)));
+        if (!StringUtils.hasText(materialImg)) {
+            throw new IllegalStateException("缺少可用图片（主图/轮播图）");
+        }
+        req.setMaterialImgUrl(materialImg);
+        if (!carousel.isEmpty()) {
+            req.setCarouselImageUrls(new ArrayList<>(carousel));
+        }
+        List<AddGloGoodsRequest.GoodsLayerDecorationReq> goodsLayerDecorationReqs = buildGoodsLayerDecorationReqs(detail, warnings, runId);
+        if (!goodsLayerDecorationReqs.isEmpty()) {
+            req.setGoodsLayerDecorationReqs(goodsLayerDecorationReqs);
+        }
+
+        int[] catIds = parseCatIds(pc.getTemuCatid());
+        req.setCat1Id(catIds[0]);
+        req.setCat2Id(catIds[1]);
+        req.setCat3Id(catIds[2]);
+        req.setCat4Id(catIds[3]);
+        req.setCat5Id(catIds[4]);
+        req.setCat6Id(catIds[5]);
+        req.setCat7Id(catIds[6]);
+        req.setCat8Id(catIds[7]);
+        req.setCat9Id(catIds[8]);
+        req.setCat10Id(catIds[9]);
+
+        req.setProductSemiManagedReq(new AddGloGoodsRequest.ProductSemiManagedReq(
+                null,
+                new ArrayList<>(List.of(siteId)),
+                null,
+                null
+        ));
+
+        AddGloGoodsRequest.ProductWarehouseRouteReq routeReq = new AddGloGoodsRequest.ProductWarehouseRouteReq();
+        routeReq.setTargetRouteList(new ArrayList<>(List.of(
+                new AddGloGoodsRequest.ProductWarehouseRouteReq.RouteItem(new ArrayList<>(List.of(siteId)), warehouseId)
+        )));
+        req.setProductWarehouseRouteReq(routeReq);
+
+        AddGloGoodsRequest.ProductOrigin origin = new AddGloGoodsRequest.ProductOrigin();
+        origin.setRegion1ShortName(originRegion1);
+        origin.setRegion2Id(originRegion2Id);
+        AddGloGoodsRequest.ProductWhExtAttrReq whExt = new AddGloGoodsRequest.ProductWhExtAttrReq();
+        whExt.setOuterGoodsUrl(pc.getProductUrl());
+        whExt.setProductOrigin(origin);
+        req.setProductWhExtAttrReq(whExt);
+
+        AddGloGoodsRequest.ProductShipmentReq shipment = new AddGloGoodsRequest.ProductShipmentReq();
+        shipment.setFreightTemplateId(freightTemplateId);
+        shipment.setShipmentLimitSecond(limitSecond);
+        req.setProductShipmentReq(shipment);
+
+        Map<Integer, AttrTemplate> attrTemplateByPid = loadAttrTemplateByPid(spuId, warnings, runId);
+        List<AddGloGoodsRequest.ProductPropertyReq> props = parseTemuAttributesAsProductPropertyReqs(pc.getTemuAttributes(), attrTemplateByPid, warnings, runId);
+        props = filterOutSalePropertyReqs(props, attrTemplateByPid, warnings, runId);
+        if (props == null || props.isEmpty()) {
+            throw new IllegalStateException("TEMU 属性解析为空，请重新保存属性后再生成草稿");
+        }
+        req.setProductPropertyReqs(props);
+
+        StoredPublishSpecDraft storedDraft = draftGate.draft();
+        if (storedDraft == null) {
+            throw new IllegalStateException("规格映射草案缺失，请先在规格映射工作台保存并启用草案后再生成草稿");
+        }
+
+        String fallbackThumb = !carousel.isEmpty() ? carousel.get(0) : mainImage;
+        StoredMaterializedSpecDraft materialized = materializeStoredDraft(categoryClient, storedDraft);
+        req.setProductSpecPropertyReqs(materialized.productSpecPropertyReqs());
+        enrichSpecPropertyReqsWithSaleAttrTemplate(req.getProductSpecPropertyReqs(), attrTemplateByPid);
+        req.setProductPropertyReqs(filterOutSalePropertyReqsHandledBySpecs(
+                req.getProductPropertyReqs(),
+                req.getProductSpecPropertyReqs(),
+                attrTemplateByPid,
+                warnings,
+                runId
+        ));
+        long leafCatId = leafCatId(catIds);
+        boolean leafHasMainSaleAttr = hasLeafMainSaleAttribute(leafCatId, categoryClient, props);
+        req.setProductSkcReqs(buildProductSkcReqsFromStoredDraft(runId, spuId, pc, mainImage, fallbackThumb, materialized, leafHasMainSaleAttr));
+
+        ensurePublishSizeTemplateIfNeeded(pc, req, creds, runId, warnings);
+        String requestJson = objectMapper.writeValueAsString(req);
+
+        return new GeneratedDraftResult(
+                spuId,
+                shopRecordId,
+                publishShopId,
+                shop.getShopName(),
+                pc.getProductName(),
+                pc.getProductMainImage(),
+                requestJson,
+                warnings
+        );
     }
 
     private PublishApiCallResult callAddGloGoodsWithAdaptiveSaleExtAttr(TemuOpenApiCredentials creds,
@@ -1006,21 +1245,27 @@ public class TemuPublishService {
         }
     }
 
-    private List<AddGloGoodsRequest.GoodsLayerDecorationReq> buildGoodsLayerDecorationReqs(List<String> detailImages) {
+    private List<AddGloGoodsRequest.GoodsLayerDecorationReq> buildGoodsLayerDecorationReqs(List<String> detailImages,
+                                                                                           List<String> warnings,
+                                                                                           Long runId) {
         if (detailImages == null || detailImages.isEmpty()) {
             return Collections.emptyList();
         }
+        Map<String, TemuImageMeta> latestMeta = temuImageMetaService.getByUrls(detailImages);
         List<AddGloGoodsRequest.GoodsLayerDecorationReq> out = new ArrayList<>();
         int priority = 1;
         for (String detailImage : detailImages) {
             if (!StringUtils.hasText(detailImage)) {
                 continue;
             }
+            String normalizedUrl = detailImage.trim();
+            TemuImageNormalizeService.ImageSize imageSize = resolveGoodsLayerImageSize(normalizedUrl, latestMeta, warnings, runId);
 
             AddGloGoodsRequest.GoodsLayerDecorationReq.GoodsLayerContent content =
                     new AddGloGoodsRequest.GoodsLayerDecorationReq.GoodsLayerContent();
-            content.setImgUrl(detailImage.trim());
-            applyDecImageKeyIfSupported(content);
+            content.setImgUrl(normalizedUrl);
+            content.setWidth(imageSize.width());
+            content.setHeight(imageSize.height());
 
             AddGloGoodsRequest.GoodsLayerDecorationReq layer =
                     new AddGloGoodsRequest.GoodsLayerDecorationReq();
@@ -1030,24 +1275,41 @@ public class TemuPublishService {
             layer.setType("image");
             layer.setPriority(priority++);
             layer.setContentList(new ArrayList<>(List.of(content)));
-            applyDecImageKeyIfSupported(layer);
+            layer.setKey("DecImage");
 
             out.add(layer);
         }
         return out;
     }
 
-    private void applyDecImageKeyIfSupported(Object target) {
-        if (target == null) {
-            return;
+    private TemuImageNormalizeService.ImageSize resolveGoodsLayerImageSize(String imageUrl,
+                                                                           Map<String, TemuImageMeta> metaByUrl,
+                                                                           List<String> warnings,
+                                                                           Long runId) {
+        TemuImageMeta cached = metaByUrl == null ? null : metaByUrl.get(imageUrl);
+        if (cached != null && cached.getWidth() != null && cached.getWidth() > 0
+                && cached.getHeight() != null && cached.getHeight() > 0) {
+            return new TemuImageNormalizeService.ImageSize(cached.getWidth(), cached.getHeight());
         }
+
         try {
-            java.lang.reflect.Method setter = target.getClass().getMethod("setKey", String.class);
-            setter.invoke(target, "DecImage");
-        } catch (Exception ignored) {
-            // Some SDK revisions keep `key` on the content node, others on the layer node.
-            // Best-effort only; lack of this setter should not block publish.
+            TemuImageNormalizeService.ImageSize probed = imageNormalizeService.probeImageSize(imageUrl);
+            if (probed.width() > 0 && probed.height() > 0) {
+                temuImageMetaService.upsert(imageUrl, probed.width(), probed.height());
+                return probed;
+            }
+        } catch (Exception e) {
+            String message = "detail floor image size probe failed: " + safeErrMessage(e);
+            if (warnings != null) {
+                warnings.add(message + " | " + imageUrl);
+            }
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("imageUrl", imageUrl);
+            data.put("error", safeErrMessage(e));
+            publishLogService.error(runId, "DETAIL", "probe detail image size failed", data);
         }
+
+        throw new IllegalStateException("详情楼层图片尺寸获取失败: " + imageUrl);
     }
 
     private List<AddGloGoodsRequest.ProductPropertyReq> parseTemuAttributesAsProductPropertyReqs(

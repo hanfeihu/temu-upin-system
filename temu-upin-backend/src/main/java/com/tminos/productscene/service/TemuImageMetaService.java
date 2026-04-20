@@ -3,6 +3,7 @@ package com.tminos.productscene.service;
 import com.tminos.productscene.entity.TemuImageMeta;
 import com.tminos.productscene.repository.TemuImageMetaRepository;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
@@ -38,7 +39,7 @@ public class TemuImageMetaService {
         return out;
     }
 
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void upsert(String url, Integer width, Integer height) {
         if (!StringUtils.hasText(url)) return;
         String u = url.trim();
