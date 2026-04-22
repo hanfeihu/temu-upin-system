@@ -11,6 +11,7 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    allowedHosts: ['youyou.tminos.com'],
     proxy: {
       '/api': {
         target: 'http://localhost:8080',
