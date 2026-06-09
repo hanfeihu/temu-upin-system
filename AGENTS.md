@@ -1,46 +1,32 @@
-# AGENTS.md
+# Repository Guidelines
 
-## Repo boundaries
-- Root `pom.xml` is a Maven reactor (`packaging=pom`), not the runnable app. Modules: `temu-upin-sdk`, `temu-upin-common`, `temu-upin-sync`, `temu-upin-backend`.
-- The only Spring Boot entrypoint is `temu-upin-backend/src/main/java/com/tminos/productscene/ProductSceneApplication.java`.
-- `temu-upin-backend` is the runtime process, but `temu-upin-common` and `temu-upin-sync` both contribute Spring controllers/services/entities into that same process via backend dependencies. Do not treat them as isolated services.
-- Frontend is separate in `temu-upin-frontend` and talks to the backend through `/api`.
+## Project Structure & Module Organization
 
-## Entry points that explain wiring
-- Frontend bootstrap: `temu-upin-frontend/src/main.js`
-- Frontend routes: `temu-upin-frontend/src/router/index.js`
-- Frontend API client: `temu-upin-frontend/src/api/index.js` (`baseURL: '/api'`)
-- Main product import/publish flow: `temu-upin-backend/src/main/java/com/tminos/productscene/controller/ProductCollectionController.java`
-- Sync task APIs: `temu-upin-sync/src/main/java/com/tminos/productscene/sync/controller/SyncTaskController.java`
-- Sync auto scheduling: `temu-upin-sync/src/main/java/com/tminos/productscene/sync/service/SyncAutoScheduler.java`
+This repository is a mixed Java and frontend workspace for the TEMU Upin system. The root `pom.xml` is a Maven reactor for `temu-upin-sdk`, `temu-upin-minio-sdk`, `temu-upin-common`, `temu-upin-sync`, and `temu-upin-backend`. Backend source code lives in each module under `src/main/java`; backend resources and YAML configuration are in `temu-upin-backend/src/main/resources`; tests belong under matching `src/test/java` packages.
 
-## Commands agents are likely to guess wrong
-- Build backend with dependent modules from repo root: `mvn -pl temu-upin-backend -am clean package -DskipTests`
-- Run backend locally: `mvn spring-boot:run -Dspring-boot.run.profiles=local`
-- Run built backend jar: `java -jar temu-upin-backend/target/product-scene-1.0.0.jar --spring.profiles.active=local`
-- Frontend dev server: `npm run dev` in `temu-upin-frontend`
-- Frontend prod build: `npm run build` in `temu-upin-frontend`
-- Deploy entrypoint: `./deploy.sh [all|backend|frontend]`
+The current React Ant Design admin is `react-ant-6.3.5-admin/src`. Browser extension files are in `browser-extensions/`, and the 1688 Playwright worker is in `alibaba1688-playwright-worker/`.
 
-## Runtime and deploy quirks
-- Use reactor builds for backend work. Building a leaf module in isolation will often miss required sibling modules.
-- `deploy.sh all` runs in this order: backend build -> backend deploy -> frontend build -> frontend deploy.
-- `deploy.sh` requires a local `.deploy.env` copied from `.deploy.env.example` and depends on `ssh`, `scp`, `sshpass`, `mvn`, and `npm`.
-- Default deploy settings assume `BACKEND_MODULE=temu-upin-backend`, `BACKEND_JAR_NAME=product-scene-1.0.0.jar`, and `SPRING_PROFILE=dev` unless `.deploy.env` overrides them.
-- Frontend Vite dev proxy forwards `/api` and `/uploads` to `http://localhost:8080`; that is dev-server behavior only, not proof of production routing.
+## Build, Test, and Development Commands
 
-## Behavior that is easy to misread
-- `ProductSceneApplication` enables both async work and scheduling. Background workers are part of normal runtime behavior, not optional add-ons.
-- `temu-upin-sync` exposes `/api/sync/*`; many other backend/common controllers expose `/api/platform/*`, plus `/api/products`, `/api/channels`, `/api/upload`, `/api/ocr`, etc. Check controller annotations before assuming a module owns an endpoint namespace.
-- `SyncAutoScheduler` runs every minute and decides whether to create tasks by matching each shop's configured `sync_cron`.
-- `application.yml` disables Spring Security auto-configuration. Do not assume standard Spring Security behavior exists here.
-- JPA uses `spring.jpa.hibernate.ddl-auto: update`; schema changes are not managed by Flyway/Liquibase in this repo.
+- `mvn -pl temu-upin-backend -am clean package -DskipTests`: build the backend and required Maven modules.
+- `mvn -pl temu-upin-backend -am test`: run backend tests.
+- `mvn spring-boot:run -pl temu-upin-backend -Dspring-boot.run.profiles=local`: start the backend with the local profile.
+- `cd react-ant-6.3.5-admin && npm run dev`: start the React admin Vite server.
+- `cd react-ant-6.3.5-admin && npm run build`: run TypeScript checking and build the admin bundle.
+- `cd alibaba1688-playwright-worker && npm run login` or `npm run run`: operate the 1688 browser worker.
 
-## Verification reality
-- Frontend `package.json` only defines `dev`, `build`, and `preview`. There is no repo-defined frontend `test`, `lint`, or `typecheck` script.
-- Backend test coverage is minimal from what is checked in. The only discovered file under `src/test` is `temu-upin-backend/src/test/java/com/tminos/productscene/OssDebugMainTest.java`, which is a debug `main`, not a normal JUnit suite.
-- `.github/` does not contain normal CI workflows; it only contains a `java-upgrade/` artifact directory. Do not assume CI will catch mistakes for you.
+## Coding Style & Naming Conventions
 
-## Sensitive files
-- `temu-upin-backend/src/main/resources/application-local.yml`, `application-dev.yml`, and `application.yml` contain concrete-looking secrets/default credentials. Never copy their values into commits, PR text, or chat.
-- Channel-key bootstrap files live under `temu-upin-backend/`, not repo root: `temu-upin-backend/.secrets.env.example` and `temu-upin-backend/init-channel-keys.example.sh`.
+Use Java 21 conventions with 4-space indentation. Keep Java packages under `com.tminos.*`; use `PascalCase` for classes and `camelCase` for methods and fields. Name Spring classes by role, such as `*Controller`, `*Service`, and `*Repository`. Follow existing frontend patterns: React components in `PascalCase.tsx`, API helpers under `src/api`, and page code under `src/views`.
+
+## Testing Guidelines
+
+Name Java tests `*Test` and place them beside the related package under `src/test/java`. Prefer focused service, parser, and API-contract tests over debug mains. There is no unified frontend test runner; for UI changes, run the relevant `npm run build` and manually verify changed routes.
+
+## Commit & Pull Request Guidelines
+
+Recent commits use Conventional Commit prefixes such as `feat:`, `fix:`, and `chore:`. Keep commits scoped and behavior-focused, for example `fix: isolate temu publish side effects`. Pull requests should include a summary, validation commands, linked task or issue context, and screenshots for visible UI changes.
+
+## Security & Configuration Tips
+
+Do not commit real secrets from YAML files, browser sessions, or local runtime folders. Use examples or local-only ignored files for machine-specific configuration. Read `DEPLOYMENT.md` before touching deployment scripts or live host settings.
