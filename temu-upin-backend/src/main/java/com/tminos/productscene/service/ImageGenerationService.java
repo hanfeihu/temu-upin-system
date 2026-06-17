@@ -15,6 +15,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.LinkedMultiValueMap;
+import org.springframework.util.MultiValueMap;
 import org.springframework.util.StringUtils;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.web.client.RestTemplate;
@@ -24,6 +26,7 @@ import java.awt.Color;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.net.URI;
 import java.net.URL;
@@ -49,6 +52,7 @@ public class ImageGenerationService {
     private final ObjectMapper objectMapper;
     private final AIImageConfig aiImageConfig;
     private final OssService ossService;
+    private final TextAiChannelResolver textAiChannelResolver;
 
     private static final String DEFAULT_TEST_IMAGE_URL = "https://raw.githubusercontent.com/github/explore/main/topics/png/png.png";
 
@@ -601,6 +605,74 @@ public class ImageGenerationService {
                 fallback.getPlatform());
         return fallback;
     }
+
+    public String generateSupplierProductImage(String prompt, String sourceImageUrl, Integer width, Integer height) {
+        if (!StringUtils.hasText(prompt)) {
+            throw new IllegalArgumentException("prompt is required");
+        }
+        List<AIChannel> channels = pickSupplierImageChannels(sourceImageUrl);
+        if (channels.isEmpty()) {
+            throw new IllegalStateException("没有可用的 AI 图片渠道，请先在 AI 渠道管理启用图片渠道");
+        }
+        RuntimeException lastError = null;
+        for (AIChannel channel : channels) {
+            try {
+                return callAIImageAPI(
+                        channel,
+                        prompt.trim(),
+                        "blurry, low quality, distorted product, wrong product shape, watermark, text, logo, brand name, extra objects",
+                        width == null ? 800 : width,
+                        height == null ? 800 : height,
+                        sourceImageUrl,
+                        channel.getModel()
+                );
+            } catch (RuntimeException e) {
+                lastError = e;
+                log.warn("Supplier product image channel failed, try next: channelId={}, platform={}, model={}, error={}",
+                        channel.getId(), channel.getPlatform(), channel.getModel(), e.getMessage());
+            }
+        }
+        throw lastError == null ? new IllegalStateException("没有可用的 AI 图片渠道") : lastError;
+    }
+
+    private List<AIChannel> pickSupplierImageChannels(String sourceImageUrl) {
+        List<AIChannel> result = new ArrayList<>();
+        List<AIChannel> gptImageChannels = channelRepository.findByModelOrderBySortOrderAsc("gpt-image-2");
+        for (AIChannel channel : gptImageChannels) {
+            if (channel != null && Boolean.TRUE.equals(channel.getEnabled())) {
+                addImageChannel(result, channel);
+            }
+        }
+        List<String> preferredPlatforms = StringUtils.hasText(sourceImageUrl)
+                ? List.of("jimeng_i2i", "jimeng_t2i", "stability", "volcengine", "runway")
+                : List.of("jimeng_t2i", "stability", "runway");
+        for (String platform : preferredPlatforms) {
+            List<AIChannel> channels = channelRepository.findByPlatformOrderBySortOrderAsc(platform);
+            if (channels == null) {
+                continue;
+            }
+            for (AIChannel channel : channels) {
+                if (channel != null && Boolean.TRUE.equals(channel.getEnabled())) {
+                    addImageChannel(result, channel);
+                }
+            }
+        }
+        channelRepository.findByEnabledTrueOrderBySortOrderAsc().stream()
+                .filter(channel -> channel != null && StringUtils.hasText(channel.getPlatform()))
+                .filter(channel -> preferredPlatforms.contains(channel.getPlatform()))
+                .forEach(channel -> addImageChannel(result, channel));
+        return result;
+    }
+
+    private void addImageChannel(List<AIChannel> channels, AIChannel channel) {
+        if (channel == null || channel.getId() == null) {
+            return;
+        }
+        boolean exists = channels.stream().anyMatch(item -> channel.getId().equals(item.getId()));
+        if (!exists) {
+            channels.add(channel);
+        }
+    }
     
     private String buildPrompt(ProductSku sku, String customPrompt, GeneratedImage.ImageType imageType) {
         String basePrompt;
@@ -651,6 +723,12 @@ public class ImageGenerationService {
 
         if ("stability".equals(provider)) {
             return callStabilityAPI(channel, prompt, negativePrompt, width, height, model);
+        } else if ("openai_image".equals(provider)
+                || "openai_images".equals(provider)
+                || "openai_compatible_image".equals(provider)
+                || "openai".equals(provider)
+                || "gpt-image-2".equalsIgnoreCase(model)) {
+            return callOpenAIImageAPI(channel, prompt, width, height, sourceImageUrl, model);
         } else if ("volcengine".equals(provider)) {
             return callVolcengineAPI(channel, prompt, negativePrompt, width, height, sourceImageUrl, model);
         } else if ("jimeng_i2i".equals(provider)) {
@@ -663,6 +741,148 @@ public class ImageGenerationService {
 
         throw new UnsupportedOperationException("Unsupported AI provider: " + provider);
     }
+
+    private String callOpenAIImageAPI(AIChannel channel,
+                                      String prompt,
+                                      Integer width,
+                                      Integer height,
+                                      String sourceImageUrl,
+                                      String model) {
+        try {
+            String apiKey = requireNonBlank(channel.getApiKey(), "Missing OpenAI image API key in ai_channels");
+            String resolvedModel = StringUtils.hasText(model) ? model.trim() : "gpt-image-2";
+            int outW = width == null ? 800 : width;
+            int outH = height == null ? 800 : height;
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.setAccept(List.of(MediaType.APPLICATION_JSON));
+            headers.setBearerAuth(apiKey);
+
+            ResponseEntity<String> response;
+            if (StringUtils.hasText(sourceImageUrl)) {
+                ImageBytes sourceImage = downloadImageBytes(sourceImageUrl.trim());
+                headers.setContentType(MediaType.MULTIPART_FORM_DATA);
+                MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
+                body.add("model", resolvedModel);
+                body.add("prompt", prompt);
+                body.add("size", "1024x1024");
+                body.add("quality", "medium");
+                body.add("output_format", "png");
+                body.add("image", new ByteArrayResource(sourceImage.bytes()) {
+                    @Override
+                    public String getFilename() {
+                        return sourceImage.filename();
+                    }
+                });
+                response = restTemplate.exchange(
+                        TextAiUrlHelper.imageEditsUrl(channel.getBaseUrl(), null),
+                        HttpMethod.POST,
+                        new HttpEntity<>(body, headers),
+                        String.class
+                );
+            } else {
+                headers.setContentType(MediaType.APPLICATION_JSON);
+                Map<String, Object> body = new LinkedHashMap<>();
+                body.put("model", resolvedModel);
+                body.put("prompt", prompt);
+                body.put("size", "1024x1024");
+                body.put("quality", "medium");
+                body.put("output_format", "png");
+                response = restTemplate.exchange(
+                        TextAiUrlHelper.imageGenerationsUrl(channel.getBaseUrl(), null),
+                        HttpMethod.POST,
+                        new HttpEntity<>(objectMapper.writeValueAsString(body), headers),
+                        String.class
+                );
+            }
+
+            if (!response.getStatusCode().is2xxSuccessful() || !StringUtils.hasText(response.getBody())) {
+                throw new IllegalStateException("OpenAI image request failed: HTTP " + response.getStatusCode().value());
+            }
+            byte[] imageBytes = parseOpenAIImageBytes(response.getBody());
+            byte[] finalPng = resizeToPng(imageBytes, outW, outH);
+            return ossService.uploadBytes("generated/openai/supplier-product", finalPng, "image/png");
+        } catch (Exception e) {
+            log.error("OpenAI image API call failed: {}", e.getMessage(), e);
+            throw new RuntimeException("OpenAI image API call failed: " + e.getMessage(), e);
+        }
+    }
+
+    private byte[] parseOpenAIImageBytes(String body) throws Exception {
+        com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(body);
+        com.fasterxml.jackson.databind.JsonNode data = root.path("data");
+        if (!data.isArray() || data.isEmpty()) {
+            throw new IllegalStateException("OpenAI image response has no data");
+        }
+        com.fasterxml.jackson.databind.JsonNode first = data.get(0);
+        String b64 = first.path("b64_json").asText(null);
+        if (StringUtils.hasText(b64)) {
+            return Base64.getDecoder().decode(b64);
+        }
+        String url = first.path("url").asText(null);
+        if (StringUtils.hasText(url)) {
+            return downloadImageBytes(url.trim()).bytes();
+        }
+        String error = root.path("error").path("message").asText(null);
+        throw new IllegalStateException(StringUtils.hasText(error) ? error : "OpenAI image response has no image");
+    }
+
+    private ImageBytes downloadImageBytes(String imageUrl) throws Exception {
+        HttpClient client = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(20))
+                .followRedirects(HttpClient.Redirect.NORMAL)
+                .build();
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(toSafeUri(imageUrl))
+                .timeout(Duration.ofSeconds(120))
+                .GET()
+                .build();
+        HttpResponse<byte[]> response = client.send(request, HttpResponse.BodyHandlers.ofByteArray());
+        if (response.statusCode() < 200 || response.statusCode() >= 300 || response.body() == null || response.body().length == 0) {
+            throw new IllegalStateException("Download image failed: HTTP " + response.statusCode());
+        }
+        String filename = "source.png";
+        try {
+            String path = toSafeUri(imageUrl).getPath();
+            if (StringUtils.hasText(path) && path.contains("/")) {
+                String raw = path.substring(path.lastIndexOf('/') + 1);
+                if (StringUtils.hasText(raw)) {
+                    filename = raw;
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return new ImageBytes(response.body(), filename);
+    }
+
+    private byte[] resizeToPng(byte[] bytes, int width, int height) throws Exception {
+        BufferedImage source = ImageIO.read(new ByteArrayInputStream(bytes));
+        if (source == null) {
+            throw new IllegalStateException("Generated image decode failed");
+        }
+        BufferedImage canvas = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = canvas.createGraphics();
+        try {
+            g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+            g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
+            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            g.setColor(Color.WHITE);
+            g.fillRect(0, 0, width, height);
+            double scale = Math.min((double) width / source.getWidth(), (double) height / source.getHeight());
+            int drawW = Math.max(1, (int) Math.round(source.getWidth() * scale));
+            int drawH = Math.max(1, (int) Math.round(source.getHeight() * scale));
+            int x = (width - drawW) / 2;
+            int y = (height - drawH) / 2;
+            g.drawImage(source, x, y, drawW, drawH, null);
+        } finally {
+            g.dispose();
+        }
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        ImageIO.write(canvas, "png", out);
+        return out.toByteArray();
+    }
+
+    private record ImageBytes(byte[] bytes, String filename) {}
     
     private String callJimengI2IAPI(AIChannel channel, String prompt,
             Integer width, Integer height, String sourceImageUrl, String model) {
@@ -802,13 +1022,22 @@ public class ImageGenerationService {
         
         try {
             AIImageConfig.PromptOptimizerConfig config = aiImageConfig.getPromptOptimizer();
+            TextAiChannelResolver.ResolvedChannel aiChannel = textAiChannelResolver.resolve(
+                    TextAiBusinessCodes.PROMPT_OPTIMIZER,
+                    config.getBaseUrl(),
+                    config.getApiKey(),
+                    config.getModel()
+            );
+            if (!StringUtils.hasText(aiChannel.getApiKey())) {
+                return originalPrompt;
+            }
             
             String optimizationPrompt = "你是一个电商图片提示词优化专家。请将以下提示词优化为更适合AI图像生成的英文提示词，使其更详细、更专业、更适合电商场景。\n\n" +
                 "原始提示词: " + originalPrompt + "\n\n" +
                 "请直接输出优化后的英文提示词，不要包含任何解释或其他内容。";
             
             Map<String, Object> requestBody = new HashMap<>();
-            requestBody.put("model", config.getModel());
+            requestBody.put("model", StringUtils.hasText(aiChannel.getModel()) ? aiChannel.getModel() : config.getModel());
             requestBody.put("messages", new Object[]{
                 Map.of("role", "user", "content", optimizationPrompt)
             });
@@ -816,10 +1045,10 @@ public class ImageGenerationService {
             
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
-            headers.set("Authorization", "Bearer " + config.getApiKey());
+            headers.set("Authorization", "Bearer " + aiChannel.getApiKey());
             
             HttpEntity<Map<String, Object>> request = new HttpEntity<>(requestBody, headers);
-            String url = TextAiUrlHelper.chatCompletionsUrl(config.getBaseUrl(), "https://chatbot.tminos.com");
+            String url = TextAiUrlHelper.chatCompletionsUrl(aiChannel.getBaseUrl(), config.getBaseUrl());
             
             ResponseEntity<String> response = restTemplate.postForEntity(
                     url,

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.fasterxml.jackson.datatype.jsr310.deser.LocalDateTimeDeserializer;
 import com.fasterxml.jackson.datatype.jsr310.ser.LocalDateTimeSerializer;
+import com.tminos.productscene.config.AIAlibaba1688SelectionReportConfig;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -32,6 +33,16 @@ public class RestTemplateConfig {
         f.setReadTimeout(300_000);
         return new RestTemplate(f);
     }
+
+    @Bean
+    @Qualifier("alibaba1688SelectionAiRestTemplate")
+    public RestTemplate alibaba1688SelectionAiRestTemplate(AIAlibaba1688SelectionReportConfig config) {
+        SimpleClientHttpRequestFactory f = new SimpleClientHttpRequestFactory();
+        int readTimeoutMs = normalizeTimeoutMs(config == null ? null : config.getTimeoutMs(), 240_000);
+        f.setConnectTimeout(Math.min(readTimeoutMs, 10_000));
+        f.setReadTimeout(readTimeoutMs);
+        return new RestTemplate(f);
+    }
     
     @Bean
     public ObjectMapper objectMapper() {
@@ -42,5 +53,12 @@ public class RestTemplateConfig {
         mapper.registerModule(javaTimeModule);
         mapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
         return mapper;
+    }
+
+    private int normalizeTimeoutMs(Integer value, int defaultValue) {
+        if (value == null) {
+            return defaultValue;
+        }
+        return Math.max(1_000, value);
     }
 }

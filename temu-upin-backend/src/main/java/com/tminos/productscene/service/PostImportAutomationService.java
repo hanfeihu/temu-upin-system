@@ -3,6 +3,7 @@ package com.tminos.productscene.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tminos.productscene.config.AITemuAttrFillerConfig;
+import com.tminos.productscene.dto.TemuCategoryDTO;
 import com.tminos.productscene.entity.ProductCollection;
 import com.tminos.productscene.repository.ProductCollectionRepository;
 import org.springframework.scheduling.annotation.Async;
@@ -84,6 +85,8 @@ public class PostImportAutomationService {
                     postImportLogService.info(runId, "START", "post-import automation started");
                 }
             }
+
+            ensureTemuCategoryReady(spuId, runIdRef.get());
 
             // 1) AI fill + save TEMU attributes (slow)
             CompletableFuture<Map<String, Object>> aiFuture = CompletableFuture.supplyAsync(() -> {
@@ -251,6 +254,8 @@ public class PostImportAutomationService {
                 }
             }
 
+            ensureTemuCategoryReady(spuId, runIdRef.get());
+
             CompletableFuture<Map<String, Object>> aiFuture = CompletableFuture.supplyAsync(() -> {
                 try {
                     Long runId = runIdRef.get();
@@ -391,6 +396,43 @@ public class PostImportAutomationService {
             }
             log.warn("PostImportAutomationService failed spuId={} msg={}", spuId, msg);
         }
+    }
+
+    private void ensureTemuCategoryReady(Long spuId, Long runId) {
+        ProductCollection pc = productCollectionService.get(spuId);
+        if (pc != null && StringUtils.hasText(pc.getTemuCatid())) {
+            return;
+        }
+        if (postImportLogService != null && runId != null) {
+            postImportLogService.info(runId, "CATEGORY", "temu category missing, auto match start");
+        }
+        TemuCategoryDTO.MatchCategoryResponse matched = productCollectionService.matchTemuCategory(spuId);
+        if (postImportLogService != null && runId != null) {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("success", matched != null && matched.isSuccess());
+            data.put("generatedCategoryKeywords", matched == null ? null : matched.getGeneratedCategoryKeywords());
+            data.put("matchedKeyword", matched == null ? null : matched.getMatchedKeyword());
+            TemuCategoryDTO.MatchOption firstOption = firstCategoryOption(matched);
+            data.put("matchedTemuCatid", firstOption == null ? null : firstOption.getPathIds());
+            data.put("matchedTemuCatname", firstOption == null ? null : firstOption.getPathNames());
+            data.put("errorMsg", matched == null ? "category match result is null" : matched.getErrorMsg());
+            postImportLogService.data(runId, "CATEGORY", "temu category auto match result", data);
+        }
+        ProductCollection after = productCollectionService.get(spuId);
+        if (after == null || !StringUtils.hasText(after.getTemuCatid())) {
+            String error = matched == null ? "category match result is null" : matched.getErrorMsg();
+            if (!StringUtils.hasText(error)) {
+                error = "no matched TEMU category";
+            }
+            throw new IllegalStateException("TEMU类目自动匹配失败: " + error);
+        }
+    }
+
+    private TemuCategoryDTO.MatchOption firstCategoryOption(TemuCategoryDTO.MatchCategoryResponse matched) {
+        if (matched == null || matched.getOptions() == null || matched.getOptions().isEmpty()) {
+            return null;
+        }
+        return matched.getOptions().get(0);
     }
 
     private Long safeStartRun(Long spuId) {

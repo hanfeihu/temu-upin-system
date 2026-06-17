@@ -1,0 +1,88 @@
+.alibaba1688-selection-pool-table .ant-table-tbody > tr > td {
+  vertical-align: top;
+}
+
+.alibaba1688-selection-pool-cell {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.alibaba1688-selection-pool-main {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.alibaba1688-selection-pool-main-content {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.alibaba1688-selection-pool-title {
+  margin-bottom: 0 !important;
+}
+
+.alibaba1688-selection-pool-title-link {
+  display: block;
+  overflow: hidden;
+  color: #1677ff;
+  font-weight: 600;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: color 0.2s ease;
+}
+
+.alibaba1688-selection-pool-title-link:hover {
+  color: #0958d9;
+}
+
+.alibaba1688-selection-pool-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.alibaba1688-selection-pool-action-primary {
+  grid-column: 1 / -1;
+}
+
+.alibaba1688-selection-pool-action-primary,
+.alibaba1688-selection-pool-action-button {
+  border-radius: 999px;
+}
+
+.alibaba1688-selection-pool-action-button {
+  background: #f8fafc;
+  border-color: #dbe5f0;
+  color: #1f2937;
+}
+
+.alibaba1688-selection-pool-action-filter {
+  grid-column: 1 / -1;
+  border-radius: 999px;
+}
+
+.alibaba1688-selection-pool-remark {
+  margin-bottom: 0 !important;
+}
+
+.alibaba1688-selection-pool-pre {
+  max-height: 520px;
+  overflow: auto;
+  margin: 0;
+  padding: 14px;
+  border-radius: 12px;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

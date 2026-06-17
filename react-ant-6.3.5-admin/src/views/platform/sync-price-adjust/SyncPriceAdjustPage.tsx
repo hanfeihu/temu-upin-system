@@ -24,24 +24,53 @@ const reviewTextMap: Record<string, string> = {
   REJECTED: '已拒绝',
 };
 
-function summarizePurchasePrice(skus?: PriceAdjustSkuVO[] | null) {
-  const prices = Array.from(
-    new Set(
-      (skus || [])
-        .map((item) => item.purchasePrice)
-        .filter((item): item is number => item !== null && item !== undefined),
-    ),
-  );
+const DEFAULT_REJECT_REASON = '价格太低';
+
+function centsToYuan(value?: number | null) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  return Number((value / 100).toFixed(2));
+}
+
+function yuanToCents(value?: number | null) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  return Math.round(value * 100);
+}
+
+interface PurchasePriceSummary {
+  text: string;
+  missing: boolean;
+}
+
+function buildPurchasePriceSummary(skus?: PriceAdjustSkuVO[] | null): PurchasePriceSummary {
+  const rows = skus || [];
+  if (!rows.length) {
+    return { text: '采购价未配置', missing: true };
+  }
+
+  const hasMissing = rows.some((item) => item.purchasePrice === null || item.purchasePrice === undefined);
+  if (hasMissing) {
+    return { text: '采购价未配置', missing: true };
+  }
+
+  const prices = Array.from(new Set(rows.map((item) => item.purchasePrice).filter((item): item is number => item !== null && item !== undefined)));
 
   if (!prices.length) {
-    return '采购价未配置';
+    return { text: '采购价未配置', missing: true };
   }
 
   if (prices.length === 1) {
-    return `采购价 ${formatPrice(prices[0])}`;
+    return { text: `采购价 ${formatPrice(prices[0])}`, missing: false };
   }
 
-  return `采购价 ${formatPrice(Math.min(...prices))} 起`;
+  return { text: `采购价 ${formatPrice(Math.min(...prices))} 起`, missing: false };
+}
+
+function summarizePurchasePrice(skus?: PriceAdjustSkuVO[] | null) {
+  return buildPurchasePriceSummary(skus).text;
 }
 
 function formatLogisticsFee(value?: number | null) {
@@ -64,27 +93,55 @@ function calculateProfitCents(newSupplyPrice: number | string | null | undefined
   return Math.round(nextSupplyPrice) - (sku.purchasePrice + Math.round(Number(sku.firstLegLogisticsFee) * 100) + 200);
 }
 
-function summarizeProfit(newSupplyPrice: number | string | null | undefined, skus?: PriceAdjustSkuVO[] | null) {
+type ProfitTextType = 'success' | 'danger' | 'warning';
+
+interface ProfitSummary {
+  text: string;
+  type: ProfitTextType;
+}
+
+function summarizeProfit(newSupplyPrice: number | string | null | undefined, skus?: PriceAdjustSkuVO[] | null): ProfitSummary {
   const rows = skus || [];
   if (!rows.length) {
-    return '利润：缺少数据';
+    return { text: '利润：缺少数据', type: 'warning' };
   }
 
   const profits: number[] = [];
   for (const sku of rows) {
     const profit = calculateProfitCents(newSupplyPrice, sku);
     if (profit === null) {
-      return '利润：缺少数据';
+      return { text: '利润：缺少数据', type: 'warning' };
     }
     profits.push(profit);
   }
 
   const uniqueProfits = Array.from(new Set(profits));
   if (uniqueProfits.length === 1) {
-    return `利润 ${formatPrice(uniqueProfits[0])}`;
+    const profit = uniqueProfits[0];
+    return {
+      text: `利润 ${formatPrice(profit)}`,
+      type: profit > 0 ? 'success' : profit < 0 ? 'danger' : 'warning',
+    };
   }
 
-  return `利润 ${formatPrice(Math.min(...uniqueProfits))} ~ ${formatPrice(Math.max(...uniqueProfits))}`;
+  const minProfit = Math.min(...uniqueProfits);
+  const maxProfit = Math.max(...uniqueProfits);
+  let type: ProfitTextType = 'warning';
+  if (minProfit >= 0 && maxProfit > 0) {
+    type = 'success';
+  } else if (maxProfit <= 0 && minProfit < 0) {
+    type = 'danger';
+  }
+
+  return {
+    text: `利润 ${formatPrice(minProfit)} ~ ${formatPrice(maxProfit)}`,
+    type,
+  };
+}
+
+function renderProfitText(newSupplyPrice: number | string | null | undefined, skus?: PriceAdjustSkuVO[] | null) {
+  const profitSummary = summarizeProfit(newSupplyPrice, skus);
+  return <Typography.Text type={profitSummary.type}>{profitSummary.text}</Typography.Text>;
 }
 
 type QuickApproveResultState = 'idle' | 'running' | 'success' | 'error' | 'skipped';
@@ -130,6 +187,10 @@ const REFRESH_RETRY_PATTERN = /非待确认状态|刷新页面重试/i;
 
 function getAdjustSkus(record: PriceAdjustOrderVO) {
   return record.skuInfoList || record.skuList || [];
+}
+
+function getPurchasePriceDraftKey(sku: PriceAdjustSkuVO, index: number) {
+  return sku.productSkuId !== null && sku.productSkuId !== undefined ? String(sku.productSkuId) : `${sku.id || 'sku'}-${index}`;
 }
 
 function parsePriceValue(value: number | string | null | undefined) {
@@ -215,10 +276,14 @@ const SyncPriceAdjustPage = () => {
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detail, setDetail] = useState<PriceAdjustOrderVO | null>(null);
+  const [approvingOrderIds, setApprovingOrderIds] = useState<number[]>([]);
   const [reviewing, setReviewing] = useState(false);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
   const [rejectTargets, setRejectTargets] = useState<PriceAdjustOrderVO[]>([]);
+  const [purchasePriceTarget, setPurchasePriceTarget] = useState<PriceAdjustOrderVO | null>(null);
+  const [purchasePriceDrafts, setPurchasePriceDrafts] = useState<Record<string, number | null>>({});
+  const [purchasePriceSaving, setPurchasePriceSaving] = useState(false);
   const [quickApproveOpen, setQuickApproveOpen] = useState(false);
   const [quickApproveSubmitting, setQuickApproveSubmitting] = useState(false);
   const [quickApproveDiffMax, setQuickApproveDiffMax] = useState<number | null>(0.5);
@@ -295,6 +360,72 @@ const SyncPriceAdjustPage = () => {
     }
   }
 
+  function openPurchasePriceModal(record: PriceAdjustOrderVO) {
+    const skus = getAdjustSkus(record);
+    if (!skus.length) {
+      message.warning('当前调价单没有 SKU 数据');
+      return;
+    }
+    const nextDrafts: Record<string, number | null> = {};
+    skus.forEach((sku, index) => {
+      nextDrafts[getPurchasePriceDraftKey(sku, index)] = centsToYuan(sku.purchasePrice);
+    });
+    setPurchasePriceTarget(record);
+    setPurchasePriceDrafts(nextDrafts);
+  }
+
+  async function submitPurchasePrices() {
+    if (!shopId || !purchasePriceTarget) {
+      message.error('请先选择店铺');
+      return;
+    }
+    const skus = getAdjustSkus(purchasePriceTarget);
+    const editableSkus = skus.filter((sku): sku is PriceAdjustSkuVO & { productSkuId: number } => sku.productSkuId !== null && sku.productSkuId !== undefined);
+    if (!editableSkus.length) {
+      message.warning('当前调价单没有可保存采购价的 SKU');
+      return;
+    }
+
+    const payloads = editableSkus.map((sku, index) => {
+      const draftKey = getPurchasePriceDraftKey(sku, index);
+      const purchasePrice = yuanToCents(purchasePriceDrafts[draftKey]);
+      return {
+        productSkuId: sku.productSkuId,
+        purchasePrice,
+      };
+    });
+
+    const hasIncompleteValue = payloads.some((item) => item.purchasePrice === null || item.purchasePrice === undefined);
+    if (hasIncompleteValue) {
+      message.warning('请填写所有 SKU 的采购价');
+      return;
+    }
+
+    setPurchasePriceSaving(true);
+    try {
+      await Promise.all(
+        payloads.map((item) =>
+          syncApi.updateShopSkuPurchasePrice(item.productSkuId, {
+            shopId,
+            purchasePrice: item.purchasePrice,
+          }),
+        ),
+      );
+      message.success('采购价已保存');
+      setPurchasePriceTarget(null);
+      setPurchasePriceDrafts({});
+      const refreshedRows = await load();
+      setQuickApproveRows(refreshedRows);
+      if (detailOpen && detail?.id === purchasePriceTarget.id) {
+        await reloadDetail(purchasePriceTarget.id);
+      }
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '保存采购价失败');
+    } finally {
+      setPurchasePriceSaving(false);
+    }
+  }
+
   async function refreshSkuLogistics(record: PriceAdjustOrderVO, sku: PriceAdjustSkuVO) {
     const refreshOrderId = sku.logisticsRefreshOrderId;
     if (!refreshOrderId) {
@@ -324,16 +455,22 @@ const SyncPriceAdjustPage = () => {
   }
 
   async function approve(orderIds: number[]) {
+    const targetOrderIds = Array.from(new Set(orderIds.filter((item): item is number => Number.isFinite(item))));
+    if (!targetOrderIds.length) {
+      message.warning('请选择要通过的调价单');
+      return;
+    }
     if (!shopId) {
       message.error('请先选择店铺');
       return;
     }
     setReviewing(true);
-    const sourceRecords = rows.filter((item) => orderIds.includes(item.id));
+    setApprovingOrderIds((current) => Array.from(new Set([...current, ...targetOrderIds])));
+    const sourceRecords = rows.filter((item) => targetOrderIds.includes(item.id));
     try {
       const res = await syncApi.batchReviewAdjust({
         shopId,
-        orderIds,
+        orderIds: targetOrderIds,
         action: 'APPROVE',
       });
       message.success(res.message || '审核通过完成');
@@ -347,6 +484,7 @@ const SyncPriceAdjustPage = () => {
       }
     } finally {
       setReviewing(false);
+      setApprovingOrderIds((current) => current.filter((item) => !targetOrderIds.includes(item)));
     }
   }
 
@@ -667,8 +805,8 @@ const SyncPriceAdjustPage = () => {
       render: (_, record) => (
         <Space direction="vertical" size={2}>
           <Typography.Text strong>{formatPrice(record.newSupplyPrice)}</Typography.Text>
-          <Typography.Text type="secondary">{summarizePurchasePrice(record.skuInfoList || record.skuList || [])}</Typography.Text>
-          <Typography.Text type="secondary">{summarizeProfit(record.newSupplyPrice, record.skuInfoList || record.skuList || [])}</Typography.Text>
+          {renderPurchasePriceSummary(record)}
+          {renderProfitText(record.newSupplyPrice, record.skuInfoList || record.skuList || [])}
         </Space>
       ),
     },
@@ -705,12 +843,12 @@ const SyncPriceAdjustPage = () => {
           <Button size="small" onClick={() => void openDetail(record)}>
             详情
           </Button>
-          <Button size="small" type="link" onClick={() => void approve([record.id])}>
+          <Button size="small" type="link" loading={isApprovingOrder(record.id)} onClick={() => void approve([record.id])}>
             通过
           </Button>
           <Button size="small" type="link" danger onClick={() => {
             setRejectTargets([record]);
-            setRejectReason(record.rejectReason || '');
+            setRejectReason(record.rejectReason || DEFAULT_REJECT_REASON);
             setRejectOpen(true);
           }}>
             拒绝
@@ -750,7 +888,20 @@ const SyncPriceAdjustPage = () => {
         </Space>
       ),
     },
-    { title: '采购价', key: 'purchasePrice', width: 120, render: (_, record) => record.purchasePrice !== null && record.purchasePrice !== undefined ? formatPrice(record.purchasePrice) : '未配置' },
+    {
+      title: '采购价',
+      key: 'purchasePrice',
+      width: 120,
+      render: (_, record) => (
+        record.purchasePrice !== null && record.purchasePrice !== undefined ? (
+          formatPrice(record.purchasePrice)
+        ) : (
+          <Typography.Link onClick={() => detail && openPurchasePriceModal(detail)}>
+            未配置
+          </Typography.Link>
+        )
+      ),
+    },
     { title: '当前供货价', key: 'price', width: 140, render: (_, record) => formatPrice(record.currentSupplyPrice ?? record.price) },
   ];
 
@@ -950,6 +1101,20 @@ const SyncPriceAdjustPage = () => {
   ];
 
   const visibleRows = rows.filter((record) => !staleOrderHints[record.id] || !retryApproveSuggestion || !retryApproveSuggestion.sourceRecords.some((item) => item.id === record.id));
+  const isApprovingOrder = (orderId: number) => approvingOrderIds.includes(orderId);
+  const purchasePriceTargetSkus = purchasePriceTarget ? getAdjustSkus(purchasePriceTarget) : [];
+
+  function renderPurchasePriceSummary(record: PriceAdjustOrderVO, textType: 'secondary' | undefined = 'secondary') {
+    const summary = buildPurchasePriceSummary(getAdjustSkus(record));
+    if (summary.missing) {
+      return (
+        <Typography.Link onClick={() => openPurchasePriceModal(record)}>
+          {summary.text}
+        </Typography.Link>
+      );
+    }
+    return <Typography.Text type={textType}>{summary.text}</Typography.Text>;
+  }
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
@@ -1036,7 +1201,13 @@ const SyncPriceAdjustPage = () => {
                     <Button size="small" onClick={() => void openDetail(record)}>
                       详情
                     </Button>
-                    <Button size="small" type="link" disabled={!!staleOrderHints[record.id]} onClick={() => void approve([record.id])}>
+                    <Button
+                      size="small"
+                      type="link"
+                      loading={isApprovingOrder(record.id)}
+                      disabled={!!staleOrderHints[record.id]}
+                      onClick={() => void approve([record.id])}
+                    >
                       通过
                     </Button>
                     <Button
@@ -1046,7 +1217,7 @@ const SyncPriceAdjustPage = () => {
                       disabled={!!staleOrderHints[record.id]}
                       onClick={() => {
                         setRejectTargets([record]);
-                        setRejectReason(record.rejectReason || '');
+                        setRejectReason(record.rejectReason || DEFAULT_REJECT_REASON);
                         setRejectOpen(true);
                       }}
                     >
@@ -1091,8 +1262,8 @@ const SyncPriceAdjustPage = () => {
                 <span>商品: {detail.productName || '-'}</span>
                 <span>站点: {detail.siteNameList?.join(' / ') || '-'}</span>
                 <span>新供货价: {formatPrice(detail.newSupplyPrice)}</span>
-                <span>{summarizePurchasePrice(detail.skuInfoList || detail.skuList || [])}</span>
-                <span>{summarizeProfit(detail.newSupplyPrice, detail.skuInfoList || detail.skuList || [])}</span>
+                {renderPurchasePriceSummary(detail, undefined)}
+                {renderProfitText(detail.newSupplyPrice, detail.skuInfoList || detail.skuList || [])}
                 <span>拒绝原因: {detail.rejectReason || '-'}</span>
               </Space>
             </Card>
@@ -1102,6 +1273,82 @@ const SyncPriceAdjustPage = () => {
           </Space>
         ) : null}
       </Drawer>
+
+      <Modal
+        open={!!purchasePriceTarget}
+        title="填写采购价"
+        width={860}
+        destroyOnClose
+        confirmLoading={purchasePriceSaving}
+        okText="保存采购价"
+        onOk={() => void submitPurchasePrices()}
+        onCancel={() => {
+          if (!purchasePriceSaving) {
+            setPurchasePriceTarget(null);
+            setPurchasePriceDrafts({});
+          }
+        }}
+      >
+        <Space direction="vertical" size={16} style={{ width: '100%' }}>
+          <Alert
+            type="info"
+            showIcon
+            message={purchasePriceTarget?.priceOrderSn ? `调价单 ${purchasePriceTarget.priceOrderSn}` : '填写当前调价单采购价'}
+            description={`共 ${purchasePriceTargetSkus.length} 个 SKU，保存后会同步写入“店铺 SKU”里的采购价。`}
+          />
+          <Table<PriceAdjustSkuVO>
+            size="small"
+            rowKey={(record) => String(record.productSkuId ?? record.id)}
+            pagination={false}
+            dataSource={purchasePriceTargetSkus}
+            columns={[
+              {
+                title: 'SKU',
+                key: 'productSkuId',
+                width: 140,
+                render: (_, record) => record.productSkuId ?? '-',
+              },
+              {
+                title: '规格',
+                key: 'specInfo',
+                render: (_, record) => record.specInfo || record.spec || '-',
+              },
+              {
+                title: '当前已保存',
+                key: 'savedPurchasePrice',
+                width: 140,
+                render: (_, record) => (record.purchasePrice !== null && record.purchasePrice !== undefined ? formatPrice(record.purchasePrice) : '未配置'),
+              },
+              {
+                title: '采购价',
+                key: 'inputPurchasePrice',
+                width: 220,
+                render: (_, record, index) => {
+                  const draftKey = getPurchasePriceDraftKey(record, index);
+                  return (
+                    <InputNumber
+                      min={0}
+                      precision={2}
+                      controls={false}
+                      addonAfter="元"
+                      disabled={record.productSkuId === null || record.productSkuId === undefined}
+                      value={purchasePriceDrafts[draftKey] ?? undefined}
+                      placeholder="请输入采购价"
+                      style={{ width: '100%' }}
+                      onChange={(value) => {
+                        setPurchasePriceDrafts((current) => ({
+                          ...current,
+                          [draftKey]: typeof value === 'number' ? value : null,
+                        }));
+                      }}
+                    />
+                  );
+                },
+              },
+            ]}
+          />
+        </Space>
+      </Modal>
 
       <Modal
         open={rejectOpen}
@@ -1115,7 +1362,7 @@ const SyncPriceAdjustPage = () => {
             <Typography.Text type="secondary">如需回传原因，可在这里统一填写。</Typography.Text>
           </Form.Item>
           <Form.Item label="拒绝原因">
-            <Input.TextArea rows={4} value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} placeholder="可选；如填写将回写到后台" />
+            <Input.TextArea rows={4} value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} placeholder={DEFAULT_REJECT_REASON} />
           </Form.Item>
         </Form>
       </Modal>

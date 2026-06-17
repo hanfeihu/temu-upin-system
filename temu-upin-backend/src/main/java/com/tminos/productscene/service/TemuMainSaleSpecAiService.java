@@ -26,13 +26,16 @@ public class TemuMainSaleSpecAiService {
     private final AITemuAttrFillerConfig config;
     private final ObjectMapper objectMapper;
     private final RestTemplate restTemplate;
+    private final TextAiChannelResolver textAiChannelResolver;
 
     public TemuMainSaleSpecAiService(AITemuAttrFillerConfig config,
                                     ObjectMapper objectMapper,
-                                    @Qualifier("aiLongRestTemplate") RestTemplate restTemplate) {
+                                    @Qualifier("aiLongRestTemplate") RestTemplate restTemplate,
+                                    TextAiChannelResolver textAiChannelResolver) {
         this.config = config;
         this.objectMapper = objectMapper;
         this.restTemplate = restTemplate;
+        this.textAiChannelResolver = textAiChannelResolver;
     }
 
     public AiPlanResult inferMainSaleSpecPlan(String promptPayloadJson,
@@ -44,7 +47,8 @@ public class TemuMainSaleSpecAiService {
             out.errorMsg = "AI disabled";
             return out;
         }
-        if (!StringUtils.hasText(config.getApiKey())) {
+        TextAiChannelResolver.ResolvedChannel aiChannel = resolveAiChannel();
+        if (!StringUtils.hasText(aiChannel.getApiKey())) {
             out.errorMsg = "Missing TEMU_ATTR_AI_API_KEY";
             return out;
         }
@@ -61,7 +65,7 @@ public class TemuMainSaleSpecAiService {
             String prompt = buildPrompt(promptPayloadJson, allowedParentSpecs);
 
             Map<String, Object> req = new LinkedHashMap<>();
-            req.put("model", config.getModel() == null ? "gpt-5.2" : config.getModel());
+            req.put("model", StringUtils.hasText(aiChannel.getModel()) ? aiChannel.getModel() : "gpt-5.5");
             req.put("messages", List.of(
                     Map.of("role", "system", "content", systemInstruction()),
                     Map.of("role", "user", "content", prompt)
@@ -70,10 +74,10 @@ public class TemuMainSaleSpecAiService {
 
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
-            headers.set("Authorization", "Bearer " + config.getApiKey());
+            headers.set("Authorization", "Bearer " + aiChannel.getApiKey());
 
             HttpEntity<Map<String, Object>> httpEntity = new HttpEntity<>(req, headers);
-            String url = completionsUrl(config.getBaseUrl());
+            String url = completionsUrl(aiChannel.getBaseUrl());
             ResponseEntity<String> resp = restTemplate.exchange(url, HttpMethod.POST, httpEntity, String.class);
             out.responseRaw = resp.getBody();
             if (resp.getStatusCode() != HttpStatus.OK || !StringUtils.hasText(resp.getBody())) {
@@ -245,7 +249,16 @@ public class TemuMainSaleSpecAiService {
     }
 
     private String completionsUrl(String base) {
-        return TextAiUrlHelper.chatCompletionsUrl(base, "https://chatbot.tminos.com");
+        return TextAiUrlHelper.chatCompletionsUrl(base, config.getBaseUrl());
+    }
+
+    private TextAiChannelResolver.ResolvedChannel resolveAiChannel() {
+        return textAiChannelResolver.resolve(
+                TextAiBusinessCodes.TEMU_MAIN_SALE_SPEC,
+                config.getBaseUrl(),
+                config.getApiKey(),
+                StringUtils.hasText(config.getModel()) ? config.getModel().trim() : "gpt-5.5"
+        );
     }
 
     private String extractAssistantContent(String raw) {

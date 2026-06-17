@@ -7,7 +7,7 @@ import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
 @Configuration
-@EnableConfigurationProperties(PlatformAuthProperties.class)
+@EnableConfigurationProperties({PlatformAuthProperties.class, Alibaba1688WorkerApiProperties.class})
 public class PlatformAuthWebConfig implements WebMvcConfigurer {
 
     private final AuthInterceptor authInterceptor;

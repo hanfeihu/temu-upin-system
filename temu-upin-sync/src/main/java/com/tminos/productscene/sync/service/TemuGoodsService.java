@@ -42,6 +42,7 @@ public class TemuGoodsService {
     private final TemuGoodsSkuPriceRepository skuPriceRepository;
     private final TemuGoodsSkuPriceChangeRepository skuPriceChangeRepository;
     private final TemuGoodsSkuSitePriceRepository skuSitePriceRepository;
+    private final TemuActivityBlacklistRepository activityBlacklistRepository;
     @SuppressWarnings("unused")
     private final TemuGoodsDecorationRepository decorationRepository;
     @SuppressWarnings("unused")
@@ -56,6 +57,7 @@ public class TemuGoodsService {
                              TemuGoodsSkuPriceRepository skuPriceRepository,
                              TemuGoodsSkuPriceChangeRepository skuPriceChangeRepository,
                              TemuGoodsSkuSitePriceRepository skuSitePriceRepository,
+                             TemuActivityBlacklistRepository activityBlacklistRepository,
                              TemuGoodsDecorationRepository decorationRepository,
                              TemuFreightTemplateRepository freightTemplateRepository,
                              TemuWarehouseRepository warehouseRepository) {
@@ -67,6 +69,7 @@ public class TemuGoodsService {
         this.skuPriceRepository = skuPriceRepository;
         this.skuPriceChangeRepository = skuPriceChangeRepository;
         this.skuSitePriceRepository = skuSitePriceRepository;
+        this.activityBlacklistRepository = activityBlacklistRepository;
         this.decorationRepository = decorationRepository;
         this.freightTemplateRepository = freightTemplateRepository;
         this.warehouseRepository = warehouseRepository;
@@ -74,8 +77,10 @@ public class TemuGoodsService {
 
     // ==================== 查询方法 ====================
 
-    public Page<TemuGoods> listGoods(String shopId, String keyword,
+    public Page<TemuGoods> listGoods(String shopId, String keyword, Long productSkuId,
                                      Integer skcSiteStatus,
+                                     Boolean activityBlacklisted,
+                                     Boolean allSkuOutOfStock,
                                      Integer minSupplierPrice, Integer maxSupplierPrice,
                                      int page, int pageSize) {
         PageRequest pageRequest = PageRequest.of(
@@ -87,9 +92,36 @@ public class TemuGoodsService {
             )
         );
         String keywordPattern = buildKeywordPattern(keyword);
-        Page<TemuGoods> goodsPage = goodsRepository.searchGoods(shopId, keywordPattern, skcSiteStatus, minSupplierPrice, maxSupplierPrice, pageRequest);
+        Page<TemuGoods> goodsPage = goodsRepository.searchGoods(
+            shopId,
+            keywordPattern,
+            productSkuId,
+            skcSiteStatus,
+            activityBlacklisted,
+            allSkuOutOfStock,
+            minSupplierPrice,
+            maxSupplierPrice,
+            pageRequest);
         attachUsSitePriceRange(goodsPage.getContent());
+        attachActivityBlacklistFlag(goodsPage.getContent());
         return goodsPage;
+    }
+
+    private void attachActivityBlacklistFlag(List<TemuGoods> goodsList) {
+        if (goodsList == null || goodsList.isEmpty()) {
+            return;
+        }
+        String shopId = goodsList.get(0).getShopId();
+        List<Long> productIds = goodsList.stream().map(TemuGoods::getProductId).filter(Objects::nonNull).distinct().toList();
+        Set<Long> blacklistedProductIds = productIds.isEmpty()
+                ? Set.of()
+                : activityBlacklistRepository.findByShopIdAndProductIdIn(shopId, productIds).stream()
+                .map(TemuActivityBlacklist::getProductId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        for (TemuGoods goods : goodsList) {
+            goods.setActivityBlacklisted(goods.getProductId() != null && blacklistedProductIds.contains(goods.getProductId()));
+        }
     }
 
     private void attachUsSitePriceRange(List<TemuGoods> goodsList) {
@@ -164,8 +196,10 @@ public class TemuGoodsService {
         }
     }
 
-    public ExportFile exportGoodsBySku(String shopId, String keyword,
+    public ExportFile exportGoodsBySku(String shopId, String keyword, Long productSkuId,
                                        Integer skcSiteStatus,
+                                       Boolean activityBlacklisted,
+                                       Boolean allSkuOutOfStock,
                                        Integer minSupplierPrice, Integer maxSupplierPrice) {
         String keywordPattern = buildKeywordPattern(keyword);
         ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
@@ -185,7 +219,10 @@ public class TemuGoodsService {
                 goodsPage = goodsRepository.searchGoods(
                         shopId,
                         keywordPattern,
+                        productSkuId,
                         skcSiteStatus,
+                        activityBlacklisted,
+                        allSkuOutOfStock,
                         minSupplierPrice,
                         maxSupplierPrice,
                         PageRequest.of(currentPage, EXPORT_PAGE_SIZE, Sort.by(Sort.Direction.DESC, "id")));

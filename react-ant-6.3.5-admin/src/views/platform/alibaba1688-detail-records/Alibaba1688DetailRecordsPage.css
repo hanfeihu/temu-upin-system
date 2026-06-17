@@ -1,0 +1,59 @@
+.alibaba1688-detail-record-table .ant-table-tbody > tr > td {
+  vertical-align: top;
+}
+
+.alibaba1688-detail-record-cell {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.alibaba1688-detail-record-goods {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.alibaba1688-detail-record-goods-content {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.alibaba1688-detail-record-title {
+  margin-bottom: 0 !important;
+}
+
+.alibaba1688-detail-record-link {
+  display: block;
+  overflow: hidden;
+  color: #1677ff;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.alibaba1688-detail-record-paragraph {
+  margin-bottom: 0 !important;
+}
+
+.alibaba1688-detail-record-pre {
+  max-height: 520px;
+  overflow: auto;
+  margin: 0;
+  padding: 14px;
+  border-radius: 12px;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.alibaba1688-detail-record-pre-html {
+  font-size: 11px;
+}

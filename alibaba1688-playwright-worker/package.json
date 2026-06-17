@@ -1,0 +1,14 @@
+{
+  "name": "alibaba1688-playwright-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "login": "node ./worker.mjs login",
+    "run": "node ./worker.mjs run",
+    "credentials": "node ./worker.mjs credentials"
+  },
+  "dependencies": {
+    "playwright": "^1.52.0"
+  }
+}

@@ -53,7 +53,12 @@ const Login = () => {
           <Typography.Text type="secondary">TEMU 上品系统后台管理端</Typography.Text>
         </Flex>
 
-        <Form<LoginFormValues> layout="vertical" onFinish={handleFinish} autoComplete="off">
+        <Form<LoginFormValues>
+          layout="vertical"
+          onFinish={handleFinish}
+          autoComplete="off"
+          initialValues={{ username: 'admin', password: 'admin778899' }}
+        >
           <Form.Item
             label="账号"
             name="username"

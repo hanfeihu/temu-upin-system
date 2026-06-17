@@ -5,6 +5,11 @@ import com.tminos.productscene.entity.PostImportLog;
 import com.tminos.productscene.entity.PostImportRun;
 import com.tminos.productscene.repository.PostImportLogRepository;
 import com.tminos.productscene.repository.PostImportRunRepository;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -92,6 +97,25 @@ public class PostImportLogService {
 
     public List<PostImportRun> listRecentRuns() {
         return runRepo.findTop50ByOrderByIdDesc();
+    }
+
+    public Page<PostImportRun> searchRuns(Long spuId, String status, int page, int size) {
+        Pageable pageable = PageRequest.of(
+                Math.max(page, 0),
+                Math.min(Math.max(size, 1), 100),
+                Sort.by(Sort.Direction.DESC, "id")
+        );
+        Specification<PostImportRun> spec = (root, query, cb) -> {
+            java.util.List<jakarta.persistence.criteria.Predicate> predicates = new java.util.ArrayList<>();
+            if (spuId != null) {
+                predicates.add(cb.equal(root.get("spuId"), spuId));
+            }
+            if (status != null && !status.isBlank()) {
+                predicates.add(cb.equal(root.get("status"), status.trim()));
+            }
+            return cb.and(predicates.toArray(new jakarta.persistence.criteria.Predicate[0]));
+        };
+        return runRepo.findAll(spec, pageable);
     }
 
     public List<PostImportLog> listLogs(Long runId) {

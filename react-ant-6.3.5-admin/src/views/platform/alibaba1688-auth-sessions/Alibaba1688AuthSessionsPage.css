@@ -1,0 +1,18 @@
+.alibaba1688-auth-session-table .ant-table-tbody > tr > td {
+  vertical-align: top;
+}
+
+.alibaba1688-auth-session-cell {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.alibaba1688-auth-session-cell .ant-typography {
+  margin-bottom: 0;
+}
+
+.alibaba1688-auth-session-remark {
+  margin-bottom: 0 !important;
+}

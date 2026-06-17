@@ -138,6 +138,59 @@ public class ActivityDTO {
     }
 
     @Data
+    public static class RecommendationRequest {
+        private String shopId;
+        private Integer activityType;
+        private Long activityThematicId;
+        private Integer rowCount = 20;
+        private Integer minListedDays = 0;
+        private Integer maxSalesQuantity;
+        private Integer minProfitCents = 0;
+        private Integer minProfitRatePercent = 0;
+        private Integer defaultActivityStock = 5;
+        private Integer minSupplierPrice;
+        private Integer maxSupplierPrice;
+        private Boolean excludeEnrolled = true;
+    }
+
+    @Data
+    public static class BlacklistRequest {
+        private String shopId;
+        private Long productId;
+        private Long goodsId;
+        private String productName;
+        private String reason;
+    }
+
+    @Data
+    public static class RecommendationResponse {
+        private List<RecommendedProductItem> list;
+        private Integer localCandidateCount;
+        private Integer matchedCount;
+    }
+
+    @Data
+    public static class RecommendedProductItem {
+        private Long productId;
+        private Long goodsId;
+        private String productName;
+        private String mainImageUrl;
+        private String extCode;
+        private Integer currentSupplyPrice;
+        private Integer suggestActivityPrice;
+        private Integer minPurchasePrice;
+        private Integer maxPurchasePrice;
+        private Integer estimatedProfit;
+        private Double estimatedProfitRate;
+        private Long salesQuantity;
+        private Integer listedDays;
+        private Integer activityStock;
+        private String decision;
+        private String reason;
+        private MatchedProductItem matchedProduct;
+    }
+
+    @Data
     public static class MatchedProductItem {
         private Long productId;
         private String productName;
@@ -191,6 +244,14 @@ public class ActivityDTO {
         private List<Integer> siteIds;
         private List<SessionItem> list;
         private java.util.Map<String, List<SessionItem>> productCanEnrollSessionMap;
+    }
+
+    @Data
+    public static class EnrollmentRefreshRequest {
+        private String shopId;
+        private Integer activityType;
+        private Long activityThematicId;
+        private List<Long> productIds;
     }
 
     @Data

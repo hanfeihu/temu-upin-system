@@ -81,6 +81,28 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }))
       return
     }
+
+    if (message.type === 'TMINOS_IMPORT_CARD_LINKS') {
+      const { url, token, items } = message
+      if (typeof url !== 'string' || !url) {
+        sendResponse({ ok: false, error: 'Missing url' })
+        return
+      }
+      if (!Array.isArray(items)) {
+        sendResponse({ ok: false, error: 'Missing items' })
+        return
+      }
+
+      sendResponse(await sendHttpRequest({
+        url,
+        method: 'POST',
+        token,
+        body: {
+          items
+        }
+      }))
+      return
+    }
   })().catch((err) => {
     sendResponse({ ok: false, error: err?.message || String(err) })
   })

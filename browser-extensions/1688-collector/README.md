@@ -10,8 +10,9 @@
 
 ## 接口说明
 
-- dev `baseUrl`：`http://127.0.0.1:8080`
-- prod `baseUrl`：`https://www.tminos.com`
+- 韩飞虎 `baseUrl`：`https://youyou.tminos.com`
+- dev `baseUrl`：`https://dev.tminos.com`
+- local `baseUrl`：`http://127.0.0.1:8080`
 
 请求：
 
@@ -21,12 +22,14 @@
 
 ## 安装（Chrome / Edge）
 
-1. 打开扩展管理页：
+1. 先把插件压缩包完整解压到本地一个普通目录。
+   解压后的目录下应该能直接看到 `manifest.json`，不要选错到外层目录。
+2. 打开扩展管理页：
    - Chrome：`chrome://extensions/`
    - Edge：`edge://extensions/`
-2. 打开右上角的「开发者模式」
-3. 点击「加载已解压的扩展程序」
-4. 选择本项目的扩展目录：
+3. 打开右上角的「开发者模式」
+4. 点击「加载已解压的扩展程序」
+5. 选择包含 `manifest.json` 的插件目录：
 
    `browser-extensions/1688-collector/`
 
@@ -37,7 +40,7 @@
 - 点击「采集并上传HTML」：把净化后的 HTML 以 `text/plain` 发送到接口
 - 点击「复制净化HTML到剪贴板」：把净化后的 HTML 复制到剪贴板
 
-浮窗里有「切换环境（dev/prod）」按钮：会把当前环境保存到 `chrome.storage.local`，下次打开页面仍然生效。
+浮窗里可以切换上传环境：会把当前环境保存到 `chrome.storage.local`，下次打开页面仍然生效。
 
 文件名包含域名、路径和时间戳，便于批量采集。
 
@@ -58,8 +61,6 @@
 当前仓库中的这个插件目录直接同步自本机源目录：
 
 `/Users/a1/Nextcloud/1688 采集插件/extension`
-
-
 
 
 

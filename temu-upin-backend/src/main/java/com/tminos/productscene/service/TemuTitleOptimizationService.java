@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tminos.productscene.config.AITemuTitleOptimizerConfig;
 import com.tminos.productscene.dto.TemuCategoryDTO;
 import com.tminos.productscene.entity.ProductCollection;
+import com.tminos.productscene.util.TemuTitleSafetySanitizer;
 import com.tminos.productscene.util.TextAiUrlHelper;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.client.ClientHttpResponse;
@@ -38,18 +39,25 @@ public class TemuTitleOptimizationService {
     private final ObjectMapper objectMapper;
     private final RestTemplate restTemplate;
     private final TemuCategoryService temuCategoryService;
+    private final TextAiChannelResolver textAiChannelResolver;
 
     public TemuTitleOptimizationService(AITemuTitleOptimizerConfig config,
                                         ObjectMapper objectMapper,
                                         @Qualifier("aiLongRestTemplate") RestTemplate restTemplate,
-                                        TemuCategoryService temuCategoryService) {
+                                        TemuCategoryService temuCategoryService,
+                                        TextAiChannelResolver textAiChannelResolver) {
         this.config = config;
         this.objectMapper = objectMapper;
         this.restTemplate = restTemplate;
         this.temuCategoryService = temuCategoryService;
+        this.textAiChannelResolver = textAiChannelResolver;
     }
 
     public TitleOptimizationResult generateAndMatch(ProductCollection productCollection) {
+        return generateAndMatch(productCollection, null);
+    }
+
+    public TitleOptimizationResult generateAndMatch(ProductCollection productCollection, String targetShopId) {
         TitleOptimizationResult result = new TitleOptimizationResult();
         result.setSourceTitle(productCollection == null ? null : normalizePlainText(productCollection.getProductName(), 240));
         result.setFailedKeywords(new ArrayList<>());
@@ -62,8 +70,12 @@ public class TemuTitleOptimizationService {
             result.setErrorMsg("Temu title optimizer disabled");
             return result;
         }
-        if (!StringUtils.hasText(config.getApiKey())) {
-            result.setErrorMsg("Missing TEMU_TITLE_AI_API_KEY");
+        if (!StringUtils.hasText(resolveAiChannel().getApiKey())) {
+            result.setErrorMsg("缺少 TEMU 标题 AI 渠道 API Key");
+            return result;
+        }
+        if (!StringUtils.hasText(targetShopId)) {
+            result.setErrorMsg("product target shop is required for TEMU category match");
             return result;
         }
 
@@ -89,7 +101,7 @@ public class TemuTitleOptimizationService {
             }
 
             result.setMatchedKeyword(keyword);
-            lastMatch = temuCategoryService.matchCategory(keyword);
+            lastMatch = temuCategoryService.matchCategory(keyword, targetShopId);
             if (hasCategoryOptions(lastMatch)) {
                 result.setCategoryMatched(true);
                 TemuCategoryDTO.MatchOption first = lastMatch.getOptions().get(0);
@@ -115,8 +127,8 @@ public class TemuTitleOptimizationService {
         if (result == null || payload == null) {
             return;
         }
-        result.setOptimizedTitleEn(normalizePlainText(payload.optimizedTitleEn(), 180));
-        result.setOptimizedTitleZh(normalizePlainText(payload.optimizedTitleZh(), 120));
+        result.setOptimizedTitleEn(normalizePlainText(TemuTitleSafetySanitizer.removeUnsupportedPreciousMetalWords(payload.optimizedTitleEn()), 180));
+        result.setOptimizedTitleZh(normalizePlainText(TemuTitleSafetySanitizer.removeUnsupportedPreciousMetalWords(payload.optimizedTitleZh()), 120));
         result.setCategoryKeywords(normalizeKeywordPhrase(payload.categoryKeywords()));
     }
 
@@ -124,7 +136,8 @@ public class TemuTitleOptimizationService {
                                               List<String> failedKeywords,
                                               int attempt) throws Exception {
         Map<String, Object> req = new LinkedHashMap<>();
-        req.put("model", defaultModel());
+        TextAiChannelResolver.ResolvedChannel aiChannel = resolveAiChannel();
+        req.put("model", StringUtils.hasText(aiChannel.getModel()) ? aiChannel.getModel() : defaultModel());
         req.put("messages", List.of(
                 Map.of("role", "system", "content", systemInstruction()),
                 Map.of("role", "user", "content", buildPrompt(productContext, failedKeywords, attempt))
@@ -135,9 +148,9 @@ public class TemuTitleOptimizationService {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
         headers.setAccept(List.of(MediaType.TEXT_EVENT_STREAM, MediaType.APPLICATION_JSON));
-        headers.setBearerAuth(config.getApiKey().trim());
+        headers.setBearerAuth(aiChannel.getApiKey().trim());
 
-        String url = completionsUrl(config.getBaseUrl());
+        String url = completionsUrl(aiChannel.getBaseUrl());
         String requestJson = objectMapper.writeValueAsString(req);
 
         StreamResult streamResult = restTemplate.execute(
@@ -163,8 +176,8 @@ public class TemuTitleOptimizationService {
         }
 
         Map<String, Object> obj = objectMapper.readValue(content, new TypeReference<Map<String, Object>>() {});
-        String titleEn = normalizePlainText(asString(obj.get("optimizedTitleEn")), 180);
-        String titleZh = normalizePlainText(asString(obj.get("optimizedTitleZh")), 120);
+        String titleEn = normalizePlainText(TemuTitleSafetySanitizer.removeUnsupportedPreciousMetalWords(asString(obj.get("optimizedTitleEn"))), 180);
+        String titleZh = normalizePlainText(TemuTitleSafetySanitizer.removeUnsupportedPreciousMetalWords(asString(obj.get("optimizedTitleZh"))), 120);
         String keywords = normalizeKeywordPhrase(asString(obj.get("categoryKeywords")));
         if (!StringUtils.hasText(keywords) && obj.get("keywords") instanceof List<?> list && !list.isEmpty()) {
             List<String> texts = new ArrayList<>();
@@ -377,9 +390,10 @@ public class TemuTitleOptimizationService {
                 + "3. optimizedTitleEn 必须是英文标题，optimizedTitleZh 必须是中文标题。\n"
                 + "4. categoryKeywords 是一个用于 TEMU 类目匹配的短语，不要写品牌词，不要写商标，不要写动漫/IP/人物名称。\n"
                 + "5. 标题和关键词都不能出现明显品牌或侵权词，例如 Sanrio、Marvel、Disney、Hello Kitty、Pokemon 等，也不要出现 1688 店铺名。\n"
-                + "6. 如果 failedKeywords 里有失败词，新的 categoryKeywords 不能重复或只做轻微改写。\n"
-                + "7. 语义要尽量准确，优先描述品类、材质、用途、场景、核心外观。\n"
-                + "8. 字段值必须是字符串。\n"
+                + "6. 标题不能出现 TEMU 不支持的贵金属售卖词：中文不要出现 金、银、金色、银色、黄金、白银、纯银、925银、镀金、镀银；英文不要出现 gold、silver、golden、silvery、gold-plated、silver-plated、sterling silver、925 silver。颜色可改写为 yellow、gray、pink 等普通颜色词。\n"
+                + "7. 如果 failedKeywords 里有失败词，新的 categoryKeywords 不能重复或只做轻微改写。\n"
+                + "8. 语义要尽量准确，优先描述品类、材质、用途、场景、核心外观。\n"
+                + "9. 字段值必须是字符串。\n"
                 + "JSON 示例：{\"optimizedTitleEn\":\"...\",\"optimizedTitleZh\":\"...\",\"categoryKeywords\":\"...\"}\n"
                 + "商品信息：\n"
                 + objectMapper.writeValueAsString(payload);
@@ -389,15 +403,25 @@ public class TemuTitleOptimizationService {
         return "You are a cross-border e-commerce catalog assistant. "
                 + "You generate generic, non-infringing product titles and category matching keywords. "
                 + "You must remove brand, trademark, anime, celebrity, and copyrighted IP references. "
+                + "Never use gold, silver, golden, silvery, gold-plated, silver-plated, sterling silver, or 925 silver in product titles. "
                 + "Return strict JSON only.";
     }
 
     private String completionsUrl(String baseUrl) {
-        return TextAiUrlHelper.chatCompletionsUrl(baseUrl, "https://chatbot.tminos.com");
+        return TextAiUrlHelper.chatCompletionsUrl(baseUrl, config.getBaseUrl());
     }
 
     private String defaultModel() {
-        return StringUtils.hasText(config.getModel()) ? config.getModel().trim() : "gpt-5.2";
+        return StringUtils.hasText(config.getModel()) ? config.getModel().trim() : "gpt-5.5";
+    }
+
+    private TextAiChannelResolver.ResolvedChannel resolveAiChannel() {
+        return textAiChannelResolver.resolve(
+                TextAiBusinessCodes.TEMU_TITLE_OPTIMIZE,
+                config.getBaseUrl(),
+                config.getApiKey(),
+                defaultModel()
+        );
     }
 
     private String extractAssistantContent(String raw) throws Exception {

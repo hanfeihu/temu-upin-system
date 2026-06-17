@@ -14,6 +14,8 @@ public interface TemuOrderRepository extends JpaRepository<TemuOrder, Long>, Jpa
 
     Optional<TemuOrder> findByShopRecordIdAndOrderSn(Long shopRecordId, String orderSn);
 
+    List<TemuOrder> findByShopRecordIdAndDianxiaomiPackageNumber(Long shopRecordId, String dianxiaomiPackageNumber);
+
     List<TemuOrder> findByShopRecordIdAndParentOrderSnIn(Long shopRecordId, Collection<String> parentOrderSns);
 
     List<TemuOrder> findByMatchedSpuId(Long matchedSpuId);

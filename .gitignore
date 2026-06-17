@@ -34,3 +34,9 @@
 
 # Logs
 *.log
+
+# Local runtime/debug artifacts
+.local/
+.db-backups/
+*.sqlite
+alibaba1688-playwright-worker/.runtime/

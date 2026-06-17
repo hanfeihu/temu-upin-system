@@ -23,6 +23,7 @@ public class SyncTaskService {
 
     private static final Logger log = LoggerFactory.getLogger(SyncTaskService.class);
     private static final List<String> RUNNING_STATUSES = List.of("PENDING", "DOWNLOADING", "DOWNLOADED", "PERSISTING");
+    private static final String DEFAULT_AUTO_GOODS_SCOPE = "LAST_7_DAYS";
     private static final String DEFAULT_AUTO_PRICE_ADJUST_SCOPE = "LAST_7_DAYS";
 
     private final TemuSyncTaskRepository taskRepo;
@@ -80,11 +81,11 @@ public class SyncTaskService {
 
     public List<SyncTaskDTO.TaskItem> createAutoTasks(String shopId) {
         List<SyncTaskDTO.TaskItem> result = new ArrayList<>();
-        for (String syncType : List.of("GOODS", "LIFECYCLE", "PRICE", "PRICE_ADJUST")) {
+        for (String syncType : List.of("GOODS", "PRICE", "PRICE_REVIEW", "PRICE_ADJUST")) {
             TemuSyncTask task = createSingleTask(
                     shopId,
                     syncType,
-                    "LAST_WEEK",
+                    resolveAutoGoodsScope(shopId),
                     resolveAutoPriceAdjustScope(shopId),
                     "AUTO",
                     false);
@@ -339,20 +340,47 @@ public class SyncTaskService {
     private String resolveSyncScope(String syncType, String goodsSyncMode, String priceAdjustSyncMode, String triggerType) {
         if ("GOODS".equals(syncType)) {
             if ("AUTO".equals(triggerType)) {
-                return "LAST_WEEK";
+                return normalizeAutoGoodsScope(goodsSyncMode);
             }
-            return normalizeManualScope(goodsSyncMode, "LAST_WEEK");
+            return normalizeGoodsManualScope(goodsSyncMode, "LAST_WEEK");
         }
         if ("PRICE_ADJUST".equals(syncType)) {
             if ("AUTO".equals(triggerType)) {
                 return normalizeAutoPriceAdjustScope(priceAdjustSyncMode);
             }
-            return normalizeManualScope(priceAdjustSyncMode, "LAST_WEEK");
+            return normalizePriceAdjustManualScope(priceAdjustSyncMode, "LAST_WEEK");
         }
         return null;
     }
 
-    private String normalizeManualScope(String scope, String defaultScope) {
+    private String resolveAutoGoodsScope(String shopId) {
+        int days = syncConfigService.getIntConfig(shopId, "goods_auto_sync_days", 7);
+        return normalizeAutoGoodsScope(days <= 0 ? null : "LAST_" + days + "_DAYS");
+    }
+
+    private String normalizeAutoGoodsScope(String scope) {
+        if (scope == null || scope.isBlank()) {
+            return DEFAULT_AUTO_GOODS_SCOPE;
+        }
+        String normalized = scope.trim().toUpperCase(Locale.ROOT);
+        if (normalized.matches("LAST_[1-9]\\d*_DAYS")) {
+            return normalized;
+        }
+        return DEFAULT_AUTO_GOODS_SCOPE;
+    }
+
+    private String normalizeGoodsManualScope(String scope, String defaultScope) {
+        if (scope == null || scope.isBlank()) {
+            return defaultScope;
+        }
+        String normalized = scope.trim().toUpperCase(Locale.ROOT);
+        if ("LAST_WEEK".equals(normalized) || "LAST_MONTH".equals(normalized) || "LAST_YEAR".equals(normalized)) {
+            return normalized;
+        }
+        return defaultScope;
+    }
+
+    private String normalizePriceAdjustManualScope(String scope, String defaultScope) {
         if (scope == null || scope.isBlank()) {
             return defaultScope;
         }

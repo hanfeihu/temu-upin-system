@@ -55,6 +55,8 @@ public class AuthInterceptor implements HandlerInterceptor {
 
     private boolean isPublicPath(String requestUri) {
         return requestUri.startsWith("/api/auth/login")
-                || requestUri.startsWith("/api/ocr/");
+                || requestUri.startsWith("/api/ocr/")
+                || requestUri.startsWith("/api/public/supplier-product-submissions")
+                || requestUri.startsWith("/api/public/alibaba1688-worker/");
     }
 }

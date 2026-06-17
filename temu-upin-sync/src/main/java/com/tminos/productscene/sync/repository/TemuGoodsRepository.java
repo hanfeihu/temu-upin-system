@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -40,7 +41,43 @@ public interface TemuGoodsRepository extends JpaRepository<TemuGoods, Long> {
                       )
                 )
               )
+              and (
+                :productSkuId is null
+                or exists (
+                    select 1 from TemuGoodsSku sku
+                    where sku.goodsId = g.id
+                      and sku.productSkuId = :productSkuId
+                )
+              )
               and (:skcSiteStatus is null or coalesce(g.skcSiteStatus, 0) = :skcSiteStatus)
+              and (
+                :activityBlacklisted is null
+                or (:activityBlacklisted = true and exists (
+                    select 1 from TemuActivityBlacklist b
+                    where b.shopId = g.shopId
+                      and b.productId = g.productId
+                ))
+                or (:activityBlacklisted = false and not exists (
+                    select 1 from TemuActivityBlacklist b
+                    where b.shopId = g.shopId
+                      and b.productId = g.productId
+                ))
+              )
+              and (
+                :allSkuOutOfStock is null
+                or :allSkuOutOfStock = false
+                or (
+                    exists (
+                        select 1 from TemuGoodsSku sku
+                        where sku.goodsId = g.id
+                    )
+                    and not exists (
+                        select 1 from TemuGoodsSku sku
+                        where sku.goodsId = g.id
+                          and coalesce(sku.virtualStock, 0) > 0
+                    )
+                )
+              )
               and ((:minSupplierPrice is null and :maxSupplierPrice is null)
                 or exists (
                 select 1 from TemuGoodsSkuPrice p, TemuGoodsSkuSitePrice sp
@@ -55,7 +92,10 @@ public interface TemuGoodsRepository extends JpaRepository<TemuGoods, Long> {
     Page<TemuGoods> searchGoods(
         @Param("shopId") String shopId,
         @Param("keywordPattern") String keywordPattern,
+        @Param("productSkuId") Long productSkuId,
         @Param("skcSiteStatus") Integer skcSiteStatus,
+        @Param("activityBlacklisted") Boolean activityBlacklisted,
+        @Param("allSkuOutOfStock") Boolean allSkuOutOfStock,
         @Param("minSupplierPrice") Integer minSupplierPrice,
         @Param("maxSupplierPrice") Integer maxSupplierPrice,
         Pageable pageable);
@@ -65,4 +105,19 @@ public interface TemuGoodsRepository extends JpaRepository<TemuGoods, Long> {
     List<TemuGoods> findByShopIdAndProductSkcIdIn(String shopId, List<Long> productSkcIds);
 
     Optional<TemuGoods> findByShopIdAndProductId(String shopId, Long productId);
+
+    @Query("""
+            select distinct g from TemuGoods g
+            join TemuGoodsSku sku on sku.goodsId = g.id
+            where g.productId is not null
+              and g.shopId is not null
+              and coalesce(g.skcSiteStatus, 0) = 1
+              and (g.sensitiveAttrConfirmStatus is null or g.sensitiveAttrConfirmStatus in ('PENDING', 'FAILED', 'SKIPPED'))
+              and (g.sensitiveAttrConfirmAt is null or g.sensitiveAttrConfirmAt < :retryBefore)
+              and coalesce(sku.isSensitive, 0) = 0
+              and sku.productSkuId is not null
+            order by coalesce(g.syncedAt, g.updatedAt, g.createdAt) desc
+            """)
+    List<TemuGoods> findSensitiveAttrConfirmCandidates(@Param("retryBefore") LocalDateTime retryBefore,
+                                                       Pageable pageable);
 }

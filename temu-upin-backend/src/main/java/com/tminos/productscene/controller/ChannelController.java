@@ -52,6 +52,29 @@ public class ChannelController {
         return ResponseEntity.ok(ApiResponse.success("Channel deleted", null));
     }
 
+    @GetMapping("/business-configs")
+    public ResponseEntity<ApiResponse<List<BusinessConfigResponse>>> getBusinessConfigs() {
+        return ResponseEntity.ok(ApiResponse.success(channelService.getBusinessConfigs()));
+    }
+
+    @PostMapping("/business-configs")
+    public ResponseEntity<ApiResponse<BusinessConfigResponse>> createBusinessConfig(@RequestBody BusinessConfigRequest request) {
+        return ResponseEntity.ok(ApiResponse.success("Business config created", channelService.createBusinessConfig(request)));
+    }
+
+    @PutMapping("/business-configs/{id}")
+    public ResponseEntity<ApiResponse<BusinessConfigResponse>> updateBusinessConfig(
+            @PathVariable Long id,
+            @RequestBody BusinessConfigRequest request) {
+        return ResponseEntity.ok(ApiResponse.success("Business config updated", channelService.updateBusinessConfig(id, request)));
+    }
+
+    @DeleteMapping("/business-configs/{id}")
+    public ResponseEntity<ApiResponse<Void>> deleteBusinessConfig(@PathVariable Long id) {
+        channelService.deleteBusinessConfig(id);
+        return ResponseEntity.ok(ApiResponse.success("Business config deleted", null));
+    }
+
     @PostMapping("/{id}/test")
     public ResponseEntity<ApiResponse<ChannelTestResponse>> testChannel(
             @PathVariable Long id,

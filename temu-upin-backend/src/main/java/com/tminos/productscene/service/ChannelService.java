@@ -2,6 +2,8 @@ package com.tminos.productscene.service;
 
 import com.tminos.productscene.dto.ChannelDTO.*;
 import com.tminos.productscene.entity.AIChannel;
+import com.tminos.productscene.entity.AIChannelBusinessConfig;
+import com.tminos.productscene.repository.AIChannelBusinessConfigRepository;
 import com.tminos.productscene.repository.AIChannelRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -17,6 +19,7 @@ import java.util.stream.Collectors;
 public class ChannelService {
     
     private final AIChannelRepository channelRepository;
+    private final AIChannelBusinessConfigRepository businessConfigRepository;
     
     @Transactional(readOnly = true)
     public List<ChannelResponse> getAllChannels() {
@@ -98,6 +101,69 @@ public class ChannelService {
         channelRepository.deleteById(id);
         log.info("Deleted channel: {}", id);
     }
+
+    @Transactional(readOnly = true)
+    public List<BusinessConfigResponse> getBusinessConfigs() {
+        return businessConfigRepository.findAllByOrderByIdAsc().stream()
+                .map(this::toBusinessConfigResponse)
+                .collect(Collectors.toList());
+    }
+
+    @Transactional
+    public BusinessConfigResponse createBusinessConfig(BusinessConfigRequest request) {
+        validateBusinessConfigRequest(request);
+        String businessCode = request.getBusinessCode().trim();
+        if (businessConfigRepository.findByBusinessCode(businessCode).isPresent()) {
+            throw new IllegalArgumentException("业务编码已存在: " + businessCode);
+        }
+        AIChannelBusinessConfig config = AIChannelBusinessConfig.builder()
+                .businessName(request.getBusinessName().trim())
+                .businessCode(businessCode)
+                .channelId(request.getChannelId())
+                .enabled(request.getEnabled() != null ? request.getEnabled() : true)
+                .description(request.getDescription())
+                .build();
+        return toBusinessConfigResponse(businessConfigRepository.save(config));
+    }
+
+    @Transactional
+    public BusinessConfigResponse updateBusinessConfig(Long id, BusinessConfigRequest request) {
+        AIChannelBusinessConfig config = businessConfigRepository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("Business config not found: " + id));
+        if (request.getBusinessName() != null) {
+            if (!StringUtils.hasText(request.getBusinessName())) {
+                throw new IllegalArgumentException("业务名称不能为空");
+            }
+            config.setBusinessName(request.getBusinessName().trim());
+        }
+        if (request.getBusinessCode() != null) {
+            if (!StringUtils.hasText(request.getBusinessCode())) {
+                throw new IllegalArgumentException("业务编码不能为空");
+            }
+            String businessCode = request.getBusinessCode().trim();
+            businessConfigRepository.findByBusinessCode(businessCode)
+                    .filter(existing -> !existing.getId().equals(id))
+                    .ifPresent(existing -> {
+                        throw new IllegalArgumentException("业务编码已存在: " + businessCode);
+                    });
+            config.setBusinessCode(businessCode);
+        }
+        if (request.getChannelId() != null) {
+            ensureChannelExists(request.getChannelId());
+            config.setChannelId(request.getChannelId());
+        }
+        if (request.getEnabled() != null) config.setEnabled(request.getEnabled());
+        if (request.getDescription() != null) config.setDescription(request.getDescription());
+        return toBusinessConfigResponse(businessConfigRepository.save(config));
+    }
+
+    @Transactional
+    public void deleteBusinessConfig(Long id) {
+        if (!businessConfigRepository.existsById(id)) {
+            throw new IllegalArgumentException("Business config not found: " + id);
+        }
+        businessConfigRepository.deleteById(id);
+    }
     
     private ChannelResponse toResponse(AIChannel channel) {
         return ChannelResponse.builder()
@@ -113,6 +179,37 @@ public class ChannelService {
                 .sortOrder(channel.getSortOrder())
                 .createdAt(channel.getCreatedAt().toString())
                 .updatedAt(channel.getUpdatedAt() != null ? channel.getUpdatedAt().toString() : null)
+                .build();
+    }
+
+    private void validateBusinessConfigRequest(BusinessConfigRequest request) {
+        if (request == null) throw new IllegalArgumentException("请求不能为空");
+        if (!StringUtils.hasText(request.getBusinessName())) throw new IllegalArgumentException("业务名称不能为空");
+        if (!StringUtils.hasText(request.getBusinessCode())) throw new IllegalArgumentException("业务编码不能为空");
+        if (request.getChannelId() == null) throw new IllegalArgumentException("请选择渠道");
+        ensureChannelExists(request.getChannelId());
+    }
+
+    private void ensureChannelExists(Long channelId) {
+        if (!channelRepository.existsById(channelId)) {
+            throw new IllegalArgumentException("Channel not found: " + channelId);
+        }
+    }
+
+    private BusinessConfigResponse toBusinessConfigResponse(AIChannelBusinessConfig config) {
+        AIChannel channel = config.getChannelId() == null ? null : channelRepository.findById(config.getChannelId()).orElse(null);
+        return BusinessConfigResponse.builder()
+                .id(config.getId())
+                .businessName(config.getBusinessName())
+                .businessCode(config.getBusinessCode())
+                .channelId(config.getChannelId())
+                .channelName(channel == null ? null : channel.getName())
+                .channelModel(channel == null ? null : channel.getModel())
+                .channelBaseUrl(channel == null ? null : channel.getBaseUrl())
+                .enabled(config.getEnabled())
+                .description(config.getDescription())
+                .createdAt(config.getCreatedAt() == null ? null : config.getCreatedAt().toString())
+                .updatedAt(config.getUpdatedAt() == null ? null : config.getUpdatedAt().toString())
                 .build();
     }
 }

@@ -19,6 +19,10 @@ import java.util.List;
 public interface ProductCollectionRepository extends JpaRepository<ProductCollection, Long>, JpaSpecificationExecutor<ProductCollection> {
     Page<ProductCollection> findByDeletedFalse(Pageable pageable);
 
+    Optional<ProductCollection> findFirstByAlibabaProductIdAndDeletedFalseOrderByIdDesc(String alibabaProductId);
+
+    Optional<ProductCollection> findFirstByProductIdAndSourcePlatformAndDeletedFalseOrderByIdDesc(String productId, String sourcePlatform);
+
     @Query("select p from ProductCollection p where (p.execStatus = 0 or p.execStatus is null) order by p.id asc")
     List<ProductCollection> findPendingExecTasks(Pageable pageable);
 
@@ -61,6 +65,7 @@ public interface ProductCollectionRepository extends JpaRepository<ProductCollec
                       x.min_price,
                       x.max_price,
                       x.ocr_status,
+                      x.chinese_image_count,
                       x.carousel_image_count,
                       x.detail_image_count,
                       x.sku_count,
@@ -88,6 +93,7 @@ public interface ProductCollectionRepository extends JpaRepository<ProductCollec
                             else cast('[]' as jsonb)
                           end
                         ) as detail_image_count,
+                        coalesce(ocr_chinese.chinese_image_count, 0) as chinese_image_count,
                         coalesce(nullif(ts.temu_sku_count, 0), os.origin_sku_count, 0) as sku_count
                       from product_collection pc
                       left join (
@@ -100,8 +106,15 @@ public interface ProductCollectionRepository extends JpaRepository<ProductCollec
                         from product_collection_temu_sku
                         group by spu_id
                       ) ts on ts.spu_id = pc.id
+                      left join (
+                        select spu_id, count(*) as chinese_image_count
+                        from image_ocr_task
+                        where coalesce(contains_chinese, false) = true
+                        group by spu_id
+                      ) ocr_chinese on ocr_chinese.spu_id = pc.id
                       where
                         (:showDeleted = true or pc.deleted = false)
+                        and (:id is null or pc.id = :id)
                         and (:sourcePlatform is null or pc.source_platform = :sourcePlatform)
                         and (
                           :targetShopId is null
@@ -137,6 +150,24 @@ public interface ProductCollectionRepository extends JpaRepository<ProductCollec
                         and (:temuCatid is null or pc.temu_catid = :temuCatid)
                         and (:moqMin is null or pc.moq >= :moqMin)
                         and (:moqMax is null or pc.moq <= :moqMax)
+                        and (
+                          :skuIdKeyword is null
+                          or exists (
+                            select 1
+                            from product_collection_sku pcs
+                            where pcs.spu_id = pc.id
+                              and pcs.sku_id ilike concat('%', :skuIdKeyword, '%')
+                          )
+                          or exists (
+                            select 1
+                            from product_collection_temu_sku pcts
+                            where pcts.spu_id = pc.id
+                              and (
+                                pcts.temu_sku_id ilike concat('%', :skuIdKeyword, '%')
+                                or pcts.origin_sku_id ilike concat('%', :skuIdKeyword, '%')
+                              )
+                          )
+                        )
                         and (
                           :q is null
                           or pc.product_name ilike concat('%', :q, '%')
@@ -186,6 +217,7 @@ public interface ProductCollectionRepository extends JpaRepository<ProductCollec
                       ) ts on ts.spu_id = pc.id
                       where
                         (:showDeleted = true or pc.deleted = false)
+                        and (:id is null or pc.id = :id)
                         and (:sourcePlatform is null or pc.source_platform = :sourcePlatform)
                         and (
                           :targetShopId is null
@@ -222,6 +254,24 @@ public interface ProductCollectionRepository extends JpaRepository<ProductCollec
                         and (:moqMin is null or pc.moq >= :moqMin)
                         and (:moqMax is null or pc.moq <= :moqMax)
                         and (
+                          :skuIdKeyword is null
+                          or exists (
+                            select 1
+                            from product_collection_sku pcs
+                            where pcs.spu_id = pc.id
+                              and pcs.sku_id ilike concat('%', :skuIdKeyword, '%')
+                          )
+                          or exists (
+                            select 1
+                            from product_collection_temu_sku pcts
+                            where pcts.spu_id = pc.id
+                              and (
+                                pcts.temu_sku_id ilike concat('%', :skuIdKeyword, '%')
+                                or pcts.origin_sku_id ilike concat('%', :skuIdKeyword, '%')
+                              )
+                          )
+                        )
+                        and (
                           :q is null
                           or pc.product_name ilike concat('%', :q, '%')
                           or pc.product_id ilike concat('%', :q, '%')
@@ -239,7 +289,9 @@ public interface ProductCollectionRepository extends JpaRepository<ProductCollec
             nativeQuery = true
     )
     Page<Object[]> searchWithCounts(
+            @Param("id") Long id,
             @Param("q") String q,
+            @Param("skuIdKeyword") String skuIdKeyword,
             @Param("sourcePlatform") String sourcePlatform,
             @Param("targetShopId") String targetShopId,
             @Param("collectionStatus") Integer collectionStatus,

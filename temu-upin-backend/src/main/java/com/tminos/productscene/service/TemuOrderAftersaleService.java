@@ -512,7 +512,7 @@ public class TemuOrderAftersaleService {
             if (fullHours > 0) {
                 return Math.max(0L, nowSec - fullHours * 3600L);
             }
-            return 0L;
+            return Math.max(0L, nowSec - DEFAULT_FULL_SYNC_HOURS * 3600L);
         }
         if (hoursBack != null && hoursBack > 0) {
             return Math.max(0L, nowSec - hoursBack.longValue() * 3600L);

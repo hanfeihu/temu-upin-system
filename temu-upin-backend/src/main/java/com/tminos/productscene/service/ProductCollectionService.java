@@ -8,21 +8,27 @@ import com.tminos.productscene.dto.ProductCollectionDTO.ProductCollectionSkuProp
 import com.tminos.productscene.dto.ProductCollectionDTO.ProductCollectionSkuResponse;
 import com.tminos.productscene.dto.ProductCollectionDTO.TemuTitleOptimizationResponse;
 import com.tminos.productscene.dto.ProductCollectionDTO.UpdateProductCollectionRequest;
+import com.tminos.productscene.entity.ImageOcrTask;
 import com.tminos.productscene.entity.ProductCollection;
 import com.tminos.productscene.entity.ProductCollectionSku;
 import com.tminos.productscene.entity.ProductCollectionSkuProp;
 import com.tminos.productscene.entity.ProductCollectionSkuPropValue;
 import com.tminos.productscene.entity.ProductCollectionTemuSku;
+import com.tminos.productscene.entity.TemuPublishRun;
+import com.tminos.productscene.repository.ImageOcrTaskRepository;
+import com.tminos.productscene.repository.ImageOcrSizeFilterConfigRepository;
 import com.tminos.productscene.repository.ProductCollectionRepository;
 import com.tminos.productscene.repository.ProductCollectionSkuPropRepository;
 import com.tminos.productscene.repository.ProductCollectionSkuPropValueRepository;
 import com.tminos.productscene.repository.ProductCollectionSkuRepository;
 import com.tminos.productscene.repository.ProductCollectionTemuSkuRepository;
 import com.tminos.productscene.repository.ImportTitleFilterWordRepository;
+import com.tminos.productscene.repository.TemuPublishRunRepository;
 import com.tminos.productscene.dto.TemuCategoryDTO;
 import com.tminos.productscene.config.ImportTitleCleanConfig;
 import com.tminos.productscene.service.pull.parser.Alibaba1688HtmlParser;
 import com.tminos.productscene.service.pull.parser.TemuHtmlParser;
+import com.tminos.productscene.util.TemuTitleSafetySanitizer;
 import jakarta.persistence.EntityNotFoundException;
 import org.springframework.data.domain.*;
 import org.springframework.util.StringUtils;
@@ -61,8 +67,12 @@ public class ProductCollectionService {
     private final ObjectMapper objectMapper;
     private final ImportTitleCleanConfig importTitleCleanConfig;
     private final OcrTaskInsertHelper ocrTaskInsertHelper;
+    private final ImageOcrTaskRepository imageOcrTaskRepository;
     private final ImportTitleFilterWordRepository titleFilterWordRepo;
     private final TargetShopBindingService targetShopBindingService;
+    private final TemuImageNormalizeService temuImageNormalizeService;
+    private final ImageOcrSizeFilterConfigRepository imageOcrSizeFilterConfigRepository;
+    private final TemuPublishRunRepository publishRunRepo;
 
     public ProductCollectionService(
             ProductCollectionRepository repo,
@@ -76,8 +86,12 @@ public class ProductCollectionService {
             ObjectMapper objectMapper,
             ImportTitleCleanConfig importTitleCleanConfig,
             OcrTaskInsertHelper ocrTaskInsertHelper,
+            ImageOcrTaskRepository imageOcrTaskRepository,
             ImportTitleFilterWordRepository titleFilterWordRepo,
-            TargetShopBindingService targetShopBindingService
+            TargetShopBindingService targetShopBindingService,
+            TemuImageNormalizeService temuImageNormalizeService,
+            ImageOcrSizeFilterConfigRepository imageOcrSizeFilterConfigRepository,
+            TemuPublishRunRepository publishRunRepo
     ) {
         this.repo = repo;
         this.skuRepo = skuRepo;
@@ -90,8 +104,12 @@ public class ProductCollectionService {
         this.objectMapper = objectMapper;
         this.importTitleCleanConfig = importTitleCleanConfig;
         this.ocrTaskInsertHelper = ocrTaskInsertHelper;
+        this.imageOcrTaskRepository = imageOcrTaskRepository;
         this.titleFilterWordRepo = titleFilterWordRepo;
         this.targetShopBindingService = targetShopBindingService;
+        this.temuImageNormalizeService = temuImageNormalizeService;
+        this.imageOcrSizeFilterConfigRepository = imageOcrSizeFilterConfigRepository;
+        this.publishRunRepo = publishRunRepo;
     }
 
     @Transactional(readOnly = true)
@@ -99,6 +117,16 @@ public class ProductCollectionService {
         ProductCollection pc = get(id);
         TemuCategoryAttributesFetchResult templateFetch = getTemuCategoryAttributesFetchResult(id);
         String template = templateFetch.rawTemplate();
+        if (StringUtils.hasText(templateFetch.errorMsg())) {
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("success", false);
+            out.put("errorMsg", templateFetch.errorMsg());
+            out.put("properties", Collections.emptyList());
+            out.put("missingRequiredPids", Collections.emptyList());
+            out.put("warnings", Collections.emptyList());
+            out.put("templateFetch", templateFetch.toLogMap());
+            return out;
+        }
         Map<String, Object> skuSummary = buildSkuSummaryForAi(id);
         TemuAttributeAiService.AiFillResult r = temuAttributeAiService.fill(
                 pc.getProductName(),
@@ -157,7 +185,9 @@ public class ProductCollectionService {
 
     @Transactional(readOnly = true)
     public Page<ProductCollectionResponse> list(
+            Long id,
             String q,
+            String skuIdKeyword,
             String sourcePlatform,
             String targetShopId,
             Integer collectionStatus,
@@ -178,12 +208,15 @@ public class ProductCollectionService {
 
         boolean sd = showDeleted != null && showDeleted;
         String q2 = (q == null || q.isBlank()) ? null : q.trim();
+        String skuIdKeyword2 = (skuIdKeyword == null || skuIdKeyword.isBlank()) ? null : skuIdKeyword.trim();
         String sp = (sourcePlatform == null || sourcePlatform.isBlank()) ? null : sourcePlatform.trim();
         String tsi = (targetShopId == null || targetShopId.isBlank()) ? null : targetShopId.trim();
         String tc = (temuCatid == null || temuCatid.isBlank()) ? null : temuCatid.trim();
 
         Page<Object[]> pageRows = repo.searchWithCounts(
+                id,
                 q2,
+                skuIdKeyword2,
                 sp,
                 tsi,
                 collectionStatus,
@@ -213,7 +246,7 @@ public class ProductCollectionService {
     }
 
     private ProductCollectionResponse mapRowToResponse(Object[] r) {
-        if (r == null || r.length < 30) return null;
+        if (r == null || r.length < 31) return null;
         // Column order defined in ProductCollectionRepository.searchWithCounts
         List<String> targetShopIds = parseJsonStringArraySafe(asString(r[10]));
         List<String> targetShopNames = resolveTargetShopNames(targetShopIds, parseJsonStringArraySafe(asString(r[11])));
@@ -238,16 +271,17 @@ public class ProductCollectionService {
                 .minPrice(asBigDecimal(r[17]))
                 .maxPrice(asBigDecimal(r[18]))
                 .ocrStatus(asInteger(r[19]))
-                .carouselImageCount(asInteger(r[20]))
-                .detailImageCount(asInteger(r[21]))
-                .skuCount(asInteger(r[22]))
-                .moq(asInteger(r[23]))
-                .moqText(asString(r[24]))
-                .netWeight(asBigDecimal(r[25]))
-                .packagingWeight(asBigDecimal(r[26]))
-                .deleted(asBoolean(r[27]))
-                .createdAt(asLocalDateTime(r[28]))
-                .updatedAt(asLocalDateTime(r[29]))
+                .chineseImageCount(asInteger(r[20]))
+                .carouselImageCount(asInteger(r[21]))
+                .detailImageCount(asInteger(r[22]))
+                .skuCount(asInteger(r[23]))
+                .moq(asInteger(r[24]))
+                .moqText(asString(r[25]))
+                .netWeight(asBigDecimal(r[26]))
+                .packagingWeight(asBigDecimal(r[27]))
+                .deleted(asBoolean(r[28]))
+                .createdAt(asLocalDateTime(r[29]))
+                .updatedAt(asLocalDateTime(r[30]))
                 .build();
     }
 
@@ -333,6 +367,9 @@ public class ProductCollectionService {
         List<ProductCollectionTemuSku> temuSkus = temuSkuRepo.findBySpuIdOrderByIdAsc(id);
         List<String> targetShopIds = parseJsonStringArraySafe(pc.getTargetShopIds());
         List<String> targetShopNames = resolveTargetShopNames(targetShopIds, parseJsonStringArraySafe(pc.getTargetShopNames()));
+        TemuPublishRun lastPublishRun = pc.getLastPublishRunId() == null
+                ? null
+                : publishRunRepo.findById(pc.getLastPublishRunId()).orElse(null);
 
         return ProductCollectionDetailResponse.builder()
                 .id(pc.getId())
@@ -388,6 +425,16 @@ public class ProductCollectionService {
                 .temuOptimizedTitleEn(pc.getTemuOptimizedTitleEn())
                 .temuOptimizedTitleZh(pc.getTemuOptimizedTitleZh())
                 .temuCategoryKeywords(pc.getTemuCategoryKeywords())
+                .temuPublished(pc.getTemuPublished())
+                .temuGoodsId(pc.getTemuGoodsId())
+                .temuPublishedAt(pc.getTemuPublishedAt())
+                .lastPublishStatus(lastPublishRun == null ? null : lastPublishRun.getStatus())
+                .lastPublishGoodsId(lastPublishRun == null ? null : lastPublishRun.getGoodsId())
+                .lastPublishRequestJson(lastPublishRun == null ? null : lastPublishRun.getRequestJson())
+                .lastPublishResponseRaw(lastPublishRun == null ? null : lastPublishRun.getResponseRaw())
+                .lastPublishError(lastPublishRun == null ? null : lastPublishRun.getError())
+                .lastPublishStartedAt(lastPublishRun == null ? null : lastPublishRun.getStartedAt())
+                .lastPublishFinishedAt(lastPublishRun == null ? null : lastPublishRun.getFinishedAt())
                 .carouselThumbImages(pc.getCarouselThumbImages())
                 .carouselVideo(pc.getCarouselVideo())
                 .baseFreight(pc.getBaseFreight())
@@ -488,6 +535,8 @@ public class ProductCollectionService {
     @Transactional
     public ProductCollection update(Long id, UpdateProductCollectionRequest req) {
         ProductCollection pc = get(id);
+        List<String> oldCarouselImages = req.getCarouselImages() == null ? null : parseJsonStringArraySafe(pc.getCarouselImages());
+        List<String> oldDetailImages = req.getDetailImages() == null ? null : parseJsonStringArraySafe(pc.getDetailImages());
 
         if (req.getProductName() != null) pc.setProductName(req.getProductName());
 
@@ -547,7 +596,96 @@ public class ProductCollectionService {
             pc.setTargetShopNames(targetShopBindingService.toJson(targetShopBinding.shopNames()));
         }
 
-        return repo.save(pc);
+        ProductCollection saved = repo.save(pc);
+        if (oldCarouselImages != null) {
+            syncOcrTasksForImageListChange(
+                    saved.getId(),
+                    ImageOcrTask.SOURCE_FIELD_CAROUSEL_IMAGES,
+                    ImageOcrTask.IMAGE_TYPE_CAROUSEL,
+                    oldCarouselImages,
+                    parseJsonStringArraySafe(saved.getCarouselImages())
+            );
+        }
+        if (oldDetailImages != null) {
+            syncOcrTasksForImageListChange(
+                    saved.getId(),
+                    ImageOcrTask.SOURCE_FIELD_DETAIL_IMAGES,
+                    ImageOcrTask.IMAGE_TYPE_DETAIL,
+                    oldDetailImages,
+                    parseJsonStringArraySafe(saved.getDetailImages())
+            );
+        }
+        return saved;
+    }
+
+    private void syncOcrTasksForImageListChange(
+            Long spuId,
+            String sourceField,
+            int imageType,
+            List<String> oldImages,
+            List<String> newImages
+    ) {
+        if (spuId == null || Objects.equals(oldImages, newImages)) {
+            return;
+        }
+        List<ImageOcrTask> tasks = imageOcrTaskRepository.findBySpuId(spuId).stream()
+                .filter(task -> task != null && task.getId() != null)
+                .filter(task -> sourceField.equals(task.getSourceField())
+                        || (task.getSourceField() == null && Objects.equals(task.getImageType(), imageType)))
+                .sorted(Comparator.comparing(ImageOcrTask::getSourceIndex, Comparator.nullsLast(Integer::compareTo))
+                        .thenComparing(ImageOcrTask::getId))
+                .toList();
+        if (tasks.isEmpty()) {
+            return;
+        }
+
+        Map<String, List<Integer>> indicesByUrl = new LinkedHashMap<>();
+        for (int index = 0; index < newImages.size(); index++) {
+            String url = trimToNull(newImages.get(index));
+            if (!StringUtils.hasText(url)) {
+                continue;
+            }
+            indicesByUrl.computeIfAbsent(url, key -> new ArrayList<>()).add(index);
+        }
+
+        List<ImageOcrTask> toSave = new ArrayList<>();
+        List<ImageOcrTask> toDelete = new ArrayList<>();
+        for (ImageOcrTask task : tasks) {
+            String imageUrl = trimToNull(task.getImageUrl());
+            List<Integer> indices = StringUtils.hasText(imageUrl) ? indicesByUrl.get(imageUrl) : null;
+            if (indices == null || indices.isEmpty()) {
+                toDelete.add(task);
+                continue;
+            }
+            Integer nextIndex = indices.remove(0);
+            boolean changed = false;
+            if (!sourceField.equals(task.getSourceField())) {
+                task.setSourceField(sourceField);
+                changed = true;
+            }
+            if (!Objects.equals(task.getSourceIndex(), nextIndex)) {
+                task.setSourceIndex(nextIndex);
+                changed = true;
+            }
+            if (!Objects.equals(task.getImageType(), imageType)) {
+                task.setImageType(imageType);
+                changed = true;
+            }
+            if (changed) {
+                toSave.add(task);
+            }
+        }
+
+        if (!toDelete.isEmpty()) {
+            imageOcrTaskRepository.deleteAll(toDelete);
+        }
+        if (!toSave.isEmpty()) {
+            imageOcrTaskRepository.saveAll(toSave);
+        }
+        if (!toDelete.isEmpty() || !toSave.isEmpty()) {
+            log.info("sync OCR tasks after image list change spuId={} field={} deleted={} reindexed={}",
+                    spuId, sourceField, toDelete.size(), toSave.size());
+        }
     }
 
     @Transactional
@@ -656,7 +794,7 @@ public class ProductCollectionService {
     @Transactional
     public TemuCategoryDTO.MatchCategoryResponse matchTemuCategory(Long id) {
         ProductCollection pc = get(id);
-        TemuTitleOptimizationService.TitleOptimizationResult optimization = temuTitleOptimizationService.generateAndMatch(pc);
+        TemuTitleOptimizationService.TitleOptimizationResult optimization = temuTitleOptimizationService.generateAndMatch(pc, resolvePrimaryTargetShopId(pc));
         applyTemuTitleOptimization(pc, optimization);
         repo.save(pc);
         return toMatchCategoryResponse(optimization);
@@ -665,7 +803,7 @@ public class ProductCollectionService {
     @Transactional
     public TemuTitleOptimizationResponse generateTemuTitleOptimization(Long id) {
         ProductCollection pc = get(id);
-        TemuTitleOptimizationService.TitleOptimizationResult optimization = temuTitleOptimizationService.generateAndMatch(pc);
+        TemuTitleOptimizationService.TitleOptimizationResult optimization = temuTitleOptimizationService.generateAndMatch(pc, resolvePrimaryTargetShopId(pc));
         applyTemuTitleOptimization(pc, optimization);
         repo.save(pc);
         return TemuTitleOptimizationResponse.builder()
@@ -697,13 +835,26 @@ public class ProductCollectionService {
         if (leaf == null || leaf.isBlank()) {
             return new TemuCategoryAttributesFetchResult(id, catid, null, null, "temuCatid missing or leafCatId parse failed");
         }
-        TemuCategoryService.CategoryAttributesFetchResult fetch = temuCategoryService.fetchCategoryAttributesRaw(leaf);
+        String targetShopId = resolvePrimaryTargetShopId(pc);
+        if (!StringUtils.hasText(targetShopId)) {
+            return new TemuCategoryAttributesFetchResult(id, catid, leaf, null, "product target shop is required for TEMU category attributes");
+        }
+        TemuCategoryService.CategoryAttributesFetchResult fetch = temuCategoryService.fetchCategoryAttributesRaw(leaf, targetShopId);
         String raw = fetch == null ? null : fetch.raw();
         String error = fetch == null ? "fetch result is null" : fetch.errorMsg();
         if (!StringUtils.hasText(raw)) {
-            log.warn("getTemuCategoryAttributesFetchResult spuId={} temuCatid={} leafCatId={} rawEmpty=true error={}", id, catid, leaf, error);
+            log.warn("getTemuCategoryAttributesFetchResult spuId={} temuCatid={} leafCatId={} targetShopId={} rawEmpty=true error={}",
+                    id, catid, leaf, targetShopId, error);
         }
         return new TemuCategoryAttributesFetchResult(id, catid, leaf, raw, error);
+    }
+
+    private String resolvePrimaryTargetShopId(ProductCollection pc) {
+        if (pc == null) {
+            return null;
+        }
+        List<String> shopIds = parseJsonStringArraySafe(pc.getTargetShopIds());
+        return shopIds.isEmpty() ? null : shopIds.get(0);
     }
 
     @Transactional
@@ -755,7 +906,7 @@ public class ProductCollectionService {
 
         // If caller didn't provide a selection, auto-match by title and pick the first option.
         if (temuCatid == null || temuCatid.isBlank() || temuCatname == null || temuCatname.isBlank()) {
-            TemuTitleOptimizationService.TitleOptimizationResult optimization = temuTitleOptimizationService.generateAndMatch(pc);
+            TemuTitleOptimizationService.TitleOptimizationResult optimization = temuTitleOptimizationService.generateAndMatch(pc, resolvePrimaryTargetShopId(pc));
             applyTemuTitleOptimization(pc, optimization);
             if (!Boolean.TRUE.equals(optimization.getCategoryMatched())
                     || !StringUtils.hasText(optimization.getMatchedTemuCatid())
@@ -949,7 +1100,7 @@ public class ProductCollectionService {
         }
 
         try {
-            TemuTitleOptimizationService.TitleOptimizationResult optimization = temuTitleOptimizationService.generateAndMatch(pc);
+            TemuTitleOptimizationService.TitleOptimizationResult optimization = temuTitleOptimizationService.generateAndMatch(pc, resolvePrimaryTargetShopId(pc));
             applyTemuTitleOptimization(pc, optimization);
             if (!Boolean.TRUE.equals(optimization.getCategoryMatched())) {
                 log.warn("importFromHtml temu title optimization no category match productId={} keyword={} error={}",
@@ -989,32 +1140,63 @@ public class ProductCollectionService {
         String productId = pc.getProductId();
 
         // Parse JSON arrays from stored fields.
-        List<String> carousel = parseJsonStringArraySafe(pc.getCarouselImages());
-        List<String> detail = parseJsonStringArraySafe(pc.getDetailImages());
+        List<String> carousel = new ArrayList<>(parseJsonStringArraySafe(pc.getCarouselImages()));
+        List<String> detail = new ArrayList<>(parseJsonStringArraySafe(pc.getDetailImages()));
+        Set<String> sizeFilterKeys = loadEnabledOcrSizeFilterKeys();
+        boolean removedBySizeFilter = false;
 
         // Insert tasks: one url per row.
         List<com.tminos.productscene.entity.ImageOcrTask> tasks = new ArrayList<>();
-        for (String url : carousel) {
+        for (int i = 0; i < carousel.size(); i++) {
+            String url = carousel.get(i);
             if (url == null || url.isBlank()) continue;
             com.tminos.productscene.entity.ImageOcrTask t = new com.tminos.productscene.entity.ImageOcrTask();
             t.setSpuId(spuId);
             t.setProductId(productId);
             t.setImageType(com.tminos.productscene.entity.ImageOcrTask.IMAGE_TYPE_CAROUSEL);
             t.setImageUrl(url.trim());
+            t.setSourceField(com.tminos.productscene.entity.ImageOcrTask.SOURCE_FIELD_CAROUSEL_IMAGES);
+            t.setSourceIndex(i);
             t.setExecStatus(com.tminos.productscene.entity.ImageOcrTask.STATUS_PENDING);
             t.setFiltered(false);
+            fillOcrTaskImageSize(t);
+            if (matchesOcrSizeFilter(t, sizeFilterKeys)) {
+                carousel.set(i, null);
+                removedBySizeFilter = true;
+                continue;
+            }
             tasks.add(t);
         }
-        for (String url : detail) {
+        for (int i = 0; i < detail.size(); i++) {
+            String url = detail.get(i);
             if (url == null || url.isBlank()) continue;
             com.tminos.productscene.entity.ImageOcrTask t = new com.tminos.productscene.entity.ImageOcrTask();
             t.setSpuId(spuId);
             t.setProductId(productId);
             t.setImageType(com.tminos.productscene.entity.ImageOcrTask.IMAGE_TYPE_DETAIL);
             t.setImageUrl(url.trim());
+            t.setSourceField(com.tminos.productscene.entity.ImageOcrTask.SOURCE_FIELD_DETAIL_IMAGES);
+            t.setSourceIndex(i);
             t.setExecStatus(com.tminos.productscene.entity.ImageOcrTask.STATUS_PENDING);
             t.setFiltered(false);
+            fillOcrTaskImageSize(t);
+            if (matchesOcrSizeFilter(t, sizeFilterKeys)) {
+                detail.set(i, null);
+                removedBySizeFilter = true;
+                continue;
+            }
             tasks.add(t);
+        }
+
+        if (removedBySizeFilter) {
+            try {
+                pc.setCarouselImages(objectMapper.writeValueAsString(compactImageList(carousel)));
+                pc.setDetailImages(objectMapper.writeValueAsString(compactImageList(detail)));
+                pc.setUpdatedAt(LocalDateTime.now());
+                repo.save(pc);
+            } catch (Exception ex) {
+                log.warn("remove OCR size filtered images failed spuId={} error={}", spuId, ex.getMessage());
+            }
         }
 
         if (tasks.isEmpty()) {
@@ -1039,6 +1221,62 @@ public class ProductCollectionService {
         pc.setOcrStatus(0);
         pc.setUpdatedAt(LocalDateTime.now());
         repo.save(pc);
+    }
+
+    private Set<String> loadEnabledOcrSizeFilterKeys() {
+        try {
+            return imageOcrSizeFilterConfigRepository.findByEnabledTrueOrderByImageWidthAscImageHeightAsc().stream()
+                    .filter(item -> item.getImageWidth() != null && item.getImageHeight() != null)
+                    .map(item -> imageSizeKey(item.getImageWidth(), item.getImageHeight()))
+                    .collect(Collectors.toCollection(LinkedHashSet::new));
+        } catch (Exception ex) {
+            log.warn("load OCR size filter configs failed error={}", ex.getMessage());
+            return Collections.emptySet();
+        }
+    }
+
+    private boolean matchesOcrSizeFilter(ImageOcrTask task, Set<String> sizeFilterKeys) {
+        return task != null
+                && task.getImageWidth() != null
+                && task.getImageHeight() != null
+                && sizeFilterKeys != null
+                && sizeFilterKeys.contains(imageSizeKey(task.getImageWidth(), task.getImageHeight()));
+    }
+
+    private String imageSizeKey(Integer width, Integer height) {
+        return String.valueOf(width) + "x" + height;
+    }
+
+    private List<String> compactImageList(List<String> images) {
+        if (images == null || images.isEmpty()) return Collections.emptyList();
+        List<String> out = new ArrayList<>();
+        for (String image : images) {
+            if (StringUtils.hasText(image)) {
+                out.add(image.trim());
+            }
+        }
+        return out;
+    }
+
+    private void fillOcrTaskImageSize(ImageOcrTask task) {
+        if (task == null || !StringUtils.hasText(task.getImageUrl())) return;
+        try {
+            TemuImageNormalizeService.ImageMetadata metadata = temuImageNormalizeService.probeImageMetadata(task.getImageUrl());
+            if (metadata != null && metadata.width() > 0 && metadata.height() > 0) {
+                task.setImageWidth(metadata.width());
+                task.setImageHeight(metadata.height());
+                task.setImageMd5(normalizeImageMd5(metadata.md5()));
+            }
+        } catch (Exception ex) {
+            log.warn("probe OCR image size failed spuId={} imageUrl={} error={}",
+                    task.getSpuId(), task.getImageUrl(), ex.getMessage());
+        }
+    }
+
+    private String normalizeImageMd5(String value) {
+        if (!StringUtils.hasText(value)) return null;
+        String md5 = value.trim().toLowerCase();
+        return md5.length() == 32 ? md5 : null;
     }
 
     private boolean isTemuSourcePlatform(String sourcePlatform) {
@@ -1163,7 +1401,8 @@ public class ProductCollectionService {
     private String sanitizeEnglishName(String s, List<String> warnings) {
         if (!StringUtils.hasText(s)) return s;
         String input = s.trim();
-        String cleaned = input
+        String safeInput = TemuTitleSafetySanitizer.removeUnsupportedPreciousMetalWords(input);
+        String cleaned = safeInput
                 .replaceAll("[^A-Za-z0-9\\-\\_\\.\\,\\/\\(\\)\\[\\]\\+\\&\\%\\s]", " ")
                 .replaceAll("\\s+", " ")
                 .trim();
@@ -1172,6 +1411,9 @@ public class ProductCollectionService {
         }
         if (!cleaned.equals(input) && warnings != null) {
             warnings.add("english name sanitized");
+        }
+        if (!safeInput.equals(input) && warnings != null) {
+            warnings.add("unsupported precious metal title words removed");
         }
         if (cleaned.length() > 200) {
             cleaned = cleaned.substring(0, 200).trim();

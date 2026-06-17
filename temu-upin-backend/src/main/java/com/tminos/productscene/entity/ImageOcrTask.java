@@ -32,6 +32,9 @@ public class ImageOcrTask {
     public static final int IMAGE_TYPE_DETAIL = 2;
     public static final int IMAGE_TYPE_SKU = 3;
 
+    public static final String SOURCE_FIELD_CAROUSEL_IMAGES = "carouselImages";
+    public static final String SOURCE_FIELD_DETAIL_IMAGES = "detailImages";
+
     /**
      * Exec status:
      * 0 pending, 1 running, 2 success, 3 failed
@@ -58,6 +61,33 @@ public class ImageOcrTask {
 
     @Column(name = "image_url", length = 2000, nullable = false)
     private String imageUrl;
+
+    @Column(name = "image_width")
+    private Integer imageWidth;
+
+    @Column(name = "image_height")
+    private Integer imageHeight;
+
+    @Column(name = "image_md5", length = 32)
+    private String imageMd5;
+
+    /**
+     * Image translation status:
+     * SUCCESS, POSITION_NOT_FOUND
+     * Null means not processed or inferred by OCR flags.
+     */
+    @Column(name = "translate_status", length = 64)
+    private String translateStatus;
+
+    @Column(name = "translated_image_url", length = 2000)
+    private String translatedImageUrl;
+
+    // Exact source inside ProductCollection image arrays.
+    @Column(name = "source_field", length = 64)
+    private String sourceField;
+
+    @Column(name = "source_index")
+    private Integer sourceIndex;
 
     @Builder.Default
     @Column(name = "exec_status", nullable = false)
@@ -114,6 +144,20 @@ public class ImageOcrTask {
     public void setImageType(Integer imageType) { this.imageType = imageType; }
     public String getImageUrl() { return imageUrl; }
     public void setImageUrl(String imageUrl) { this.imageUrl = imageUrl; }
+    public Integer getImageWidth() { return imageWidth; }
+    public void setImageWidth(Integer imageWidth) { this.imageWidth = imageWidth; }
+    public Integer getImageHeight() { return imageHeight; }
+    public void setImageHeight(Integer imageHeight) { this.imageHeight = imageHeight; }
+    public String getImageMd5() { return imageMd5; }
+    public void setImageMd5(String imageMd5) { this.imageMd5 = imageMd5; }
+    public String getTranslateStatus() { return translateStatus; }
+    public void setTranslateStatus(String translateStatus) { this.translateStatus = translateStatus; }
+    public String getTranslatedImageUrl() { return translatedImageUrl; }
+    public void setTranslatedImageUrl(String translatedImageUrl) { this.translatedImageUrl = translatedImageUrl; }
+    public String getSourceField() { return sourceField; }
+    public void setSourceField(String sourceField) { this.sourceField = sourceField; }
+    public Integer getSourceIndex() { return sourceIndex; }
+    public void setSourceIndex(Integer sourceIndex) { this.sourceIndex = sourceIndex; }
     public Integer getExecStatus() { return execStatus; }
     public void setExecStatus(Integer execStatus) { this.execStatus = execStatus; }
     public String getExecResult() { return execResult; }

@@ -15,11 +15,15 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Component
 public class GoodsSyncExecutor extends AbstractSyncExecutor<Map<String, Object>> {
 
+    private static final Pattern LAST_N_DAYS_PATTERN = Pattern.compile("LAST_(\\d+)_DAYS");
     private static final int PAGE_SIZE = 100;
 
     @Autowired private TemuGoodsAggregateService goodsAggregateService;
@@ -128,9 +132,7 @@ public class GoodsSyncExecutor extends AbstractSyncExecutor<Map<String, Object>>
 
     private List<TimeWindow> buildWindows(String syncScope) {
         LocalDateTime end = LocalDateTime.now().truncatedTo(ChronoUnit.SECONDS);
-        LocalDateTime start = "LAST_YEAR".equalsIgnoreCase(syncScope)
-                ? end.minusYears(1)
-                : end.minusWeeks(1);
+        LocalDateTime start = resolveStart(syncScope, end);
 
         List<TimeWindow> windows = new ArrayList<>();
         LocalDateTime cursor = start;
@@ -143,6 +145,25 @@ public class GoodsSyncExecutor extends AbstractSyncExecutor<Map<String, Object>>
             cursor = next;
         }
         return windows;
+    }
+
+    private LocalDateTime resolveStart(String syncScope, LocalDateTime end) {
+        String normalized = syncScope == null ? "LAST_WEEK" : syncScope.trim().toUpperCase(Locale.ROOT);
+        if ("LAST_YEAR".equals(normalized)) {
+            return end.minusYears(1);
+        }
+        if ("LAST_MONTH".equals(normalized)) {
+            return end.minusMonths(1);
+        }
+        if ("LAST_WEEK".equals(normalized)) {
+            return end.minusWeeks(1);
+        }
+        Matcher matcher = LAST_N_DAYS_PATTERN.matcher(normalized);
+        if (matcher.matches()) {
+            int days = Integer.parseInt(matcher.group(1));
+            return end.minusDays(days);
+        }
+        return end.minusWeeks(1);
     }
 
     private long toEpochMillis(LocalDateTime time) {

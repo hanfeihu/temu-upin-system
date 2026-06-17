@@ -5,10 +5,9 @@ import com.tminos.productscene.entity.ImportTitleFilterWord;
 import com.tminos.productscene.service.ImportTitleFilterWordService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import org.springframework.data.domain.Page;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-
-import java.util.List;
 
 @RestController
 @RequestMapping("/api/platform/title-filter-words")
@@ -26,8 +25,12 @@ public class ImportTitleFilterWordController {
     }
 
     @GetMapping
-    public ResponseEntity<ApiResponse<List<ImportTitleFilterWord>>> list() {
-        return ResponseEntity.ok(ApiResponse.success(service.list()));
+    public ResponseEntity<ApiResponse<Page<ImportTitleFilterWord>>> list(
+            @RequestParam(value = "q", required = false) String q,
+            @RequestParam(value = "page", defaultValue = "0") int page,
+            @RequestParam(value = "size", defaultValue = "20") int size
+    ) {
+        return ResponseEntity.ok(ApiResponse.success(service.page(q, page, size)));
     }
 
     @PostMapping

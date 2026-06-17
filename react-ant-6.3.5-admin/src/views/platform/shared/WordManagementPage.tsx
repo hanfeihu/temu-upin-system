@@ -1,5 +1,5 @@
 import { App, Button, Card, Form, Input, Modal, Space, Table } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
+import type { ColumnsType, TablePaginationConfig } from 'antd/es/table';
 import { useEffect, useState } from 'react';
 import { ocrApi } from '@/api/ocr';
 import type { WordVO } from '@/types/api';
@@ -14,17 +14,26 @@ const WordManagementPage = ({ mode }: WordManagementPageProps) => {
   const [loading, setLoading] = useState(false);
   const [rows, setRows] = useState<WordVO[]>([]);
   const [keyword, setKeyword] = useState('');
+  const [queryKeyword, setQueryKeyword] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [total, setTotal] = useState(0);
   const [editOpen, setEditOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState<WordVO | null>(null);
   const [word, setWord] = useState('');
 
-  async function load() {
+  async function load(nextPage = page, nextPageSize = pageSize, nextKeyword = queryKeyword) {
     setLoading(true);
     try {
-      const res = mode === 'ocr' ? await ocrApi.listFilterWords() : await ocrApi.listTitleFilterWords();
-      const list = Array.isArray(res.data) ? res.data : [];
-      setRows(list);
+      const params = {
+        q: nextKeyword.trim() || undefined,
+        page: nextPage - 1,
+        size: nextPageSize,
+      };
+      const res = mode === 'ocr' ? await ocrApi.listFilterWords(params) : await ocrApi.listTitleFilterWords(params);
+      setRows(Array.isArray(res.data.content) ? res.data.content : []);
+      setTotal(Number(res.data.totalElements || 0));
     } catch (error) {
       message.error(error instanceof Error ? error.message : '加载失败');
     } finally {
@@ -33,7 +42,10 @@ const WordManagementPage = ({ mode }: WordManagementPageProps) => {
   }
 
   useEffect(() => {
-    void load();
+    setPage(1);
+    setQueryKeyword('');
+    setKeyword('');
+    void load(1, pageSize, '');
   }, [mode]);
 
   function openCreate() {
@@ -73,7 +85,7 @@ const WordManagementPage = ({ mode }: WordManagementPageProps) => {
         message.success('已新增');
       }
       setEditOpen(false);
-      await load();
+      await load(page, pageSize, queryKeyword);
     } catch (error) {
       message.error(error instanceof Error ? error.message : '保存失败');
     } finally {
@@ -96,7 +108,7 @@ const WordManagementPage = ({ mode }: WordManagementPageProps) => {
             await ocrApi.deleteTitleFilterWord(record.id);
           }
           message.success('已删除');
-          await load();
+          await load(page, pageSize, queryKeyword);
         } catch (error) {
           message.error(error instanceof Error ? error.message : '删除失败');
           throw error;
@@ -104,8 +116,6 @@ const WordManagementPage = ({ mode }: WordManagementPageProps) => {
       },
     });
   }
-
-  const filteredRows = rows.filter((item) => !keyword.trim() || item.word.toLowerCase().includes(keyword.trim().toLowerCase()));
 
   const columns: ColumnsType<WordVO> = [
     { title: '词条', dataIndex: 'word', key: 'word' },
@@ -154,6 +164,13 @@ const WordManagementPage = ({ mode }: WordManagementPageProps) => {
           <Button loading={loading} onClick={() => void load()}>
             刷新
           </Button>
+          <Button type="primary" loading={loading} onClick={() => {
+            setQueryKeyword(keyword);
+            setPage(1);
+            void load(1, pageSize, keyword);
+          }}>
+            查询
+          </Button>
           <Button type="primary" onClick={openCreate}>
             新增词条
           </Button>
@@ -161,7 +178,26 @@ const WordManagementPage = ({ mode }: WordManagementPageProps) => {
       </Card>
 
       <Card>
-        <Table<WordVO> rowKey="id" loading={loading} columns={columns} dataSource={filteredRows} pagination={false} />
+        <Table<WordVO>
+          rowKey="id"
+          loading={loading}
+          columns={columns}
+          dataSource={rows}
+          pagination={{
+            current: page,
+            pageSize,
+            total,
+            showSizeChanger: true,
+            showTotal: (count) => `共 ${count} 条`,
+          }}
+          onChange={(pagination: TablePaginationConfig) => {
+            const nextPage = pagination.current || 1;
+            const nextPageSize = pagination.pageSize || 20;
+            setPage(nextPage);
+            setPageSize(nextPageSize);
+            void load(nextPage, nextPageSize, queryKeyword);
+          }}
+        />
       </Card>
 
       <Modal

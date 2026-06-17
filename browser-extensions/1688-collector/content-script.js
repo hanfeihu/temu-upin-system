@@ -201,6 +201,10 @@
     return `${normalizeBaseUrl(baseUrl)}${DEFAULTS.endpointPath}`;
   }
 
+  function getCardLinkEndpointUrl(baseUrl) {
+    return `${normalizeBaseUrl(baseUrl)}${DEFAULTS.cardLinkEndpointPath || '/api/platform/alibaba1688-card-links/import'}`;
+  }
+
   function getLoginUrl(baseUrl) {
     return `${normalizeBaseUrl(baseUrl)}${DEFAULTS.authLoginPath || '/api/auth/login'}`;
   }
@@ -777,6 +781,171 @@
     return JSON.stringify(data);
   }
 
+  function get1688SearchResultRoot() {
+    const candidates = [
+      '.feeds-wrapper[data-spm="offerlist"]',
+      '.feeds-wrapper',
+      '[data-spm="offerlist"]',
+      '.common-offer-list-wrapper',
+      '.offer-list-row'
+    ];
+
+    for (const selector of candidates) {
+      const node = document.querySelector(selector);
+      if (node) return node;
+    }
+
+    return document.body;
+  }
+
+  function parseJsonObjectSafely(text) {
+    if (!text) return null;
+    try {
+      const parsed = JSON.parse(text);
+      return parsed && typeof parsed === 'object' ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function get1688OfferIdFromRenderKey(renderKey) {
+    const match = String(renderKey || '').match(/_(\d{6,})$/);
+    return match?.[1] || '';
+  }
+
+  function get1688OfferIdFromHref(href) {
+    const normalizedHref = normalizeUrl(href);
+    if (!normalizedHref) return '';
+
+    try {
+      const url = new URL(normalizedHref, location.href);
+      const queryOfferId = url.searchParams.get('offerId') || url.searchParams.get('id');
+      if (queryOfferId) return queryOfferId.trim();
+    } catch {
+      // ignore
+    }
+
+    const patterns = [
+      /(?:offer|product)\/(\d+)\.html/i,
+      /[?&]offerId=(\d+)/i,
+      /[?&]id=(\d+)/i
+    ];
+    for (const pattern of patterns) {
+      const match = normalizedHref.match(pattern);
+      if (match?.[1]) return match[1].trim();
+    }
+    return '';
+  }
+
+  function build1688DetailUrl(offerId) {
+    const normalizedOfferId = String(offerId || '').trim();
+    if (!normalizedOfferId) return '';
+    return `https://detail.m.1688.com/page/index.html?offerId=${encodeURIComponent(normalizedOfferId)}`;
+  }
+
+  function extractOfferIdFromWwLink(cardRoot) {
+    const wwLink = cardRoot?.querySelector?.('a.ww-link[data-extra]');
+    const extra = parseJsonObjectSafely(wwLink?.getAttribute('data-extra'));
+    return String(extra?.offerId || '').trim();
+  }
+
+  function dedupeCardLinks(rows) {
+    const seen = new Set();
+    const deduped = [];
+
+    for (const row of rows) {
+      const key = [
+        row.type,
+        row.offerId || '',
+        row.detailUrl || '',
+        row.cardHref || '',
+        row.renderKey || '',
+        row.index || ''
+      ].join('|');
+      if (seen.has(key)) continue;
+      seen.add(key);
+      deduped.push(row);
+    }
+
+    return deduped;
+  }
+
+  function collect1688SearchCardLinks() {
+    const root = get1688SearchResultRoot();
+    const rows = [];
+
+    const normalCards = Array.from(root.querySelectorAll(
+      'a.search-offer-wrapper.search-offer-item.major-offer[href]'
+    ));
+
+    for (const card of normalCards) {
+      const cardHref = normalizeUrl(card.getAttribute('href') || card.href);
+      const renderKey = String(card.getAttribute('data-renderkey') || '').trim();
+      const offerId = get1688OfferIdFromHref(cardHref)
+        || get1688OfferIdFromRenderKey(renderKey)
+        || extractOfferIdFromWwLink(card);
+
+      rows.push({
+        type: 'normal',
+        offerId: offerId || null,
+        detailUrl: cardHref || (offerId ? build1688DetailUrl(offerId) : null),
+        cardHref: cardHref || null,
+        renderKey: renderKey || null,
+        index: String(card.getAttribute('data-index') || '').trim() || null,
+        offerIdSource: offerId
+          ? (get1688OfferIdFromHref(cardHref) ? 'href' : renderKey ? 'renderKey' : 'ww-link')
+          : null,
+        cardClass: String(card.className || '').trim() || null
+      });
+    }
+
+    const adCards = Array.from(root.querySelectorAll('div.search-offer-wrapper.cardui-adOffer'));
+    for (const card of adCards) {
+      const adAnchor = card.querySelector('a[href]');
+      const cardHref = normalizeUrl(adAnchor?.getAttribute('href') || adAnchor?.href || '');
+      const renderKey = String(
+        card.getAttribute('data-renderkey')
+        || adAnchor?.getAttribute('data-renderkey')
+        || ''
+      ).trim();
+
+      const hrefOfferId = get1688OfferIdFromHref(cardHref);
+      const renderKeyOfferId = get1688OfferIdFromRenderKey(renderKey);
+      const wwOfferId = extractOfferIdFromWwLink(card);
+      const offerId = hrefOfferId || renderKeyOfferId || wwOfferId;
+
+      rows.push({
+        type: 'ad',
+        offerId: offerId || null,
+        detailUrl: offerId ? build1688DetailUrl(offerId) : null,
+        cardHref: cardHref || null,
+        renderKey: renderKey || null,
+        index: String(
+          card.getAttribute('data-index')
+          || adAnchor?.getAttribute('data-index')
+          || ''
+        ).trim() || null,
+        offerIdSource: hrefOfferId
+          ? 'href'
+          : renderKeyOfferId
+            ? 'renderKey'
+            : wwOfferId
+              ? 'ww-link'
+              : null,
+        cardClass: String(card.className || '').trim() || null
+      });
+    }
+
+    return dedupeCardLinks(rows);
+  }
+
+  function is1688SearchResultsPage() {
+    if (detectSiteKey() !== '1688') return false;
+    if (document.querySelector('a.search-offer-wrapper.search-offer-item.major-offer[href]')) return true;
+    if (document.querySelector('div.search-offer-wrapper.cardui-adOffer')) return true;
+    return false;
+  }
+
   function sendRuntimeMessage(message) {
     return new Promise((resolve) => {
       chrome.runtime.sendMessage(message, (response) => {
@@ -832,6 +1001,15 @@
     });
   }
 
+  function postCardLinksToApi(url, items, token) {
+    return sendRuntimeMessage({
+      type: 'TMINOS_IMPORT_CARD_LINKS',
+      url,
+      items,
+      token
+    });
+  }
+
   async function collectAndUploadHtml(setToast, setBusy, auth, targetShopIds) {
     try {
       if (!auth?.accessToken) {
@@ -859,16 +1037,17 @@
       const endpointUrl = getEndpointUrl(baseUrl);
 
       const result = await postHtmlToApi(endpointUrl, html, extractedJson, auth.accessToken, targetShopIds);
+      const body = parseApiBody(result?.bodyText);
 
-      if (!result?.ok) {
+      if (!result?.ok || body?.success === false) {
         if (result?.status === 401) {
           await clearAuthForEnvironment();
           throw new Error('登录已失效，请重新登录');
         }
-        throw new Error(getApiMessage(result, `${result?.status || ''} ${result?.statusText || ''}`.trim() || 'Upload failed'));
+        throw new Error(body?.message || getApiMessage(result, `${result?.status || ''} ${result?.statusText || ''}`.trim() || 'Upload failed'));
       }
 
-      const brief = getApiMessage(result, (result.bodyText || '').trim().slice(0, 200));
+      const brief = body?.message || getApiMessage(result, (result.bodyText || '').trim().slice(0, 200));
       setToast(`采集成功：${result.status} ${result.statusText}${brief ? ` | ${brief}` : ''}`, 'success');
     } catch (err) {
       setToast(`采集失败：${err?.message || String(err)}`, 'error');
@@ -885,13 +1064,19 @@
       .slice(0, 10);
     const jsonLdProduct = getJsonLdProductData(jsonLd);
     const productPage = isLikelyProductPage(siteProfile, jsonLdProduct);
+    const searchResultsPage = is1688SearchResultsPage();
     const root = el('div', { id: PANEL_ID });
 
     const card = el('div', { class: 'c1688-card' });
     const header = el('div', { class: 'c1688-header' });
     const titleWrap = el('div', { class: 'c1688-title-wrap' });
     const title = el('div', { class: 'c1688-title', text: siteProfile.label || '商品采集助手' });
-    const subtitle = el('div', { class: 'c1688-subtitle', text: '采集当前页面并上传到 TMINOS 接口' });
+    const subtitle = el('div', {
+      class: 'c1688-subtitle',
+      text: searchResultsPage
+        ? '采集当前列表卡片链接并上传到 TMINOS'
+        : '采集当前页面并上传到 TMINOS 接口'
+    });
 
     const btnMin = el('button', {
       class: 'c1688-icon-btn',
@@ -1005,7 +1190,9 @@
 
     const hint = el('div', {
       class: 'c1688-hint',
-      text: '提示：页面若有懒加载内容，请先滚动到需要的位置，再点击采集。'
+      text: searchResultsPage
+        ? '提示：先滚动到需要的位置，再点击采集卡片链接。'
+        : '提示：页面若有懒加载内容，请先滚动到需要的位置，再点击采集。'
     });
 
     const renderAuthSummary = () => {
@@ -1080,13 +1267,15 @@
       const selectedShopCount = getSelectedShopIdsForEnvironment().length;
       metaEnv.querySelector('.c1688-meta-v').textContent = environment.label;
       metaHost.querySelector('.c1688-meta-v').textContent = getHostLabel(baseUrl);
-      metaApi.querySelector('.c1688-meta-v').textContent = DEFAULTS.endpointPath;
+      metaApi.querySelector('.c1688-meta-v').textContent = `HTML ${DEFAULTS.endpointPath || '-'} | 卡片 ${DEFAULTS.cardLinkEndpointPath || '-'}`;
       metaLogin.querySelector('.c1688-meta-v').textContent = auth?.accessToken
         ? (auth.displayName || auth.username || '已登录')
         : '未登录';
-      metaShop.querySelector('.c1688-meta-v').textContent = selectedShopCount > 0
-        ? `${selectedShopCount} 个已选`
-        : '未选择';
+      metaShop.querySelector('.c1688-meta-v').textContent = searchResultsPage
+        ? '无需店铺'
+        : selectedShopCount > 0
+          ? `${selectedShopCount} 个已选`
+          : '未选择';
       if (message) setToastState(toast, message, 'neutral');
     };
 
@@ -1269,13 +1458,80 @@
       }
     });
 
-    const actionSection = el('div', { class: 'c1688-section' }, [btnCollect]);
-    const utilitySection = el('div', { class: 'c1688-section' }, [btnCopy]);
+    const btnCollectCardLinks = el('button', {
+      class: 'c1688-btn c1688-secondary',
+      text: '采集卡片链接',
+      onclick: async () => {
+        try {
+          const auth = getAuthForEnvironment();
+          if (!auth?.accessToken) {
+            setToastState(toast, '请先登录后台账号。', 'error');
+            return;
+          }
+
+          btnCollectCardLinks.disabled = true;
+          btnCollectCardLinks.textContent = '采集上传中…';
+
+          if (!is1688SearchResultsPage()) {
+            setToastState(toast, '当前页面不像 1688 搜索结果页，请先打开搜索列表页。', 'error');
+            return;
+          }
+
+          await waitForPageComplete();
+          await waitForDomSettle(800);
+          const cardLinks = collect1688SearchCardLinks();
+
+          if (!cardLinks.length) {
+            setToastState(toast, '未采集到卡片详情链接，请确认页面已加载出商品卡片。', 'error');
+            return;
+          }
+
+          console.log('[1688-collector] card detail links', cardLinks);
+          console.log(JSON.stringify(cardLinks, null, 2));
+          globalThis.__C1688_CARD_LINKS__ = cardLinks;
+
+          const result = await postCardLinksToApi(getCardLinkEndpointUrl(getBaseUrl()), cardLinks, auth.accessToken);
+          const body = parseApiBody(result?.bodyText);
+
+          if (!result?.ok || body?.success === false) {
+            if (result?.status === 401) {
+              await clearAuthForEnvironment();
+              renderAuthSummary();
+              updateMetaDisplay();
+              throw new Error('登录已失效，请重新登录');
+            }
+            throw new Error(body?.message || getApiMessage(result, '上传卡片链接失败'));
+          }
+
+          const summary = body?.data
+            ? `有效 ${body.data.validCount ?? cardLinks.length} 条，新增 ${body.data.insertedCount ?? 0} 条，更新 ${body.data.updatedCount ?? 0} 条`
+            : `共上传 ${cardLinks.length} 条`;
+          const skippedText = body?.data?.skippedMissingOfferIdCount
+            ? `，跳过无 offerId ${body.data.skippedMissingOfferIdCount} 条`
+            : '';
+          setToastState(toast, `已采集 ${cardLinks.length} 条卡片链接并上传后台，${summary}${skippedText}。`, 'success');
+        } catch (err) {
+          setToastState(toast, `采集卡片链接失败：${err?.message || String(err)}`, 'error');
+        } finally {
+          btnCollectCardLinks.disabled = false;
+          btnCollectCardLinks.textContent = '采集卡片链接';
+        }
+      }
+    });
+
+    const actionSection = el('div', { class: 'c1688-section c1688-button-grid' }, searchResultsPage ? [] : [btnCollect]);
+    const utilitySection = el('div', { class: 'c1688-section c1688-button-grid' }, searchResultsPage ? [btnCollectCardLinks] : [btnCopy, btnCollectCardLinks]);
+
+    if (searchResultsPage) {
+      shopSection.style.display = 'none';
+    }
 
     body.appendChild(environmentSection);
     body.appendChild(authSection);
     body.appendChild(shopSection);
-    body.appendChild(actionSection);
+    if (!searchResultsPage) {
+      body.appendChild(actionSection);
+    }
     body.appendChild(utilitySection);
     body.appendChild(meta);
     body.appendChild(hint);
@@ -1290,8 +1546,16 @@
       environmentSelect.value = state.activeEnvironmentKey;
       renderAuthSummary();
       renderShopList();
-      updateMetaDisplay(productPage ? undefined : '当前页面不是明显的商品详情页，仍可复制 HTML，但不建议直接上传。');
-      await loadAvailableShops(true);
+      updateMetaDisplay(
+        searchResultsPage
+          ? undefined
+          : productPage
+            ? undefined
+            : '当前页面不是明显的商品详情页，仍可复制 HTML，但不建议直接上传。'
+      );
+      if (!searchResultsPage) {
+        await loadAvailableShops(true);
+      }
     })();
 
     card.appendChild(header);

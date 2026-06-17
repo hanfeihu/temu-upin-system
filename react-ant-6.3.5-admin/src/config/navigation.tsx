@@ -1,6 +1,7 @@
 import type { ItemType } from 'antd/es/menu/interface';
 import { matchPath } from 'react-router-dom';
 import {
+  LinkOutlined,
   ApiOutlined,
   AuditOutlined,
   CheckCircleOutlined,
@@ -14,6 +15,7 @@ import {
   HistoryOutlined,
   InboxOutlined,
   NodeIndexOutlined,
+  PictureOutlined,
   ProfileOutlined,
   RobotOutlined,
   ScanOutlined,
@@ -25,6 +27,7 @@ import {
   TranslationOutlined,
   TrophyOutlined,
   ToolOutlined,
+  UserAddOutlined,
   RiseOutlined,
 } from '@ant-design/icons';
 import type { AppNavItem, AppRouteMeta } from '@/types/navigation';
@@ -40,10 +43,73 @@ const navigationTree: AppNavItem[] = [
     icon: <InboxOutlined />,
   },
   {
+    key: '/platform/alibaba1688-card-links',
+    path: '/platform/alibaba1688-card-links',
+    label: '1688卡片链接',
+    description: '1688 搜索卡片链接采集记录、去重状态与筛选查询。',
+    icon: <LinkOutlined />,
+  },
+  {
+    key: '/platform/alibaba1688-auth-sessions',
+    path: '/platform/alibaba1688-auth-sessions',
+    label: '1688凭证管理',
+    description: '管理 1688 登录凭证、storageState 与 worker 可用会话。',
+    icon: <ApiOutlined />,
+  },
+  {
+    key: '/platform/alibaba1688-detail-tasks',
+    path: '/platform/alibaba1688-detail-tasks',
+    label: '1688详情采集任务',
+    description: '通过对话式输入批量下发 1688 详情采集任务。',
+    icon: <HistoryOutlined />,
+  },
+  {
+    key: '/platform/alibaba1688-detail-records',
+    path: '/platform/alibaba1688-detail-records',
+    label: '1688详情数据',
+    description: '查看 Playwright 采回的 1688 详情数据、解析结果与原始 HTML。',
+    icon: <DatabaseOutlined />,
+  },
+  {
+    key: '/platform/alibaba1688-selection-pools',
+    path: '/platform/alibaba1688-selection-pools',
+    label: '1688选品池',
+    description: '查看选品池列表、SKU 明细与生成报告入口。',
+    icon: <InboxOutlined />,
+  },
+  {
+    key: '/platform/alibaba1688-selection-pool-filter-categories',
+    path: '/platform/alibaba1688-selection-pool-filter-categories',
+    label: '1688过滤类目配置',
+    description: '维护选品池过滤类目、启停状态与备注。',
+    icon: <FilterOutlined />,
+  },
+  {
+    key: '/platform/alibaba-image-proxy-config',
+    path: '/platform/alibaba-image-proxy-config',
+    label: '阿里图片代理服务器配置',
+    description: '维护 1688 图片展示代理的基地址、路径与白名单域名。',
+    icon: <PictureOutlined />,
+  },
+  {
     key: 'group-product',
     label: '商品中心',
     icon: <DatabaseOutlined />,
     children: [
+      {
+        key: '/platform/supplier-product-submissions',
+        path: '/platform/supplier-product-submissions',
+        label: '供应商提品',
+        description: '供货商提交产品图、供货价、重量与尺寸信息。',
+        icon: <UserAddOutlined />,
+      },
+      {
+        key: '/platform/supplier-product-packages',
+        path: '/platform/supplier-product-packages',
+        label: 'AI商品包装台',
+        description: '把供应商供品加工成标题、轮播图、详情图并推送采集库。',
+        icon: <RobotOutlined />,
+      },
       {
         key: '/platform/product-drafts',
         path: '/platform/product-drafts',
@@ -113,6 +179,13 @@ const navigationTree: AppNavItem[] = [
         label: 'TEMU 订单',
         description: '订单同步、SKU 关联和物流分析入口。',
         icon: <AuditOutlined />,
+      },
+      {
+        key: '/platform/dianxiaomi-package-fees',
+        path: '/platform/dianxiaomi-package-fees',
+        label: '点小秘费用',
+        description: '独立维护店小秘单号，并通过浩远接口查询费用与明细。',
+        icon: <GatewayOutlined />,
       },
       {
         key: '/platform/temu-order-aftersales',
@@ -232,6 +305,20 @@ const navigationTree: AppNavItem[] = [
         label: '标题过滤词',
         description: '标题过滤策略与敏感词维护。',
         icon: <FilterOutlined />,
+      },
+      {
+        key: '/platform/temu-forbidden-word-rules',
+        path: '/platform/temu-forbidden-word-rules',
+        label: 'TEMU违禁词学习库',
+        description: 'TEMU 违禁词、替换词与适用字段维护。',
+        icon: <FilterOutlined />,
+      },
+      {
+        key: '/platform/temu-site-publish-exceptions',
+        path: '/platform/temu-site-publish-exceptions',
+        label: 'TEMU加站异常库',
+        description: '导入未发布到站点异常，沉淀需要资质或不可加站的商品。',
+        icon: <FileSearchOutlined />,
       },
       {
         key: '/platform/parser-test',

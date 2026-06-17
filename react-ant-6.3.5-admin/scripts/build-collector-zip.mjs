@@ -21,8 +21,18 @@ if (!fs.existsSync(manifestPath)) {
 fs.mkdirSync(outputDir, { recursive: true });
 fs.rmSync(outputZip, { force: true });
 
-execFileSync('zip', ['-qr', outputZip, extensionDirName], {
-  cwd: extensionParentDir,
+// Zip extension contents at archive root so Windows users can extract and
+// directly choose the folder that contains manifest.json without an extra
+// nested `1688-collector/` level.
+execFileSync('zip', [
+  '-qr',
+  outputZip,
+  '.',
+  '-x',
+  '*.DS_Store',
+  '__MACOSX/*',
+], {
+  cwd: extensionDir,
   stdio: 'inherit',
 });
 

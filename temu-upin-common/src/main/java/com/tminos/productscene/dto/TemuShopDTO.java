@@ -21,6 +21,7 @@ public class TemuShopDTO {
         private String orderToken;
         private Long orderAppId;
         private String dianxiaomiCookie;
+        private String dianxiaomiShopId;
 
         private Boolean enabled;
         private Integer siteId;
@@ -46,6 +47,8 @@ public class TemuShopDTO {
         public void setOrderAppId(Long orderAppId) { this.orderAppId = orderAppId; }
         public String getDianxiaomiCookie() { return dianxiaomiCookie; }
         public void setDianxiaomiCookie(String dianxiaomiCookie) { this.dianxiaomiCookie = dianxiaomiCookie; }
+        public String getDianxiaomiShopId() { return dianxiaomiShopId; }
+        public void setDianxiaomiShopId(String dianxiaomiShopId) { this.dianxiaomiShopId = dianxiaomiShopId; }
         public Boolean getEnabled() { return enabled; }
         public void setEnabled(Boolean enabled) { this.enabled = enabled; }
         public Integer getSiteId() { return siteId; }
@@ -82,6 +85,7 @@ public class TemuShopDTO {
         private String orderToken;
         private Long orderAppId;
         private String dianxiaomiCookie;
+        private String dianxiaomiShopId;
 
         private Boolean enabled;
         private Integer siteId;
@@ -107,6 +111,8 @@ public class TemuShopDTO {
         public void setOrderAppId(Long orderAppId) { this.orderAppId = orderAppId; }
         public String getDianxiaomiCookie() { return dianxiaomiCookie; }
         public void setDianxiaomiCookie(String dianxiaomiCookie) { this.dianxiaomiCookie = dianxiaomiCookie; }
+        public String getDianxiaomiShopId() { return dianxiaomiShopId; }
+        public void setDianxiaomiShopId(String dianxiaomiShopId) { this.dianxiaomiShopId = dianxiaomiShopId; }
         public Boolean getEnabled() { return enabled; }
         public void setEnabled(Boolean enabled) { this.enabled = enabled; }
         public Integer getSiteId() { return siteId; }
@@ -139,6 +145,7 @@ public class TemuShopDTO {
         private Long orderAppId;
         private String orderAppName;
         private String dianxiaomiCookieMasked;
+        private String dianxiaomiShopId;
         private Integer siteId;
         private String warehouseId;
         private Integer defaultStock;
@@ -172,6 +179,8 @@ public class TemuShopDTO {
         public void setOrderAppName(String orderAppName) { this.orderAppName = orderAppName; }
         public String getDianxiaomiCookieMasked() { return dianxiaomiCookieMasked; }
         public void setDianxiaomiCookieMasked(String dianxiaomiCookieMasked) { this.dianxiaomiCookieMasked = dianxiaomiCookieMasked; }
+        public String getDianxiaomiShopId() { return dianxiaomiShopId; }
+        public void setDianxiaomiShopId(String dianxiaomiShopId) { this.dianxiaomiShopId = dianxiaomiShopId; }
         public Integer getSiteId() { return siteId; }
         public void setSiteId(Integer siteId) { this.siteId = siteId; }
         public String getWarehouseId() { return warehouseId; }

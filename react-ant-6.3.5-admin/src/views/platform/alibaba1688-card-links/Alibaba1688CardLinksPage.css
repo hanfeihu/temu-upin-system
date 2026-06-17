@@ -1,0 +1,33 @@
+.alibaba1688-card-links-table .ant-table-tbody > tr > td {
+  vertical-align: top;
+}
+
+.alibaba1688-card-links-cell {
+  display: flex;
+  min-width: 0;
+  width: 100%;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.alibaba1688-card-links-link,
+.alibaba1688-card-links-text,
+.alibaba1688-card-links-subtext {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.alibaba1688-card-links-link {
+  color: #1677ff;
+}
+
+.alibaba1688-card-links-link:hover {
+  color: #4096ff;
+}
+
+.alibaba1688-card-links-subtext {
+  color: rgba(0, 0, 0, 0.45);
+}

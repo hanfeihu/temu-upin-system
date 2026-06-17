@@ -74,6 +74,7 @@ public class TemuShopService {
         String token = trim(req.getToken());
         String orderToken = trim(req.getOrderToken());
         String dianxiaomiCookie = trim(req.getDianxiaomiCookie());
+        String dianxiaomiShopId = trim(req.getDianxiaomiShopId());
         Long appId = req.getAppId();
         Long orderAppId = req.getOrderAppId();
 
@@ -93,6 +94,7 @@ public class TemuShopService {
         e.setApp(app);
         e.setOrderToken(orderToken);
         e.setDianxiaomiCookie(dianxiaomiCookie);
+        e.setDianxiaomiShopId(dianxiaomiShopId);
         if (orderAppId != null) {
             TemuSelfApp orderApp = appRepo.findById(orderAppId).orElseThrow(() -> new EntityNotFoundException("order app not found"));
             e.setOrderApp(orderApp);
@@ -139,6 +141,7 @@ public class TemuShopService {
         if (StringUtils.hasText(dianxiaomiCookie)) {
             e.setDianxiaomiCookie(dianxiaomiCookie);
         }
+        e.setDianxiaomiShopId(trim(req.getDianxiaomiShopId()));
 
         Long appId = req.getAppId();
         if (appId == null) throw new IllegalArgumentException("应用ID不能为空");
@@ -311,6 +314,7 @@ public class TemuShopService {
         v.setProductTokenMasked(mask(e.getToken()));
         v.setOrderTokenMasked(mask(e.getOrderToken()));
         v.setDianxiaomiCookieMasked(maskCookie(e.getDianxiaomiCookie()));
+        v.setDianxiaomiShopId(e.getDianxiaomiShopId());
         try {
             if (e.getApp() != null) {
                 v.setProductAppId(e.getApp().getId());

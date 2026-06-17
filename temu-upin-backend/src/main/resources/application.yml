@@ -22,6 +22,15 @@ spring:
     username: ${SPRING_DATASOURCE_USERNAME:postgres}
     password: ${SPRING_DATASOURCE_PASSWORD:}
     driver-class-name: org.postgresql.Driver
+    hikari:
+      pool-name: ${SPRING_DATASOURCE_HIKARI_POOL_NAME:ProductSceneHikari}
+      maximum-pool-size: ${SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE:30}
+      minimum-idle: ${SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE:5}
+      connection-timeout: ${SPRING_DATASOURCE_HIKARI_CONNECTION_TIMEOUT:60000}
+      validation-timeout: ${SPRING_DATASOURCE_HIKARI_VALIDATION_TIMEOUT:5000}
+      idle-timeout: ${SPRING_DATASOURCE_HIKARI_IDLE_TIMEOUT:600000}
+      max-lifetime: ${SPRING_DATASOURCE_HIKARI_MAX_LIFETIME:1800000}
+      keepalive-time: ${SPRING_DATASOURCE_HIKARI_KEEPALIVE_TIME:300000}
   
   jpa:
     hibernate:
@@ -40,8 +49,8 @@ spring:
 # AI Image Generation Configuration
 ai:
   text-channel:
-    base-url: ${AI_TEXT_CHANNEL_BASE_URL:https://chatbot.tminos.com}
-    api-key: ${AI_TEXT_CHANNEL_API_KEY:sk-gJcOn1tUeavYppjdDXIZiqmcdcZX1F4LwhKOz5TPj71TlsBi}
+    base-url: ${AI_TEXT_CHANNEL_BASE_URL:}
+    api-key: ${AI_TEXT_CHANNEL_API_KEY:}
 
   image:
     providers:
@@ -62,15 +71,29 @@ ai:
     prompt-optimizer:
       enabled: true
       provider: tminos
-      base-url: ${PROMPT_OPTIMIZER_BASE_URL:${AI_TEXT_CHANNEL_BASE_URL:https://chatbot.tminos.com}}
-      api-key: ${PROMPT_OPTIMIZER_API_KEY:${AI_TEXT_CHANNEL_API_KEY:sk-gJcOn1tUeavYppjdDXIZiqmcdcZX1F4LwhKOz5TPj71TlsBi}}
-      model: ${PROMPT_OPTIMIZER_MODEL:gpt-5.4}
+      base-url: ${PROMPT_OPTIMIZER_BASE_URL:${AI_TEXT_CHANNEL_BASE_URL:}}
+      api-key: ${PROMPT_OPTIMIZER_API_KEY:${AI_TEXT_CHANNEL_API_KEY:}}
+      model: ${PROMPT_OPTIMIZER_MODEL:gpt-5.5}
+
+  image-translate:
+    enabled: ${AI_IMAGE_TRANSLATE_ENABLED:true}
+    base-url: ${AI_IMAGE_TRANSLATE_BASE_URL:${AI_TEXT_CHANNEL_BASE_URL:}}
+    api-key: ${AI_IMAGE_TRANSLATE_API_KEY:${ai.text-channel.api-key:}}
+    model: ${AI_IMAGE_TRANSLATE_MODEL:gpt-image-1.5}
+    size: ${AI_IMAGE_TRANSLATE_SIZE:auto}
+    quality: ${AI_IMAGE_TRANSLATE_QUALITY:medium}
+    output-format: ${AI_IMAGE_TRANSLATE_OUTPUT_FORMAT:png}
+    timeout-ms: ${AI_IMAGE_TRANSLATE_TIMEOUT_MS:300000}
+    upload-to-oss-default: ${AI_IMAGE_TRANSLATE_UPLOAD_TO_OSS_DEFAULT:false}
+    marketplace: ${AI_IMAGE_TRANSLATE_MARKETPLACE:Temu}
+    source-language: ${AI_IMAGE_TRANSLATE_SOURCE_LANGUAGE:Chinese}
+    target-language: ${AI_IMAGE_TRANSLATE_TARGET_LANGUAGE:English}
 
   temu-attr-filler:
     enabled: true
-    base-url: ${TEMU_ATTR_AI_BASE_URL:${AI_TEXT_CHANNEL_BASE_URL:https://chatbot.tminos.com}}
-    api-key: ${TEMU_ATTR_AI_API_KEY:${AI_TEXT_CHANNEL_API_KEY:sk-gJcOn1tUeavYppjdDXIZiqmcdcZX1F4LwhKOz5TPj71TlsBi}}
-    model: ${TEMU_ATTR_AI_MODEL:gpt-5.4}
+    base-url: ${TEMU_ATTR_AI_BASE_URL:${AI_TEXT_CHANNEL_BASE_URL:}}
+    api-key: ${TEMU_ATTR_AI_API_KEY:${AI_TEXT_CHANNEL_API_KEY:}}
+    model: ${TEMU_ATTR_AI_MODEL:gpt-5.5}
     timeout-ms: ${TEMU_ATTR_AI_TIMEOUT_MS:240000}
     max-tokens: ${TEMU_ATTR_AI_MAX_TOKENS:250000}
 
@@ -84,12 +107,20 @@ ai:
 
   temu-title-optimizer:
     enabled: ${TEMU_TITLE_OPTIMIZER_ENABLED:true}
-    base-url: ${TEMU_TITLE_AI_BASE_URL:${AI_TEXT_CHANNEL_BASE_URL:https://chatbot.tminos.com}}
-    api-key: ${TEMU_TITLE_AI_API_KEY:${AI_TEXT_CHANNEL_API_KEY:sk-gJcOn1tUeavYppjdDXIZiqmcdcZX1F4LwhKOz5TPj71TlsBi}}
+    base-url: ${TEMU_TITLE_AI_BASE_URL:${AI_TEXT_CHANNEL_BASE_URL:}}
+    api-key: ${TEMU_TITLE_AI_API_KEY:${AI_TEXT_CHANNEL_API_KEY:}}
     model: ${TEMU_TITLE_AI_MODEL:${TEMU_ATTR_AI_MODEL:gpt-5.2}}
     timeout-ms: ${TEMU_TITLE_AI_TIMEOUT_MS:240000}
     max-tokens: ${TEMU_TITLE_AI_MAX_TOKENS:1600}
     max-attempts: ${TEMU_TITLE_AI_MAX_ATTEMPTS:3}
+
+  alibaba1688-selection-report:
+    enabled: ${ALIBABA_1688_SELECTION_REPORT_AI_ENABLED:true}
+    base-url: ${ALIBABA_1688_SELECTION_REPORT_AI_BASE_URL:${AI_TEXT_CHANNEL_BASE_URL:}}
+    api-key: ${ALIBABA_1688_SELECTION_REPORT_AI_API_KEY:${AI_TEXT_CHANNEL_API_KEY:}}
+    model: ${ALIBABA_1688_SELECTION_REPORT_AI_MODEL:${TEMU_ATTR_AI_MODEL:gpt-5.5}}
+    timeout-ms: ${ALIBABA_1688_SELECTION_REPORT_AI_TIMEOUT_MS:240000}
+    max-tokens: ${ALIBABA_1688_SELECTION_REPORT_AI_MAX_TOKENS:3200}
     
     default-settings:
       thumbnail:
@@ -116,6 +147,25 @@ platform:
     password: ${PLATFORM_AUTH_PASSWORD:admin778899}
     token-secret: ${PLATFORM_AUTH_TOKEN_SECRET:product-scene-platform-auth-secret}
     token-ttl-hours: ${PLATFORM_AUTH_TOKEN_TTL_HOURS:168}
+
+alibaba1688:
+  worker-api:
+    enabled: ${ALIBABA_1688_WORKER_API_ENABLED:true}
+    key: ${ALIBABA_1688_WORKER_API_KEY:Han123...}
+  selection-pool:
+    detail-import-worker:
+      enabled: ${ALIBABA_1688_SELECTION_DETAIL_IMPORT_WORKER_ENABLED:true}
+      poll-ms: ${ALIBABA_1688_SELECTION_DETAIL_IMPORT_WORKER_POLL_MS:1200000}
+      initial-delay-ms: ${ALIBABA_1688_SELECTION_DETAIL_IMPORT_WORKER_INITIAL_DELAY_MS:120000}
+
+tminos:
+  minio:
+    enabled: ${TMINOS_MINIO_ENABLED:false}
+    endpoint: ${TMINOS_MINIO_ENDPOINT:}
+    public-endpoint: ${TMINOS_MINIO_PUBLIC_ENDPOINT:}
+    access-key: ${TMINOS_MINIO_ACCESS_KEY:}
+    secret-key: ${TMINOS_MINIO_SECRET_KEY:}
+    bucket: ${TMINOS_MINIO_BUCKET:tminos}
 
 temu:
   goods:

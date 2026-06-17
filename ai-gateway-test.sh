@@ -32,8 +32,8 @@ request() {
     }"
 }
 
-printf '\n===== Testing gpt-5.4 =====\n'
-request "gpt-5.4"
+printf '\n===== Testing gpt-5.5 =====\n'
+request "gpt-5.5"
 
 printf '\n\n===== Testing gpt-5.2 =====\n'
 request "gpt-5.2"

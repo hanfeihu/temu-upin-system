@@ -51,6 +51,11 @@
         </dependency>
         <dependency>
             <groupId>com.tminos</groupId>
+            <artifactId>temu-upin-minio-sdk</artifactId>
+            <version>1.0.0</version>
+        </dependency>
+        <dependency>
+            <groupId>com.tminos</groupId>
             <artifactId>tminos-erp-common</artifactId>
             <version>1.0.0</version>
         </dependency>

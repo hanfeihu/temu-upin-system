@@ -29,13 +29,16 @@ public class TemuAttributeAiService {
     private final AITemuAttrFillerConfig config;
     private final ObjectMapper objectMapper;
     private final RestTemplate restTemplate;
+    private final TextAiChannelResolver textAiChannelResolver;
 
     public TemuAttributeAiService(AITemuAttrFillerConfig config,
                                  ObjectMapper objectMapper,
-                                 @Qualifier("aiLongRestTemplate") RestTemplate restTemplate) {
+                                 @Qualifier("aiLongRestTemplate") RestTemplate restTemplate,
+                                 TextAiChannelResolver textAiChannelResolver) {
         this.config = config;
         this.objectMapper = objectMapper;
         this.restTemplate = restTemplate;
+        this.textAiChannelResolver = textAiChannelResolver;
     }
 
     public AiFillResult fill(String productName,
@@ -49,10 +52,11 @@ public class TemuAttributeAiService {
             r.setErrorMsg("AI filler disabled");
             return r;
         }
-        if (!StringUtils.hasText(config.getApiKey())) {
+        TextAiChannelResolver.ResolvedChannel aiChannel = resolveAiChannel();
+        if (!StringUtils.hasText(aiChannel.getApiKey())) {
             AiFillResult r = new AiFillResult();
             r.setSuccess(false);
-            r.setErrorMsg("Missing TEMU_ATTR_AI_API_KEY");
+            r.setErrorMsg("缺少 TEMU 属性 AI 渠道 API Key");
             return r;
         }
         if (!StringUtils.hasText(templateRawJson)) {
@@ -206,7 +210,7 @@ public class TemuAttributeAiService {
                 if (isReq) requiredOnly.add(one);
             }
             String prompt = buildPrompt(productCtx, requiredOnly);
-            String model = defaultModel();
+            String model = StringUtils.hasText(aiChannel.getModel()) ? aiChannel.getModel() : defaultModel();
 
             Map<String, Object> req = new LinkedHashMap<>();
             req.put("model", model);
@@ -220,10 +224,10 @@ public class TemuAttributeAiService {
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
             headers.setAccept(List.of(MediaType.TEXT_EVENT_STREAM, MediaType.APPLICATION_JSON));
-            headers.set("Authorization", "Bearer " + config.getApiKey());
+            headers.set("Authorization", "Bearer " + aiChannel.getApiKey());
 
             HttpEntity<Map<String, Object>> httpEntity = new HttpEntity<>(req, headers);
-            String url = completionsUrl(config.getBaseUrl());
+            String url = completionsUrl(aiChannel.getBaseUrl());
             String requestJson = objectMapper.writeValueAsString(req);
 
             log.info("TemuAttributeAiService.fill request model={} url={} productNameLen={} templatePropertyCount={} requiredPropertyCount={} attrsJsonLen={} originalJsonLen={} skuCount={} promptLen={} maxTokens={}",
@@ -237,7 +241,7 @@ public class TemuAttributeAiService {
                     extractSkuCount(skuSummary),
                     prompt.length(),
                     req.get("max_tokens"));
-            log.info("TemuAttributeAiService.fill curl={}", buildCurlCommand(url, config.getApiKey(), requestJson));
+            log.info("TemuAttributeAiService.fill curl={}", buildCurlCommand(url, aiChannel.getApiKey(), requestJson));
 
             StreamResult streamResult = restTemplate.execute(
                     url,
@@ -1152,12 +1156,21 @@ public class TemuAttributeAiService {
     }
 
     private String completionsUrl(String baseUrl) {
-        return TextAiUrlHelper.chatCompletionsUrl(baseUrl, "https://chatbot.tminos.com");
+        return TextAiUrlHelper.chatCompletionsUrl(baseUrl, config.getBaseUrl());
     }
 
     private String defaultModel() {
         if (StringUtils.hasText(config.getModel())) return config.getModel().trim();
-        return "gpt-5.2";
+        return "gpt-5.5";
+    }
+
+    private TextAiChannelResolver.ResolvedChannel resolveAiChannel() {
+        return textAiChannelResolver.resolve(
+                TextAiBusinessCodes.TEMU_ATTR_FILL,
+                config.getBaseUrl(),
+                config.getApiKey(),
+                defaultModel()
+        );
     }
 
     private String extractAssistantContent(String raw) throws Exception {

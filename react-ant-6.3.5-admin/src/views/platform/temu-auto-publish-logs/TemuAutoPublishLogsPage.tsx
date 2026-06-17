@@ -57,6 +57,8 @@ const TemuAutoPublishLogsPage = () => {
   const [logsOpen, setLogsOpen] = useState(false);
   const [logsLoading, setLogsLoading] = useState(false);
   const [logs, setLogs] = useState<PublishLogVO[]>([]);
+  const [logsPage, setLogsPage] = useState(1);
+  const [logsPageSize, setLogsPageSize] = useState(20);
   const [sample, setSample] = useState<TemuAutoPublishSampleVO | null>(null);
   const [selectedRun, setSelectedRun] = useState<TemuAutoPublishRunVO | null>(null);
 
@@ -102,6 +104,8 @@ const TemuAutoPublishLogsPage = () => {
     setSelectedRun(record);
     setLogsOpen(true);
     setLogs([]);
+    setLogsPage(1);
+    setLogsPageSize(20);
     setSample(null);
     setLogsLoading(true);
     try {
@@ -349,7 +353,10 @@ const TemuAutoPublishLogsPage = () => {
         open={logsOpen}
         title={selectedRun ? `自动发布 runId=${selectedRun.id} spuId=${selectedRun.spuId} 状态=${selectedRun.status || '-'}` : '自动发布日志'}
         width={920}
-        onClose={() => setLogsOpen(false)}
+        onClose={() => {
+          setLogsOpen(false);
+          setLogsPage(1);
+        }}
       >
         {sample ? (
           <Descriptions size="small" bordered column={2} style={{ marginBottom: 16 }}>
@@ -386,7 +393,19 @@ const TemuAutoPublishLogsPage = () => {
           columns={logColumns}
           dataSource={logs}
           loading={logsLoading}
-          pagination={false}
+          pagination={{
+            current: logsPage,
+            pageSize: logsPageSize,
+            total: logs.length,
+            showSizeChanger: true,
+            showQuickJumper: true,
+            showTotal: (count) => `共 ${count} 条日志`,
+            pageSizeOptions: ['10', '20', '50', '100'],
+          }}
+          onChange={(pagination: TablePaginationConfig) => {
+            setLogsPage(pagination.current || 1);
+            setLogsPageSize(pagination.pageSize || 20);
+          }}
           size="small"
         />
       </Drawer>

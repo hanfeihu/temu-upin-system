@@ -28,7 +28,9 @@ public class Alibaba1688HtmlParser {
 
     private static final Pattern OFFER_ID_PATTERN_1 = Pattern.compile("offer/(\\d+)\\.html", Pattern.CASE_INSENSITIVE);
     private static final Pattern OFFER_ID_PATTERN_2 = Pattern.compile("offerId=(\\d+)", Pattern.CASE_INSENSITIVE);
-    private static final Pattern ALIBABA_IMAGE_VARIANT_PATTERN = Pattern.compile("(?i)(-0-cib)(?:\\.(?:search|summ|\\d+x\\d+))+(\\.(?:jpg|jpeg|png|webp|gif))$");
+    private static final Pattern ALIBABA_TPS_SIZE_PATTERN = Pattern.compile("(?i)-tps-(\\d+)-(\\d+)\\.(?:jpg|jpeg|png|webp|gif)$");
+    private static final Pattern TRAILING_IMAGE_SIZE_PATTERN = Pattern.compile("(?i)-(\\d+)-(\\d+)\\.(?:jpg|jpeg|png|webp|gif)$");
+    private static final Pattern ALIBABA_THUMB_SUFFIX_PATTERN = Pattern.compile("(?i)(\\.(?:jpg|jpeg|png|webp))_b\\.(?:jpg|jpeg|png|webp)$");
 
     private final ObjectMapper objectMapper;
 
@@ -75,7 +77,7 @@ public class Alibaba1688HtmlParser {
         }
 
         ShippingServicesInfo shippingServices = extractShippingServices(doc);
-        CategoryInfo categoryInfo = extractCategory(doc);
+        CategoryInfo categoryInfo = extractCategory(html, doc);
 
         CarouselMedia media = extractCarouselMedia(doc, html);
         List<String> carouselImages = media.bigImages;
@@ -107,6 +109,11 @@ public class Alibaba1688HtmlParser {
         Integer reviewCount = extractReviewCount(doc);
         Integer collectCount = extractCollectCount(doc);
         BigDecimal repeatCustomerRate = extractRepeatCustomerRate(doc);
+        BigDecimal onTimeDeliveryRate = extractOnTimeDeliveryRate(doc);
+        BigDecimal shopPositiveRate = extractShopPositiveRate(doc);
+        Boolean powerSeller = extractPowerSeller(doc);
+        String settledYearsText = extractSettledYearsText(doc);
+        String mainBusiness = extractMainBusiness(doc);
 
         Boolean hasSevereInventory = null;
         Integer totalStock = skuInfo.totalStock;
@@ -124,6 +131,11 @@ public class Alibaba1688HtmlParser {
         out.setShippingLocation(shippingLocation);
         out.setOriginalCategory(categoryInfo.originalCategory);
         out.setProductCategory(categoryInfo.productCategory);
+        out.setLeafCategoryName(categoryInfo.leafCategoryName);
+        out.setLeafCategoryId(categoryInfo.leafCategoryId);
+        out.setPostCategoryId(categoryInfo.postCategoryId);
+        out.setSecondCategoryId(categoryInfo.secondCategoryId);
+        out.setTopCategoryId(categoryInfo.topCategoryId);
         out.setProductMainImage(productMainImage);
         out.setCarouselImagesJson(toJsonOrNull(carouselImages));
         out.setCarouselThumbImagesJson(toJsonOrNull(media.thumbImages));
@@ -161,13 +173,20 @@ public class Alibaba1688HtmlParser {
         out.setReviewCount(reviewCount);
         out.setCollectCount(collectCount);
         out.setRepeatCustomerRate(repeatCustomerRate);
+        out.setOnTimeDeliveryRate(onTimeDeliveryRate);
+        out.setShopPositiveRate(shopPositiveRate);
+        out.setPowerSeller(powerSeller);
+        out.setSettledYearsText(settledYearsText);
+        out.setMainBusiness(mainBusiness);
         out.setHasSevereInventory(hasSevereInventory);
 
         out.setShippingServicesInfo(shippingServices.moduleText);
         out.setBaseFreight(shippingServices.baseFreight);
 
         out.setOriginalContent(buildSummaryJson(productId, productUrl, productName, companyName, shippingLocation,
-                categoryInfo, priceInfo, skuInfo, attributes, packagingInfo));
+                categoryInfo, priceInfo, skuInfo, attributes, packagingInfo,
+                serviceScore, repeatCustomerRate, onTimeDeliveryRate, shopPositiveRate,
+                powerSeller, settledYearsText, mainBusiness));
         out.setOriginalHtml(html);
 
         return out;
@@ -666,7 +685,14 @@ public class Alibaba1688HtmlParser {
             PriceInfo priceInfo,
             SkuInfo skuInfo,
             Map<String, String> attributes,
-            PackagingInfo packagingInfo
+            PackagingInfo packagingInfo,
+            BigDecimal serviceScore,
+            BigDecimal repeatCustomerRate,
+            BigDecimal onTimeDeliveryRate,
+            BigDecimal shopPositiveRate,
+            Boolean powerSeller,
+            String settledYearsText,
+            String mainBusiness
     ) {
         Map<String, Object> summary = new LinkedHashMap<>();
         summary.put("productId", productId);
@@ -676,10 +702,22 @@ public class Alibaba1688HtmlParser {
         summary.put("shippingLocation", shippingLocation);
         summary.put("originalCategory", categoryInfo.originalCategory);
         summary.put("productCategory", categoryInfo.productCategory);
+        summary.put("leafCategoryName", categoryInfo.leafCategoryName);
+        summary.put("leafCategoryId", categoryInfo.leafCategoryId);
+        summary.put("postCategoryId", categoryInfo.postCategoryId);
+        summary.put("secondCategoryId", categoryInfo.secondCategoryId);
+        summary.put("topCategoryId", categoryInfo.topCategoryId);
         summary.put("minPrice", priceInfo.minPrice);
         summary.put("maxPrice", priceInfo.maxPrice);
         summary.put("moq", priceInfo.moq);
         summary.put("packaging", packagingInfo.asMap());
+        summary.put("serviceScore", serviceScore);
+        summary.put("repeatCustomerRate", repeatCustomerRate);
+        summary.put("onTimeDeliveryRate", onTimeDeliveryRate);
+        summary.put("shopPositiveRate", shopPositiveRate);
+        summary.put("powerSeller", powerSeller);
+        summary.put("settledYearsText", settledYearsText);
+        summary.put("mainBusiness", mainBusiness);
         summary.put("skus", skuInfo.skus);
         if (attributes != null && !attributes.isEmpty()) {
             if (attributes.size() > 50) {
@@ -764,8 +802,8 @@ public class Alibaba1688HtmlParser {
         LinkedHashSet<String> big = new LinkedHashSet<>();
         LinkedHashSet<String> thumbs = new LinkedHashSet<>();
 
-        // 以页面真实轮播容器 od-scroller-list-wapper 为准。
-        // 只有 DOM 明显不完整时，才退回 mainImage / offerImgList。
+        // od-scroller-list-wapper 是缩略图条，不应直接当成轮播大图。
+        // 大图优先取 window.context 里的 mainImage / offerImgList，其次取预览区 DOM。
         if (!thumbDom.isEmpty()) {
             thumbs.addAll(thumbDom);
         } else if (!mainImage.isEmpty()) {
@@ -776,14 +814,12 @@ public class Alibaba1688HtmlParser {
             thumbs.addAll(offerAll);
         }
 
-        if (!thumbDom.isEmpty()) {
-            big.addAll(thumbDom);
-        } else if (!mainImage.isEmpty()) {
+        if (!mainImage.isEmpty()) {
             big.addAll(mainImage);
-        } else if (!previewDom.isEmpty()) {
-            big.addAll(previewDom);
         } else if (!offerAll.isEmpty()) {
             big.addAll(offerAll);
+        } else if (!previewDom.isEmpty()) {
+            big.addAll(previewDom);
         } else {
             big.addAll(extractCarouselImages(doc));
         }
@@ -795,7 +831,12 @@ public class Alibaba1688HtmlParser {
         }
 
         if (big.isEmpty() && !thumbs.isEmpty()) {
-            big.addAll(thumbs);
+            List<String> upgradedThumbs = upgradeAlibabaThumbUrls(thumbs);
+            if (!upgradedThumbs.isEmpty()) {
+                big.addAll(upgradedThumbs);
+            } else {
+                big.addAll(thumbs);
+            }
         }
         if (thumbs.isEmpty() && !big.isEmpty()) {
             thumbs.addAll(big);
@@ -805,6 +846,41 @@ public class Alibaba1688HtmlParser {
         out.thumbImages = new ArrayList<>(thumbs);
         out.videoUrl = (video == null || video.isBlank()) ? null : video;
         return out;
+    }
+
+    private List<String> upgradeAlibabaThumbUrls(Iterable<String> urls) {
+        if (urls == null) {
+            return Collections.emptyList();
+        }
+        LinkedHashSet<String> upgraded = new LinkedHashSet<>();
+        for (String url : urls) {
+            String candidate = upgradeAlibabaThumbUrl(url);
+            if (candidate != null && isImageUrl(candidate)) {
+                upgraded.add(candidate);
+            }
+        }
+        return new ArrayList<>(upgraded);
+    }
+
+    private String upgradeAlibabaThumbUrl(String url) {
+        String normalized = normalizeCarouselImageUrl(url);
+        if (normalized == null) {
+            return null;
+        }
+        String base = stripUrlQueryAndFragment(normalized);
+        if (base == null || base.isBlank()) {
+            return normalized;
+        }
+        Matcher matcher = ALIBABA_THUMB_SUFFIX_PATTERN.matcher(base);
+        if (!matcher.find()) {
+            return normalized;
+        }
+        String upgradedBase = matcher.replaceFirst("$1");
+        if (upgradedBase.equals(base)) {
+            return normalized;
+        }
+        String suffix = normalized.substring(base.length());
+        return upgradedBase + suffix;
     }
 
     private List<String> extractCarouselPreviewImagesFromDom(Element gallery) {
@@ -881,27 +957,10 @@ public class Alibaba1688HtmlParser {
 
         if (!isCleanHttpImageUrlCandidate(s)) return null;
 
-        int q = s.indexOf('?');
-        if (q > 0) s = s.substring(0, q);
-        int h = s.indexOf('#');
-        if (h > 0) s = s.substring(0, h);
-
-        s = collapseAlibabaImageVariant(s);
-        if (s == null || s.isBlank()) return null;
-
-        String lower = s.toLowerCase(Locale.ROOT);
-        int end = firstImageExtEndIndex(lower);
-        if (end < 0) return null;
-
-        // 1688 轮播图 DOM 里常见这些形式：
-        //   xxx.jpg_.webp
-        //   xxx.jpg_b.jpg
-        //   xxx.jpg_sum.jpg
-        // 它们本质上都指向同一张原图，保留第一段真实图片地址即可。
-        if (end < s.length()) {
-            s = s.substring(0, end);
+        String base = stripUrlQueryAndFragment(s);
+        if (!isRecognizableImageUrlBase(base)) {
+            return null;
         }
-
         return s;
     }
 
@@ -993,14 +1052,14 @@ public class Alibaba1688HtmlParser {
         if (rawHtml != null && !rawHtml.isBlank()) {
             List<String> strict = extractDetailImagesFromRawDetailBlock(rawHtml);
             if (strict != null && !strict.isEmpty()) {
-                return strict;
+                return finalizeDetailImageUrls(strict, rawHtml);
             }
         }
 
         Element detailRoot = first(doc, "#detail");
         if (detailRoot != null) {
             collectImagesFromDetailRoot(detailRoot, urls);
-            return postProcessDetailImageUrls(new ArrayList<>(urls));
+            return finalizeDetailImageUrls(new ArrayList<>(urls), rawHtml);
         }
 
         collectImagesFromContainer(first(doc, "#description"), urls);
@@ -1031,14 +1090,44 @@ public class Alibaba1688HtmlParser {
             urls.addAll(extractDetailImagesFromRawHtml(rawHtml));
         }
 
-        return postProcessDetailImageUrls(new ArrayList<>(urls));
+        return finalizeDetailImageUrls(new ArrayList<>(urls), rawHtml);
+    }
+
+    private List<String> finalizeDetailImageUrls(List<String> urls, String rawHtml) {
+        List<String> originalUrls = urls == null ? Collections.emptyList() : new ArrayList<>(urls);
+        List<String> processedUrls = postProcessDetailImageUrls(originalUrls);
+        if (!shouldPreferItemCdnDetailImages(originalUrls, processedUrls, rawHtml)) {
+            return processedUrls;
+        }
+
+        String detailUrl = extractDetailUrlFromWindowContext(rawHtml);
+        if (detailUrl == null || detailUrl.isBlank()) {
+            return processedUrls;
+        }
+
+        List<String> itemCdnUrls = extractDetailImagesFromItemCdn(detailUrl);
+        return itemCdnUrls.isEmpty() ? processedUrls : itemCdnUrls;
+    }
+
+    private boolean shouldPreferItemCdnDetailImages(List<String> originalUrls, List<String> processedUrls, String rawHtml) {
+        if (rawHtml == null || rawHtml.isBlank()) return false;
+        String detailUrl = extractDetailUrlFromWindowContext(rawHtml);
+        if (detailUrl == null || detailUrl.isBlank()) return false;
+        if (originalUrls == null || originalUrls.isEmpty()) return false;
+
+        for (String url : originalUrls) {
+            if (isLikelyDecorativeDetailImage(url)) {
+                return true;
+            }
+        }
+        return processedUrls != null && processedUrls.size() > 12;
     }
 
     private void collectImagesFromDetailRoot(Element detailRoot, Set<String> out) {
         if (detailRoot == null || out == null) return;
 
         Element clone = detailRoot.clone();
-        clone.select("#desc-lazyload-container, #desc-lazyload").remove();
+        removeExcludedDetailNodes(clone);
 
         collectImages(clone.select("img"), out);
         if (!out.isEmpty()) return;
@@ -1050,6 +1139,7 @@ public class Alibaba1688HtmlParser {
             if (s.isEmpty()) continue;
             if (!s.contains("<img") && !s.contains("IMG")) continue;
             Document sub = Jsoup.parseBodyFragment(s);
+            removeExcludedDetailNodes(sub);
             collectImages(sub.select("img"), out);
             if (!out.isEmpty()) return;
         }
@@ -1064,12 +1154,15 @@ public class Alibaba1688HtmlParser {
 
         int end = rawHtml.length();
         String[] endMarkers = new String[]{
+                "<div id=\"detail-notice-container-bottom\"",
+                "<div id='detail-notice-container-bottom'",
                 "<div id=\"desc-lazyload-container\"",
                 "<div id='desc-lazyload-container'",
                 "<div id=\"desc-lazyload\"",
                 "<div id='desc-lazyload'",
                 "<div class=\"price-explain\"",
-                "<div class='price-explain'"
+                "<div class='price-explain'",
+                "</template>"
         };
         for (String marker : endMarkers) {
             int idx = indexOfIgnoreCase(rawHtml, marker, start + 1);
@@ -1084,18 +1177,23 @@ public class Alibaba1688HtmlParser {
         LinkedHashSet<String> urls = new LinkedHashSet<>();
 
         Document sub = Jsoup.parseBodyFragment(block);
+        removeExcludedDetailNodes(sub);
         collectImages(sub.select("img"), urls);
         if (urls.isEmpty()) {
             collectImageUrlsFromText(block, urls);
         }
 
-        return postProcessDetailImageUrls(new ArrayList<>(urls));
+        return new ArrayList<>(urls);
     }
 
 
     private boolean isInsideExcludedDetailContainer(Element el) {
         if (el == null) return false;
-        return el.closest("#desc-lazyload-container") != null || el.closest("#desc-lazyload") != null;
+        return el.closest("#desc-lazyload-container") != null
+                || el.closest("#desc-lazyload") != null
+                || el.closest(".sdmap-dynamic-offer-list") != null
+                || el.closest(".offer-list-wapper") != null
+                || el.closest(".desc-dynamic-module") != null;
     }
 
     private List<String> extractDetailImagesFromWindowContext(String html) {
@@ -1153,7 +1251,7 @@ public class Alibaba1688HtmlParser {
         }
     }
 
-    private List<String> extractDetailImagesFromItemCdn(String detailUrl) {
+    protected List<String> extractDetailImagesFromItemCdn(String detailUrl) {
         if (detailUrl == null || detailUrl.isBlank()) return Collections.emptyList();
 
         try {
@@ -1169,6 +1267,7 @@ public class Alibaba1688HtmlParser {
             LinkedHashSet<String> urls = new LinkedHashSet<>();
 
             Document doc = org.jsoup.Jsoup.parse(html);
+            removeExcludedDetailNodes(doc);
             collectImages(doc.select("img"), urls);
 
             collectImageUrlsFromText(html, urls);
@@ -1257,12 +1356,17 @@ public class Alibaba1688HtmlParser {
         }
 
         LinkedHashSet<String> out = new LinkedHashSet<>();
-        Pattern p = Pattern.compile("<img\\b[^>]*?(?:src|data-src|data-lazy-src|data-original|data-ks-lazyload|data-lazyload|data-lazyload-src|srcset)\\s*=\\s*(['\"])(.*?)\\1", Pattern.CASE_INSENSITIVE);
-        Matcher m = p.matcher(scope);
-        while (m.find()) {
-            String u = normalizeImageUrl(normalizeUrl(m.group(2)));
-            if (u != null && isImageUrl(u)) {
-                out.add(u);
+        Document sub = Jsoup.parseBodyFragment(scope);
+        removeExcludedDetailNodes(sub);
+        collectImages(sub.select("img"), out);
+        if (out.isEmpty()) {
+            Pattern p = Pattern.compile("<img\\b[^>]*?(?:src|data-src|data-lazy-src|data-original|data-ks-lazyload|data-lazyload|data-lazyload-src|srcset)\\s*=\\s*(['\"])(.*?)\\1", Pattern.CASE_INSENSITIVE);
+            Matcher m = p.matcher(sub.html());
+            while (m.find()) {
+                String u = normalizeImageUrl(normalizeUrl(m.group(2)));
+                if (u != null && isImageUrl(u)) {
+                    out.add(u);
+                }
             }
         }
         return postProcessDetailImageUrls(new ArrayList<>(out));
@@ -1301,10 +1405,81 @@ public class Alibaba1688HtmlParser {
 
             String s = normalizeImageUrl(normalizeUrl(u));
             if (s == null || !isImageUrl(s)) continue;
+            if (isLikelyDecorativeDetailImage(s)) continue;
 
             out.add(s);
         }
         return new ArrayList<>(out);
+    }
+
+    private void removeExcludedDetailNodes(Element root) {
+        if (root == null) {
+            return;
+        }
+        root.select(
+                "#desc-lazyload-container, #desc-lazyload, " +
+                        ".sdmap-dynamic-offer-list, .offer-list-wapper, .desc-dynamic-module"
+        ).remove();
+    }
+
+    private boolean isLikelyDecorativeDetailImage(String url) {
+        if (url == null || url.isBlank()) return false;
+
+        String lower = stripUrlQueryAndFragment(url);
+        if (lower == null || lower.isBlank()) return false;
+        lower = lower.toLowerCase(Locale.ROOT);
+        if (!lower.startsWith("http://") && !lower.startsWith("https://")) return false;
+        if (lower.contains("-2-gg_dtc")) return true;
+
+        boolean publicAlibabaAsset = lower.contains("img.alicdn.com/")
+                || lower.contains("gw.alicdn.com/")
+                || lower.contains("alicdn.com/tfs/");
+        if (!publicAlibabaAsset) {
+            return false;
+        }
+
+        int[] imageSize = extractTrailingImageSize(lower);
+        if (imageSize == null) {
+            return false;
+        }
+
+        int width = imageSize[0];
+        int height = imageSize[1];
+        if (width <= 0 || height <= 0) {
+            return false;
+        }
+        int min = Math.min(width, height);
+        int max = Math.max(width, height);
+        long area = (long) width * height;
+
+        if (width <= 200 && height <= 200) return true;
+        if (min <= 96 && max <= 400) return true;
+        return area <= 45_000L;
+    }
+
+    private int[] extractTrailingImageSize(String lowerUrl) {
+        if (lowerUrl == null || lowerUrl.isBlank()) return null;
+
+        Matcher tpsMatcher = ALIBABA_TPS_SIZE_PATTERN.matcher(lowerUrl);
+        if (tpsMatcher.find()) {
+            return new int[]{parsePositiveInt(tpsMatcher.group(1)), parsePositiveInt(tpsMatcher.group(2))};
+        }
+
+        Matcher trailingMatcher = TRAILING_IMAGE_SIZE_PATTERN.matcher(lowerUrl);
+        if (trailingMatcher.find()) {
+            return new int[]{parsePositiveInt(trailingMatcher.group(1)), parsePositiveInt(trailingMatcher.group(2))};
+        }
+
+        return null;
+    }
+
+    private int parsePositiveInt(String value) {
+        if (value == null || value.isBlank()) return -1;
+        try {
+            return Integer.parseInt(value);
+        } catch (Exception ignored) {
+            return -1;
+        }
     }
 
     private String normalizeImageUrl(String u) {
@@ -1321,26 +1496,9 @@ public class Alibaba1688HtmlParser {
 
         if (!isCleanHttpImageUrlCandidate(s)) return null;
 
-        int q = s.indexOf('?');
-        if (q > 0) s = s.substring(0, q);
-        int h = s.indexOf('#');
-        if (h > 0) s = s.substring(0, h);
-
-        s = collapseAlibabaImageVariant(s);
-        if (s == null || s.isBlank()) return null;
-
-        String lower = s.toLowerCase(Locale.ROOT);
-        int end = firstImageExtEndIndex(lower);
-        if (end < 0) return null;
-        if (end != s.length()) return null;
+        String base = stripUrlQueryAndFragment(s);
+        if (!isRecognizableImageUrlBase(base)) return null;
         return s;
-    }
-
-    private String collapseAlibabaImageVariant(String url) {
-        if (url == null || url.isBlank()) return url;
-        Matcher matcher = ALIBABA_IMAGE_VARIANT_PATTERN.matcher(url);
-        if (!matcher.find()) return url;
-        return matcher.replaceFirst("$1$2");
     }
 
     private boolean isCleanHttpImageUrlCandidate(String value) {
@@ -1359,6 +1517,31 @@ public class Alibaba1688HtmlParser {
         int firstHttp = lower.indexOf("http");
         int nextHttp = lower.indexOf("http", firstHttp + 4);
         return nextHttp < 0;
+    }
+
+    private String stripUrlQueryAndFragment(String value) {
+        if (value == null || value.isBlank()) return value;
+        String base = value;
+        int q = base.indexOf('?');
+        if (q > 0) {
+            base = base.substring(0, q);
+        }
+        int h = base.indexOf('#');
+        if (h > 0) {
+            base = base.substring(0, h);
+        }
+        return base;
+    }
+
+    private boolean isRecognizableImageUrlBase(String value) {
+        if (value == null || value.isBlank()) return false;
+        String lower = value.toLowerCase(Locale.ROOT);
+        int end = firstImageExtEndIndex(lower);
+        if (end < 0) return false;
+        if (end == value.length()) {
+            return true;
+        }
+        return lower.matches(".*\\.(?:jpg|jpeg|png|webp|gif)(?:[_.][^/?#]*)?\\.(?:jpg|jpeg|png|webp|gif)$");
     }
 
     private int firstImageExtEndIndex(String lowerUrl) {
@@ -1410,6 +1593,7 @@ public class Alibaba1688HtmlParser {
     private void collectImages(Elements imgs, Set<String> out) {
         if (imgs == null || imgs.isEmpty() || out == null) return;
         for (Element img : imgs) {
+            if (isInsideExcludedDetailContainer(img)) continue;
             String u = normalizeImageUrl(normalizeUrl(pickImgUrl(img)));
             if (u != null && isImageUrl(u)) {
                 out.add(u);
@@ -1430,6 +1614,7 @@ public class Alibaba1688HtmlParser {
             if (s.isEmpty()) continue;
             if (!s.contains("<img") && !s.contains("IMG")) continue;
             Document sub = Jsoup.parseBodyFragment(s);
+            removeExcludedDetailNodes(sub);
             collectImages(sub.select("img"), out);
             if (!out.isEmpty()) return;
         }
@@ -1631,6 +1816,145 @@ public class Alibaba1688HtmlParser {
         return map;
     }
 
+    private CategoryInfo extractCategory(String html, Document doc) {
+        CategoryInfo merged = new CategoryInfo();
+        applyCategoryInfo(merged, extractCategoryFromWindowContext(html));
+        applyCategoryInfo(merged, extractCategory(doc));
+
+        if (merged.leafCategoryName == null) {
+            merged.leafCategoryName = firstNonBlank(merged.productCategory, merged.originalCategory);
+        }
+        if (merged.productCategory == null) {
+            merged.productCategory = merged.leafCategoryName;
+        }
+        if (merged.originalCategory == null) {
+            merged.originalCategory = firstNonBlank(merged.productCategory, merged.leafCategoryName);
+        }
+        if (merged.leafCategoryId == null) {
+            merged.leafCategoryId = merged.postCategoryId;
+        }
+        if (merged.postCategoryId == null) {
+            merged.postCategoryId = merged.leafCategoryId;
+        }
+        return merged;
+    }
+
+    private void applyCategoryInfo(CategoryInfo target, CategoryInfo source) {
+        if (target == null || source == null) {
+            return;
+        }
+        target.productCategory = firstNonBlank(target.productCategory, normalizeCategoryText(source.productCategory));
+        target.originalCategory = firstNonBlank(target.originalCategory, normalizeCategoryText(source.originalCategory));
+        target.leafCategoryName = firstNonBlank(target.leafCategoryName, normalizeCategoryText(source.leafCategoryName));
+        target.leafCategoryId = firstNonBlank(target.leafCategoryId, trimToNull(source.leafCategoryId));
+        target.postCategoryId = firstNonBlank(target.postCategoryId, trimToNull(source.postCategoryId));
+        target.secondCategoryId = firstNonBlank(target.secondCategoryId, trimToNull(source.secondCategoryId));
+        target.topCategoryId = firstNonBlank(target.topCategoryId, trimToNull(source.topCategoryId));
+    }
+
+    private CategoryInfo extractCategoryFromWindowContext(String html) {
+        String json = extractWindowContextJson(html);
+        if (json == null || json.isBlank()) {
+            return null;
+        }
+
+        json = quoteNumericObjectKeys(json);
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> root = objectMapper.readValue(json, Map.class);
+            if (root == null || root.isEmpty()) {
+                return null;
+            }
+
+            CategoryInfo info = new CategoryInfo();
+            info.leafCategoryName = normalizeCategoryText(findFirstStringByKeys(root,
+                    "leafCategoryName", "leafCategoryText", "categoryName", "postCategoryName"));
+            info.leafCategoryId = findFirstIdByKeys(root, "leafCategoryId");
+            info.postCategoryId = findFirstIdByKeys(root, "postCategoryId");
+            info.secondCategoryId = findFirstIdByKeys(root, "secondCategoryId");
+            info.topCategoryId = findFirstIdByKeys(root, "topCategoryId");
+
+            String fullCategoryPath = normalizeCategoryText(findFirstStringByKeys(root,
+                    "fullCategoryName", "categoryPath", "categoryFullPath", "categoryPathName"));
+            info.productCategory = firstNonBlank(info.leafCategoryName, fullCategoryPath);
+            info.originalCategory = firstNonBlank(fullCategoryPath, info.leafCategoryName);
+
+            if (info.productCategory == null
+                    && info.originalCategory == null
+                    && info.leafCategoryId == null
+                    && info.postCategoryId == null
+                    && info.secondCategoryId == null
+                    && info.topCategoryId == null) {
+                return null;
+            }
+            return info;
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private String findFirstStringByKeys(Object root, String... keys) {
+        Object value = findFirstValueByKeys(root, Set.of(keys));
+        return normalizeCategoryText(asString(value));
+    }
+
+    private String findFirstIdByKeys(Object root, String... keys) {
+        Object value = findFirstValueByKeys(root, Set.of(keys));
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Number number) {
+            return String.valueOf(number.longValue());
+        }
+        return trimToNull(String.valueOf(value));
+    }
+
+    private Object findFirstValueByKeys(Object node, Set<String> keys) {
+        if (node == null || keys == null || keys.isEmpty()) {
+            return null;
+        }
+        if (node instanceof Map<?, ?> map) {
+            for (String key : keys) {
+                if (map.containsKey(key)) {
+                    Object direct = map.get(key);
+                    if (direct != null && !(direct instanceof Map<?, ?>) && !(direct instanceof List<?>)
+                            && !String.valueOf(direct).isBlank()) {
+                        return direct;
+                    }
+                }
+            }
+            for (Object value : map.values()) {
+                Object nested = findFirstValueByKeys(value, keys);
+                if (nested != null) {
+                    return nested;
+                }
+            }
+            return null;
+        }
+        if (node instanceof List<?> list) {
+            for (Object item : list) {
+                Object nested = findFirstValueByKeys(item, keys);
+                if (nested != null) {
+                    return nested;
+                }
+            }
+        }
+        return null;
+    }
+
+    private String normalizeCategoryText(String value) {
+        String normalized = trimToNull(decodeHtmlEntities(value));
+        if (normalized == null) {
+            return null;
+        }
+        return normalized
+                .replace('\u00A0', ' ')
+                .replace("&gt;", ">")
+                .replace(" > ", ">")
+                .replaceAll("\\s+", " ")
+                .trim();
+    }
+
     private CategoryInfo extractCategory(Document doc) {
         CategoryInfo info = new CategoryInfo();
 
@@ -1656,10 +1980,7 @@ public class Alibaba1688HtmlParser {
 
             String tooltip = textOrNull(categoryLine.selectFirst(".goods-operation-tooltip"));
             if (tooltip != null) {
-                tooltip = tooltip.replace("\u00A0", " ").trim();
-                info.originalCategory = tooltip.replace(" > ", ">"
-                ).replace("&gt;", ">"
-                );
+                info.originalCategory = normalizeCategoryText(tooltip);
             }
         }
 
@@ -1669,6 +1990,7 @@ public class Alibaba1688HtmlParser {
         if (info.productCategory == null || info.productCategory.isBlank()) {
             info.productCategory = info.originalCategory;
         }
+        info.leafCategoryName = info.productCategory;
         return info;
     }
 
@@ -1696,13 +2018,9 @@ public class Alibaba1688HtmlParser {
     }
 
     private BigDecimal extractServiceScore(Document doc) {
-        String text = textOrNull(first(doc, "#shopNavigation"));
-        if (text == null) return null;
-        Matcher m = Pattern.compile("服务\\s*([0-9]+(?:\\.[0-9]+)?)分").matcher(text);
-        if (m.find()) {
-            return parseBigDecimal(m.group(1));
-        }
-        return null;
+        return extractDecimalMetric(doc,
+                "店铺服务分",
+                Pattern.compile("服务\\s*([0-9]+(?:\\.[0-9]+)?)\\s*分"));
     }
 
     private BigDecimal extractRatingScore(Document doc) {
@@ -1740,13 +2058,141 @@ public class Alibaba1688HtmlParser {
     }
 
     private BigDecimal extractRepeatCustomerRate(Document doc) {
-        String text = textOrNull(first(doc, "#shopNavigation"));
-        if (text == null) return null;
-        Matcher m = Pattern.compile("回头率\\s*([0-9]+(?:\\.[0-9]+)?)%").matcher(text);
-        if (m.find()) {
-            return parseBigDecimal(m.group(1));
+        return extractDecimalMetric(doc,
+                "店铺回头率",
+                Pattern.compile("回头率\\s*([0-9]+(?:\\.[0-9]+)?)%"));
+    }
+
+    private BigDecimal extractOnTimeDeliveryRate(Document doc) {
+        return extractDecimalMetric(doc,
+                "准时发货率",
+                Pattern.compile("准时发货率\\s*([0-9]+(?:\\.[0-9]+)?)%"));
+    }
+
+    private BigDecimal extractShopPositiveRate(Document doc) {
+        return extractDecimalMetric(doc,
+                "店铺好评率",
+                Pattern.compile("店铺好评率\\s*([0-9]+(?:\\.[0-9]+)?)%"));
+    }
+
+    private Boolean extractPowerSeller(Document doc) {
+        if (doc == null) {
+            return null;
+        }
+        if (!doc.select("workbench-i18n[name=power_seller], .sellerCenterTitle workbench-i18n[name=power_seller]").isEmpty()) {
+            return Boolean.TRUE;
+        }
+        String wholeHtml = doc.html();
+        if (wholeHtml != null && (wholeHtml.contains("name=\"power_seller\"") || wholeHtml.contains("实力商家"))) {
+            return Boolean.TRUE;
+        }
+        Element shopNavigation = first(doc, "#shopNavigation");
+        if (shopNavigation == null) {
+            return null;
+        }
+        if (first(shopNavigation, "workbench-i18n[name=power_seller]") != null) {
+            return Boolean.TRUE;
+        }
+        String html = shopNavigation.html();
+        if (html != null && (html.contains("power_seller") || html.contains("实力商家"))) {
+            return Boolean.TRUE;
+        }
+        String text = normalizeShopNavigationText(shopNavigation);
+        if (text == null) {
+            return null;
+        }
+        return text.contains("实力商家");
+    }
+
+    private String extractSettledYearsText(Document doc) {
+        Element explicit = first(doc, "#shopNavigation .shop-tp-year");
+        String text = trimToNull(textOrNull(explicit));
+        if (text != null) {
+            return text;
+        }
+        String shopText = normalizeShopNavigationText(first(doc, "#shopNavigation"));
+        return extractFirstGroup(shopText, Pattern.compile("(入驻\\s*\\d+\\s*年|成立\\s*\\d+\\s*年|新会员入驻)"));
+    }
+
+    private String extractMainBusiness(Document doc) {
+        String text = trimToNull(textOrNull(first(doc, "#shopNavigation .shop-category-name")));
+        if (text != null) {
+            return stripMainBusinessPrefix(text);
+        }
+        String shopText = normalizeShopNavigationText(first(doc, "#shopNavigation"));
+        String matched = extractFirstGroup(shopText,
+                Pattern.compile("主营[:：]\\s*(.+?)(?:店铺回头率|店铺服务分|准时发货率|店铺好评率|$)"));
+        return stripMainBusinessPrefix(matched);
+    }
+
+    private BigDecimal extractDecimalMetric(Document doc, String label, Pattern fallbackPattern) {
+        String value = extractShopMetricValue(doc, label);
+        BigDecimal parsed = extractLeadingDecimal(value);
+        if (parsed != null) {
+            return parsed;
+        }
+        String shopText = normalizeShopNavigationText(first(doc, "#shopNavigation"));
+        return parseBigDecimal(extractFirstGroup(shopText, fallbackPattern));
+    }
+
+    private String extractShopMetricValue(Document doc, String label) {
+        if (doc == null || label == null || label.isBlank()) {
+            return null;
+        }
+        for (Element item : doc.select("#shopNavigation .shop-data-item")) {
+            String currentLabel = trimToNull(textOrNull(first(item, ".shop-data-item-label")));
+            if (!label.equals(currentLabel)) {
+                continue;
+            }
+            String value = trimToNull(textOrNull(first(item, ".shop-data-item-value")));
+            if (value != null) {
+                return value;
+            }
+            return trimToNull(item.ownText());
         }
         return null;
+    }
+
+    private String normalizeShopNavigationText(Element shopNavigation) {
+        String text = textOrNull(shopNavigation);
+        if (text == null) {
+            return null;
+        }
+        return text.replace('\u00A0', ' ').replaceAll("\\s+", " ").trim();
+    }
+
+    private BigDecimal extractLeadingDecimal(String value) {
+        return parseBigDecimal(extractFirstGroup(value, Pattern.compile("([0-9]+(?:\\.[0-9]+)?)")));
+    }
+
+    private String extractFirstGroup(String text, Pattern pattern) {
+        if (text == null || pattern == null) {
+            return null;
+        }
+        Matcher matcher = pattern.matcher(text);
+        if (!matcher.find()) {
+            return null;
+        }
+        return trimToNull(matcher.group(1));
+    }
+
+    private String stripMainBusinessPrefix(String value) {
+        if (value == null) {
+            return null;
+        }
+        String normalized = trimToNull(value.replace('\u00A0', ' '));
+        if (normalized == null) {
+            return null;
+        }
+        return normalized.replaceFirst("^主营[:：]\\s*", "").trim();
+    }
+
+    private String trimToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 
     private String safeTitle(String title) {
@@ -1895,6 +2341,11 @@ public class Alibaba1688HtmlParser {
         private String productMainImage;
         private String productCategory;
         private String originalCategory;
+        private String leafCategoryName;
+        private String leafCategoryId;
+        private String postCategoryId;
+        private String secondCategoryId;
+        private String topCategoryId;
         private String carouselImagesJson;
         private String carouselThumbImagesJson;
         private String carouselVideoUrl;
@@ -1926,6 +2377,11 @@ public class Alibaba1688HtmlParser {
         private Integer collectCount;
         private String annualSales;
         private BigDecimal repeatCustomerRate;
+        private BigDecimal onTimeDeliveryRate;
+        private BigDecimal shopPositiveRate;
+        private Boolean powerSeller;
+        private String settledYearsText;
+        private String mainBusiness;
         private String originalContent;
         private String originalHtml;
         private String productId;
@@ -1965,6 +2421,46 @@ public class Alibaba1688HtmlParser {
 
         public void setOriginalCategory(String originalCategory) {
             this.originalCategory = originalCategory;
+        }
+
+        public String getLeafCategoryName() {
+            return leafCategoryName;
+        }
+
+        public void setLeafCategoryName(String leafCategoryName) {
+            this.leafCategoryName = leafCategoryName;
+        }
+
+        public String getLeafCategoryId() {
+            return leafCategoryId;
+        }
+
+        public void setLeafCategoryId(String leafCategoryId) {
+            this.leafCategoryId = leafCategoryId;
+        }
+
+        public String getPostCategoryId() {
+            return postCategoryId;
+        }
+
+        public void setPostCategoryId(String postCategoryId) {
+            this.postCategoryId = postCategoryId;
+        }
+
+        public String getSecondCategoryId() {
+            return secondCategoryId;
+        }
+
+        public void setSecondCategoryId(String secondCategoryId) {
+            this.secondCategoryId = secondCategoryId;
+        }
+
+        public String getTopCategoryId() {
+            return topCategoryId;
+        }
+
+        public void setTopCategoryId(String topCategoryId) {
+            this.topCategoryId = topCategoryId;
         }
 
         public String getCarouselImagesJson() {
@@ -2215,6 +2711,46 @@ public class Alibaba1688HtmlParser {
             this.repeatCustomerRate = repeatCustomerRate;
         }
 
+        public BigDecimal getOnTimeDeliveryRate() {
+            return onTimeDeliveryRate;
+        }
+
+        public void setOnTimeDeliveryRate(BigDecimal onTimeDeliveryRate) {
+            this.onTimeDeliveryRate = onTimeDeliveryRate;
+        }
+
+        public BigDecimal getShopPositiveRate() {
+            return shopPositiveRate;
+        }
+
+        public void setShopPositiveRate(BigDecimal shopPositiveRate) {
+            this.shopPositiveRate = shopPositiveRate;
+        }
+
+        public Boolean getPowerSeller() {
+            return powerSeller;
+        }
+
+        public void setPowerSeller(Boolean powerSeller) {
+            this.powerSeller = powerSeller;
+        }
+
+        public String getSettledYearsText() {
+            return settledYearsText;
+        }
+
+        public void setSettledYearsText(String settledYearsText) {
+            this.settledYearsText = settledYearsText;
+        }
+
+        public String getMainBusiness() {
+            return mainBusiness;
+        }
+
+        public void setMainBusiness(String mainBusiness) {
+            this.mainBusiness = mainBusiness;
+        }
+
         public String getOriginalContent() {
             return originalContent;
         }
@@ -2286,6 +2822,11 @@ public class Alibaba1688HtmlParser {
     private static class CategoryInfo {
         String productCategory;
         String originalCategory;
+        String leafCategoryName;
+        String leafCategoryId;
+        String postCategoryId;
+        String secondCategoryId;
+        String topCategoryId;
     }
 
     private static class PackagingInfo {

@@ -9,6 +9,7 @@ import com.tminos.productscene.entity.TemuImageMeta;
 import com.tminos.productscene.repository.ProductCollectionRepository;
 import com.tminos.productscene.repository.ProductCollectionTemuSkuRepository;
 import com.tminos.productscene.config.AITemuAttrFillerConfig;
+import com.tminos.productscene.util.TemuTitleSafetySanitizer;
 
 import com.tminos.temu.upin.sdk.v2.category.CategoryApiClient;
 import com.tminos.temu.upin.sdk.v2.category.CategoryAttributesResult;
@@ -59,6 +60,7 @@ public class TemuPublishService {
     private final TemuOpenApiCredentialService temuOpenApiCredentialService;
     private final TemuSizeChartService temuSizeChartService;
     private final TargetShopBindingService targetShopBindingService;
+    private final TemuForbiddenWordSanitizerService forbiddenWordSanitizerService;
 
     public TemuPublishService(ProductCollectionService productCollectionService,
                              ProductCollectionRepository productCollectionRepository,
@@ -74,7 +76,8 @@ public class TemuPublishService {
                              AITemuAttrFillerConfig aiTemuAttrFillerConfig,
                              TemuOpenApiCredentialService temuOpenApiCredentialService,
                              TemuSizeChartService temuSizeChartService,
-                             TargetShopBindingService targetShopBindingService) {
+                             TargetShopBindingService targetShopBindingService,
+                             TemuForbiddenWordSanitizerService forbiddenWordSanitizerService) {
         this.productCollectionService = productCollectionService;
         this.productCollectionRepository = productCollectionRepository;
         this.temuSkuRepository = temuSkuRepository;
@@ -90,6 +93,7 @@ public class TemuPublishService {
         this.temuOpenApiCredentialService = temuOpenApiCredentialService;
         this.temuSizeChartService = temuSizeChartService;
         this.targetShopBindingService = targetShopBindingService;
+        this.forbiddenWordSanitizerService = forbiddenWordSanitizerService;
     }
 
     public TemuPublishDTO.PublishResponse publish(Long spuId) {
@@ -159,10 +163,27 @@ public class TemuPublishService {
             markPublishFailed(pc, runId, "missing temu skus");
             return new TemuPublishDTO.PublishResponse(false, "TEMU SKU 为空，请先做 SKU 转换", runId, null, null, null, warnings);
         }
+        try {
+            TemuForbiddenWordSanitizerService.SanitizeResult sanitizeResult =
+                    forbiddenWordSanitizerService.sanitizeForPublish(pc, temuSkus);
+            if (sanitizeResult != null && sanitizeResult.changed()) {
+                pc = sanitizeResult.product() == null ? pc : sanitizeResult.product();
+                temuSkus = temuSkuRepository.findBySpuIdOrderByIdAsc(spuId);
+                Map<String, Object> data = new LinkedHashMap<>();
+                data.put("count", sanitizeResult.records() == null ? 0 : sanitizeResult.records().size());
+                data.put("records", sanitizeResult.records());
+                publishLogService.data(runId, "FORBIDDEN_WORD", "auto replaced TEMU forbidden words before publish", data);
+                warnings.add("publish auto-replaced TEMU forbidden words");
+            }
+        } catch (Exception e) {
+            publishLogService.warn(runId, "FORBIDDEN_WORD", "forbidden word sanitize failed: " + safeErrMessage(e));
+        }
 
         PublishShopBinding publishShop = resolvePublishShopBinding(pc, runId, warnings);
         if (publishShop == null || !StringUtils.hasText(publishShop.shopId())) {
-            String message = "商品未绑定店铺，请先选择目标店铺后再发布";
+            String message = publishShop != null && publishShop.allShopIds() != null && publishShop.allShopIds().size() > 1
+                    ? "商品绑定了多个店铺，请只保留一个目标店铺后再发布"
+                    : "商品未绑定店铺，请先选择目标店铺后再发布";
             publishLogService.error(runId, "SHOP", message, null);
             publishLogService.finishFailed(runId, message, null, null);
             markPublishFailed(pc, runId, message);
@@ -242,7 +263,7 @@ public class TemuPublishService {
         }
         Map<String, TemuImageMeta> imageMetaCache = temuImageMetaService.getByUrls(allImageUrls);
 
-        String mainImage = normalizeOneStrict(pc.getProductMainImage(), "productMainImage", warnings, runId, imageMetaCache);
+        String mainImage = normalizeOneStrict(pc.getProductMainImage(), "productMainImage", warnings, runId, imageMetaCache, publishShop.shopId());
         if (carousel.isEmpty() && StringUtils.hasText(mainImage)) {
             carousel = List.of(mainImage);
             warnings.add("carouselImages empty, fallback to productMainImage");
@@ -250,14 +271,14 @@ public class TemuPublishService {
         if (!carousel.isEmpty()) {
             List<String> normalized = new ArrayList<>();
             for (int i = 0; i < carousel.size(); i++) {
-                normalized.add(normalizeOneStrict(carousel.get(i), "carouselImages[" + i + "]", warnings, runId, imageMetaCache));
+                normalized.add(normalizeOneStrict(carousel.get(i), "carouselImages[" + i + "]", warnings, runId, imageMetaCache, publishShop.shopId()));
             }
             carousel = normalized;
         }
         if (!detail.isEmpty()) {
             List<String> normalized = new ArrayList<>();
             for (int i = 0; i < detail.size(); i++) {
-                normalized.add(normalizeOneStrict(detail.get(i), "detailImages[" + i + "]", warnings, runId, imageMetaCache));
+                normalized.add(normalizeOneStrict(detail.get(i), "detailImages[" + i + "]", warnings, runId, imageMetaCache, publishShop.shopId()));
             }
             detail = normalized;
         }
@@ -283,7 +304,7 @@ public class TemuPublishService {
         for (ProductCollectionTemuSku sku : temuSkus) {
             if (sku == null) continue;
             if (!StringUtils.hasText(sku.getImage())) continue;
-            String u = normalizeOneStrict(sku.getImage(), "temuSku.image", warnings, runId, imageMetaCache);
+            String u = normalizeOneStrict(sku.getImage(), "temuSku.image", warnings, runId, imageMetaCache, publishShop.shopId());
             if (StringUtils.hasText(u) && !Objects.equals(u, sku.getImage())) {
                 sku.setImage(u);
                 imagesChanged = true;
@@ -367,12 +388,12 @@ public class TemuPublishService {
         )));
         req.setProductWarehouseRouteReq(routeReq);
 
-        // origin + outer url
+        // Keep source link blank to avoid exposing the 1688 reference URL to TEMU.
         AddGloGoodsRequest.ProductOrigin origin = new AddGloGoodsRequest.ProductOrigin();
         origin.setRegion1ShortName(originRegion1);
         origin.setRegion2Id(originRegion2Id);
         AddGloGoodsRequest.ProductWhExtAttrReq whExt = new AddGloGoodsRequest.ProductWhExtAttrReq();
-        whExt.setOuterGoodsUrl(pc.getProductUrl());
+        whExt.setOuterGoodsUrl("");
         whExt.setProductOrigin(origin);
         req.setProductWhExtAttrReq(whExt);
 
@@ -639,7 +660,7 @@ public class TemuPublishService {
         }
         Map<String, TemuImageMeta> imageMetaCache = temuImageMetaService.getByUrls(allImageUrls);
 
-        String mainImage = normalizeOneStrict(pc.getProductMainImage(), "productMainImage", warnings, runId, imageMetaCache);
+        String mainImage = normalizeOneStrict(pc.getProductMainImage(), "productMainImage", warnings, runId, imageMetaCache, publishShopId);
         if (carousel.isEmpty() && StringUtils.hasText(mainImage)) {
             carousel = List.of(mainImage);
             warnings.add("carouselImages empty, fallback to productMainImage");
@@ -647,14 +668,14 @@ public class TemuPublishService {
         if (!carousel.isEmpty()) {
             List<String> normalized = new ArrayList<>();
             for (int i = 0; i < carousel.size(); i++) {
-                normalized.add(normalizeOneStrict(carousel.get(i), "carouselImages[" + i + "]", warnings, runId, imageMetaCache));
+                normalized.add(normalizeOneStrict(carousel.get(i), "carouselImages[" + i + "]", warnings, runId, imageMetaCache, publishShopId));
             }
             carousel = normalized;
         }
         if (!detail.isEmpty()) {
             List<String> normalized = new ArrayList<>();
             for (int i = 0; i < detail.size(); i++) {
-                normalized.add(normalizeOneStrict(detail.get(i), "detailImages[" + i + "]", warnings, runId, imageMetaCache));
+                normalized.add(normalizeOneStrict(detail.get(i), "detailImages[" + i + "]", warnings, runId, imageMetaCache, publishShopId));
             }
             detail = normalized;
         }
@@ -678,7 +699,7 @@ public class TemuPublishService {
             if (sku == null || !StringUtils.hasText(sku.getImage())) {
                 continue;
             }
-            String normalized = normalizeOneStrict(sku.getImage(), "temuSku.image", warnings, runId, imageMetaCache);
+            String normalized = normalizeOneStrict(sku.getImage(), "temuSku.image", warnings, runId, imageMetaCache, publishShopId);
             if (StringUtils.hasText(normalized) && !Objects.equals(normalized, sku.getImage())) {
                 sku.setImage(normalized);
                 imagesChanged = true;
@@ -753,7 +774,7 @@ public class TemuPublishService {
         origin.setRegion1ShortName(originRegion1);
         origin.setRegion2Id(originRegion2Id);
         AddGloGoodsRequest.ProductWhExtAttrReq whExt = new AddGloGoodsRequest.ProductWhExtAttrReq();
-        whExt.setOuterGoodsUrl(pc.getProductUrl());
+        whExt.setOuterGoodsUrl("");
         whExt.setProductOrigin(origin);
         req.setProductWhExtAttrReq(whExt);
 
@@ -1095,14 +1116,18 @@ public class TemuPublishService {
     }
 
     private String normalizeOneStrict(String url, String name, List<String> warnings, Long runId) {
-        return normalizeOneInternal(url, name, warnings, runId, true, null);
+        return normalizeOneInternal(url, name, warnings, runId, true, null, null);
     }
 
     private String normalizeOneStrict(String url, String name, List<String> warnings, Long runId, Map<String, TemuImageMeta> metaCache) {
-        return normalizeOneInternal(url, name, warnings, runId, true, metaCache);
+        return normalizeOneInternal(url, name, warnings, runId, true, metaCache, null);
     }
 
-    private String normalizeOneInternal(String url, String name, List<String> warnings, Long runId, boolean strict, Map<String, TemuImageMeta> metaCache) {
+    private String normalizeOneStrict(String url, String name, List<String> warnings, Long runId, Map<String, TemuImageMeta> metaCache, String shopId) {
+        return normalizeOneInternal(url, name, warnings, runId, true, metaCache, shopId);
+    }
+
+    private String normalizeOneInternal(String url, String name, List<String> warnings, Long runId, boolean strict, Map<String, TemuImageMeta> metaCache, String shopId) {
         if (!StringUtils.hasText(url)) return null;
         String input = url.trim();
 
@@ -1123,7 +1148,7 @@ public class TemuPublishService {
         }
 
         try {
-            TemuImageNormalizeService.Result r = imageNormalizeService.normalizeToTemu800(input);
+            TemuImageNormalizeService.Result r = imageNormalizeService.normalizeToTemu800(input, shopId);
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("original", input);
             data.put("uploaded", (r == null ? null : r.getUploadedUrl()));
@@ -1211,6 +1236,12 @@ public class TemuPublishService {
         if (shopIds.isEmpty()) {
             publishLogService.warn(runId, "SHOP", "product has no bound target shop");
             return null;
+        }
+        if (shopIds.size() > 1) {
+            String warning = "商品绑定了多个店铺，发布前必须只保留一个目标店铺";
+            warnings.add(warning);
+            publishLogService.error(runId, "SHOP", warning, null);
+            return new PublishShopBinding(null, null, List.copyOf(shopIds), parseJsonStringList(pc.getTargetShopNames()));
         }
 
         List<String> shopNames;
@@ -2719,6 +2750,7 @@ public class TemuPublishService {
         sku.setSiteSupplierPrices(new ArrayList<>(List.of(
                 new AddGloGoodsRequest.ProductSkuReq.SiteSupplierPrice(siteId, priceToCents(finalPrice))
         )));
+        sku.setProductSkuUsSuggestedPriceReq(null);
 
         Integer stock = toInt(originRow == null ? null : originRow.get("stock"));
         int publishStock = normalizePublishStock(stock, defaultStock, maxStock);
@@ -4472,8 +4504,9 @@ public class TemuPublishService {
     private String sanitizeEnglishName(String s, List<String> warnings) {
         if (!StringUtils.hasText(s)) return s;
         String input = s.trim();
+        String safeInput = TemuTitleSafetySanitizer.removeUnsupportedPreciousMetalWords(input);
         // Keep the title conservative so TEMU's punctuation validator will accept it.
-        String cleaned = input
+        String cleaned = safeInput
                 .replaceAll("[^\\x00-\\x7F]", " ")
                 .replaceAll("[\\(\\)\\[\\]\\{\\}/_%+]", " ")
                 .replaceAll("(\\d)\\.(\\d)", "$1 $2")
@@ -4491,6 +4524,9 @@ public class TemuPublishService {
         }
         if (!cleaned.equals(input)) {
             if (warnings != null) warnings.add("english name sanitized");
+        }
+        if (!safeInput.equals(input) && warnings != null) {
+            warnings.add("unsupported precious metal title words removed");
         }
         // Conservative length cap
         if (cleaned.length() > 200) {

@@ -151,6 +151,9 @@ function syncScopeLabel(scope?: string | null) {
   if (scope === 'LAST_WEEK') {
     return '最近一周';
   }
+  if (scope === 'LAST_MONTH') {
+    return '最近一个月';
+  }
   if (scope === 'LAST_YEAR') {
     return '最近一年';
   }
@@ -835,10 +838,11 @@ const SyncTasksPage = () => {
                   <Typography.Text strong>商品同步方案</Typography.Text>
                   <Radio.Group value={goodsSyncMode} onChange={(event) => setGoodsSyncMode(event.target.value)}>
                     <Radio.Button value="LAST_WEEK">最近一周</Radio.Button>
+                    <Radio.Button value="LAST_MONTH">最近一个月</Radio.Button>
                     <Radio.Button value="LAST_YEAR">最近一年</Radio.Button>
                   </Radio.Group>
                   <Typography.Text type="secondary">
-                    最近一周用于增量更新；最近一年仅用于手动初始化，后台会按周拆分并在每周内继续分页拉取。
+                    最近一周用于增量更新；最近一个月适合补近期数据；最近一年仅用于手动初始化，后台会按周拆分并在每周内继续分页拉取。
                   </Typography.Text>
                 </Space>
               </div>

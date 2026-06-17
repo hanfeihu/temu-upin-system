@@ -97,4 +97,36 @@ public class ChannelDTO {
         private String message;
         private Long durationMs;
     }
+
+    @Getter
+    @Setter
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @Builder
+    public static class BusinessConfigRequest {
+        private String businessName;
+        private String businessCode;
+        private Long channelId;
+        private Boolean enabled;
+        private String description;
+    }
+
+    @Getter
+    @Setter
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @Builder
+    public static class BusinessConfigResponse {
+        private Long id;
+        private String businessName;
+        private String businessCode;
+        private Long channelId;
+        private String channelName;
+        private String channelModel;
+        private String channelBaseUrl;
+        private Boolean enabled;
+        private String description;
+        private String createdAt;
+        private String updatedAt;
+    }
 }

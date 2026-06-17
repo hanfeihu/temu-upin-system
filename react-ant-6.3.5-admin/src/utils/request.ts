@@ -5,6 +5,7 @@ import type { ApiResponse } from '@/types/api';
 const TOKEN_KEY = 'temu-upin-auth-token';
 const USER_KEY = 'temu-upin-auth-user';
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api';
+const ROUTER_BASENAME = (import.meta.env.VITE_ROUTER_BASENAME || '').replace(/\/$/, '');
 
 export function getToken() {
   return localStorage.getItem(TOKEN_KEY) || '';
@@ -41,8 +42,9 @@ instance.interceptors.response.use(
   (error) => {
     if (error.response?.status === 401) {
       clearAuthStorage();
-      if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
-        window.location.replace('/login');
+      const loginPath = `${ROUTER_BASENAME}/login`;
+      if (typeof window !== 'undefined' && window.location.pathname !== loginPath) {
+        window.location.replace(loginPath);
       }
     }
 
@@ -55,7 +57,10 @@ async function unwrapResponse<T>(promise: Promise<AxiosResponse<ApiResponse<T>>>
   const response = await promise;
   const res = response.data;
   if (res && typeof res.success === 'boolean' && res.success === false) {
-    throw new Error(res.message || '请求失败');
+    const error = new Error(res.message || '请求失败') as Error & { data?: T; response?: ApiResponse<T> };
+    error.data = res.data;
+    error.response = res;
+    throw error;
   }
   return res;
 }

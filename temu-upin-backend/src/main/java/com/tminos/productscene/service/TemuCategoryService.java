@@ -31,15 +31,25 @@ public class TemuCategoryService {
     private final TemuOpenApiCredentialService temuOpenApiCredentialService;
 
     public TemuCategoryDTO.MatchCategoryResponse matchCategory(String title) {
+        return matchCategory(title, null);
+    }
+
+    public TemuCategoryDTO.MatchCategoryResponse matchCategory(String title, String shopId) {
         if (title == null || title.isBlank()) {
             return TemuCategoryDTO.MatchCategoryResponse.builder()
                     .success(false)
                     .errorMsg("title is required")
                     .build();
         }
+        if (!StringUtils.hasText(shopId)) {
+            return TemuCategoryDTO.MatchCategoryResponse.builder()
+                    .success(false)
+                    .errorMsg("shopId is required for TEMU category match")
+                    .build();
+        }
 
         try {
-            TemuOpenApiCredentials creds = temuOpenApiCredentialService.getDefaultTemuOpenApiCredentialsOrThrow();
+            TemuOpenApiCredentials creds = temuOpenApiCredentialService.getTemuOpenApiCredentialsByShopIdOrThrow(shopId);
             CategoryApiClient client = new CategoryApiClient(creds);
             String raw = client.matchCategory(title.trim());
             JsonNode root = objectMapper.readTree(raw);
@@ -84,18 +94,53 @@ public class TemuCategoryService {
     }
 
     public CategoryAttributesFetchResult fetchCategoryAttributesRaw(String leafCatId) {
+        return new CategoryAttributesFetchResult(null, "shopId is required for TEMU category attributes");
+    }
+
+    public CategoryAttributesFetchResult fetchCategoryAttributesRaw(String leafCatId, String shopId) {
         if (leafCatId == null || leafCatId.isBlank()) {
             return new CategoryAttributesFetchResult(null, "leafCatId is blank");
         }
+        if (!StringUtils.hasText(shopId)) {
+            return new CategoryAttributesFetchResult(null, "shopId is required for TEMU category attributes");
+        }
         try {
-            TemuOpenApiCredentials creds = temuOpenApiCredentialService.getDefaultTemuOpenApiCredentialsOrThrow();
+            TemuOpenApiCredentials creds = temuOpenApiCredentialService.getTemuOpenApiCredentialsByShopIdOrThrow(shopId);
             CategoryApiClient client = new CategoryApiClient(creds);
             String raw = client.getCategoryAttributes(Integer.valueOf(leafCatId.trim()));
+            String validationError = validateCategoryAttributesRaw(raw);
+            if (StringUtils.hasText(validationError)) {
+                return new CategoryAttributesFetchResult(null, validationError);
+            }
             return new CategoryAttributesFetchResult(raw, null);
         } catch (Exception e) {
             String error = StringUtils.hasText(e.getMessage()) ? e.getClass().getSimpleName() + ": " + e.getMessage() : e.getClass().getSimpleName();
-            log.warn("fetchCategoryAttributesRaw failed leafCatId={} error={}", leafCatId, error);
+            log.warn("fetchCategoryAttributesRaw failed leafCatId={} shopId={} error={}", leafCatId, shopId, error);
             return new CategoryAttributesFetchResult(null, error);
+        }
+    }
+
+    private String validateCategoryAttributesRaw(String raw) {
+        if (!StringUtils.hasText(raw)) {
+            return "TEMU category attributes response is empty";
+        }
+        try {
+            JsonNode root = objectMapper.readTree(raw);
+            if (root.has("success") && !root.path("success").asBoolean(false)) {
+                String errorCode = root.hasNonNull("errorCode") ? root.path("errorCode").asText() : null;
+                String errorMsg = text(root, "errorMsg");
+                String requestId = text(root, "requestId");
+                return "TEMU category attributes failed"
+                        + (StringUtils.hasText(errorCode) ? ": errorCode=" + errorCode : "")
+                        + (StringUtils.hasText(errorMsg) ? ", errorMsg=" + errorMsg : "")
+                        + (StringUtils.hasText(requestId) ? ", requestId=" + requestId : "");
+            }
+            if (!root.path("result").path("properties").isArray()) {
+                return "TEMU category attributes missing result.properties";
+            }
+            return null;
+        } catch (Exception e) {
+            return "TEMU category attributes response parse failed: " + e.getMessage();
         }
     }
 

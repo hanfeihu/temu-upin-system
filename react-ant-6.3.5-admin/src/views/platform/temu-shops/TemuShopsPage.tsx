@@ -38,6 +38,7 @@ const initialEditForm: TemuShopPayload & { id: number | null } = {
   token: '',
   orderToken: '',
   dianxiaomiCookie: '',
+  dianxiaomiShopId: '',
   appId: null,
   orderAppId: null,
   enabled: true,
@@ -191,6 +192,7 @@ const TemuShopsPage = () => {
       token: '',
       orderToken: '',
       dianxiaomiCookie: '',
+      dianxiaomiShopId: record.dianxiaomiShopId || '',
       appId: record.productAppId,
       orderAppId: record.orderAppId ?? null,
       enabled: !!record.enabled,
@@ -240,6 +242,7 @@ const TemuShopsPage = () => {
         token: editForm.token?.trim() || undefined,
         orderToken: editForm.orderToken?.trim() || undefined,
         dianxiaomiCookie: editForm.dianxiaomiCookie?.trim() || undefined,
+        dianxiaomiShopId: editForm.dianxiaomiShopId?.trim() || undefined,
         appId: editForm.appId,
         orderAppId: editForm.orderAppId ?? undefined,
         enabled: !!editForm.enabled,
@@ -331,7 +334,7 @@ const TemuShopsPage = () => {
       render: (_, record) => (
         <Space direction="vertical" size={2}>
           <Typography.Text>{record.dianxiaomiCookieMasked ? '已配置 Cookie' : '未配置'}</Typography.Text>
-          <Typography.Text type="secondary">PO 查询包裹号</Typography.Text>
+          <Typography.Text type="secondary">店铺ID：{record.dianxiaomiShopId || '-'}</Typography.Text>
         </Space>
       ),
     },
@@ -479,6 +482,14 @@ const TemuShopsPage = () => {
               value={editForm.dianxiaomiCookie}
               onChange={(event) => updateForm('dianxiaomiCookie', event.target.value)}
               placeholder="登录店小秘后，将整段 cookie 粘贴到这里；留空则不启用 PO -> 店小秘单号自动查询"
+              autoComplete="off"
+            />
+          </Form.Item>
+          <Form.Item label="店小秘店铺ID" extra="配置后会按这个店小秘 shopId 拉取订单；为空则跳过店小秘订单同步。">
+            <Input
+              value={editForm.dianxiaomiShopId}
+              onChange={(event) => updateForm('dianxiaomiShopId', event.target.value)}
+              placeholder="例如：8244765"
               autoComplete="off"
             />
           </Form.Item>

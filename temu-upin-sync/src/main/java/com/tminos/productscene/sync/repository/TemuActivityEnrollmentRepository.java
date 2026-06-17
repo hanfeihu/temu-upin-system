@@ -16,6 +16,22 @@ public interface TemuActivityEnrollmentRepository extends JpaRepository<TemuActi
 
     Page<TemuActivityEnrollment> findByShopId(String shopId, Pageable pageable);
 
+    Page<TemuActivityEnrollment> findByShopIdAndProductIdIn(String shopId, List<Long> productIds, Pageable pageable);
+
+    Page<TemuActivityEnrollment> findByShopIdAndProductIdInAndActivityType(String shopId, List<Long> productIds, Integer activityType, Pageable pageable);
+
+    Page<TemuActivityEnrollment> findByShopIdAndProductIdInAndEnrollStatus(String shopId, List<Long> productIds, Integer enrollStatus, Pageable pageable);
+
+    Page<TemuActivityEnrollment> findByShopIdAndProductIdInAndActivityTypeAndEnrollStatus(String shopId, List<Long> productIds, Integer activityType, Integer enrollStatus, Pageable pageable);
+
+    Page<TemuActivityEnrollment> findByShopIdAndProductId(String shopId, Long productId, Pageable pageable);
+
+    Page<TemuActivityEnrollment> findByShopIdAndProductIdAndActivityType(String shopId, Long productId, Integer activityType, Pageable pageable);
+
+    Page<TemuActivityEnrollment> findByShopIdAndProductIdAndEnrollStatus(String shopId, Long productId, Integer enrollStatus, Pageable pageable);
+
+    Page<TemuActivityEnrollment> findByShopIdAndProductIdAndActivityTypeAndEnrollStatus(String shopId, Long productId, Integer activityType, Integer enrollStatus, Pageable pageable);
+
     Page<TemuActivityEnrollment> findByShopIdAndActivityType(String shopId, Integer activityType, Pageable pageable);
 
     Page<TemuActivityEnrollment> findByShopIdAndEnrollStatus(String shopId, Integer enrollStatus, Pageable pageable);

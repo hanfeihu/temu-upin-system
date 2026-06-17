@@ -19,6 +19,11 @@ public class ImageOcrDTO {
         private String productId;
         private Integer imageType;
         private String imageUrl;
+        private Integer imageWidth;
+        private Integer imageHeight;
+        private String imageMd5;
+        private String translateStatus;
+        private String translatedImageUrl;
         private Integer execStatus;
         private String execResult;
         private String failReason;
@@ -44,6 +49,11 @@ public class ImageOcrDTO {
         private Integer imageType;
         @NotBlank
         private String imageUrl;
+        private Integer imageWidth;
+        private Integer imageHeight;
+        private String imageMd5;
+        private String translateStatus;
+        private String translatedImageUrl;
         private Integer execStatus;
         private String execResult;
         private String failReason;
@@ -72,5 +82,29 @@ public class ImageOcrDTO {
         private String ocrText;
         // failure reason (when failed)
         private String failReason;
+    }
+
+    @Getter
+    @Setter
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @Builder
+    public static class BackfillImageSizeResult {
+        private int scanned;
+        private int updated;
+        private int failed;
+        private long remaining;
+    }
+
+    @Getter
+    @Setter
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @Builder
+    public static class DeleteSizeFilteredImagesResult {
+        private int matchedTaskCount;
+        private int deletedTaskCount;
+        private int removedProductImageCount;
+        private int affectedProductCount;
     }
 }

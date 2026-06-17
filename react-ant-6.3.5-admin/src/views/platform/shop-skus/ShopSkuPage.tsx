@@ -4,7 +4,7 @@ import type { ColumnsType, TablePaginationConfig } from 'antd/es/table';
 import { useEffect, useState } from 'react';
 import { syncApi } from '@/api/sync';
 import { temuShopsApi } from '@/api/temuShops';
-import type { ShopSkuItemVO, TemuShopVO } from '@/types/api';
+import type { BatchZeroShopSkuVirtualStockResultVO, ShopSkuItemVO, ShopSkuWarehouseVO, TemuShopVO } from '@/types/api';
 import { loadStoredShopFilter, resolveStoredShopFilter, saveStoredShopFilter } from '@/utils/shopFilter';
 
 const SHOP_FILTER_STORAGE_KEY = 'shop-skus';
@@ -30,6 +30,18 @@ function formatMoney(value?: number | null) {
   return `¥${(value / 100).toFixed(2)}`;
 }
 
+function buildWarehouseOptionLabel(item: ShopSkuWarehouseVO) {
+  const name = item.warehouseName?.trim() || '未命名仓库';
+  const tags: string[] = [];
+  if (item.siteName?.trim()) {
+    tags.push(item.siteName.trim());
+  }
+  if (item.defaultWarehouse) {
+    tags.push('默认仓');
+  }
+  return tags.length ? `${name} ${item.warehouseId}（${tags.join(' / ')}）` : `${name} ${item.warehouseId}`;
+}
+
 function hasDraftValue(drafts: Record<number, number | null>, productSkuId?: number | null) {
   if (!productSkuId) {
     return false;
@@ -49,19 +61,43 @@ function parseNumericKeyword(raw: string, label: string) {
 }
 
 const ShopSkuPage = () => {
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const [shops, setShops] = useState<Array<{ value: string; label: string }>>([]);
   const [shopId, setShopId] = useState<string | undefined>(() => loadStoredShopFilter(SHOP_FILTER_STORAGE_KEY));
+  const [warehouseOptions, setWarehouseOptions] = useState<ShopSkuWarehouseVO[]>([]);
+  const [warehouseLoading, setWarehouseLoading] = useState(false);
   const [productSkcIdKeyword, setProductSkcIdKeyword] = useState('');
   const [productSkuIdKeyword, setProductSkuIdKeyword] = useState('');
   const [skuExtCodeKeyword, setSkuExtCodeKeyword] = useState('');
+  const [virtualStockGtZero, setVirtualStockGtZero] = useState<boolean | undefined>(undefined);
+  const [minSupplierPriceYuan, setMinSupplierPriceYuan] = useState<number | null>(null);
+  const [maxSupplierPriceYuan, setMaxSupplierPriceYuan] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
+  const [batchZeroLoading, setBatchZeroLoading] = useState(false);
   const [rows, setRows] = useState<ShopSkuItemVO[]>([]);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [total, setTotal] = useState(0);
   const [draftPrices, setDraftPrices] = useState<Record<number, number | null>>({});
   const [savingSkuIds, setSavingSkuIds] = useState<Record<number, boolean>>({});
+
+  async function loadWarehouses(nextShopId = shopId) {
+    if (!nextShopId) {
+      setWarehouseOptions([]);
+      return;
+    }
+
+    setWarehouseLoading(true);
+    try {
+      const res = await syncApi.getShopSkuWarehouses(nextShopId);
+      setWarehouseOptions(Array.isArray(res.data) ? res.data : []);
+    } catch (error) {
+      setWarehouseOptions([]);
+      message.error(error instanceof Error ? error.message : '加载仓库失败');
+    } finally {
+      setWarehouseLoading(false);
+    }
+  }
 
   async function loadShops() {
     try {
@@ -74,15 +110,52 @@ const ShopSkuPage = () => {
       const nextShopId = resolveStoredShopFilter(options, shopId);
       if (!nextShopId) {
         setShopId(undefined);
+        setWarehouseOptions([]);
         saveStoredShopFilter(SHOP_FILTER_STORAGE_KEY, undefined);
         return;
       }
       setShopId(nextShopId);
       saveStoredShopFilter(SHOP_FILTER_STORAGE_KEY, nextShopId);
-      await load(1, pageSize, nextShopId, productSkcIdKeyword, productSkuIdKeyword, skuExtCodeKeyword);
+      await Promise.all([
+        load(1, pageSize, nextShopId, productSkcIdKeyword, productSkuIdKeyword, skuExtCodeKeyword, virtualStockGtZero, minSupplierPriceYuan, maxSupplierPriceYuan),
+        loadWarehouses(nextShopId),
+      ]);
     } catch (error) {
       message.error(error instanceof Error ? error.message : '加载店铺失败');
     }
+  }
+
+  function buildQueryFilters(
+    nextProductSkcIdKeyword = productSkcIdKeyword,
+    nextProductSkuIdKeyword = productSkuIdKeyword,
+    nextSkuExtCodeKeyword = skuExtCodeKeyword,
+    nextVirtualStockGtZero = virtualStockGtZero,
+    nextMinSupplierPriceYuan = minSupplierPriceYuan,
+    nextMaxSupplierPriceYuan = maxSupplierPriceYuan,
+  ) {
+    const productSkcId = parseNumericKeyword(nextProductSkcIdKeyword, 'SKC ID');
+    const productSkuId = parseNumericKeyword(nextProductSkuIdKeyword, 'SKUID');
+    const minSupplierPrice = yuanToCents(nextMinSupplierPriceYuan);
+    const maxSupplierPrice = yuanToCents(nextMaxSupplierPriceYuan);
+
+    if (
+      minSupplierPrice !== null &&
+      minSupplierPrice !== undefined &&
+      maxSupplierPrice !== null &&
+      maxSupplierPrice !== undefined &&
+      minSupplierPrice > maxSupplierPrice
+    ) {
+      throw new Error('最低供货价不能大于最高供货价');
+    }
+
+    return {
+      productSkcId,
+      productSkuId,
+      skuExtCode: nextSkuExtCodeKeyword.trim() || undefined,
+      virtualStockGtZero: nextVirtualStockGtZero ? true : undefined,
+      minSupplierPrice: minSupplierPrice ?? undefined,
+      maxSupplierPrice: maxSupplierPrice ?? undefined,
+    };
   }
 
   async function load(
@@ -92,16 +165,24 @@ const ShopSkuPage = () => {
     nextProductSkcIdKeyword = productSkcIdKeyword,
     nextProductSkuIdKeyword = productSkuIdKeyword,
     nextSkuExtCodeKeyword = skuExtCodeKeyword,
+    nextVirtualStockGtZero = virtualStockGtZero,
+    nextMinSupplierPriceYuan = minSupplierPriceYuan,
+    nextMaxSupplierPriceYuan = maxSupplierPriceYuan,
   ) {
     if (!nextShopId) {
       return;
     }
 
-    let productSkcId: number | undefined;
-    let productSkuId: number | undefined;
+    let filters: ReturnType<typeof buildQueryFilters>;
     try {
-      productSkcId = parseNumericKeyword(nextProductSkcIdKeyword, 'SKC ID');
-      productSkuId = parseNumericKeyword(nextProductSkuIdKeyword, 'SKUID');
+      filters = buildQueryFilters(
+        nextProductSkcIdKeyword,
+        nextProductSkuIdKeyword,
+        nextSkuExtCodeKeyword,
+        nextVirtualStockGtZero,
+        nextMinSupplierPriceYuan,
+        nextMaxSupplierPriceYuan,
+      );
     } catch (error) {
       message.error(error instanceof Error ? error.message : '查询条件不正确');
       return;
@@ -111,9 +192,7 @@ const ShopSkuPage = () => {
     try {
       const res = await syncApi.getShopSkuList({
         shopId: nextShopId,
-        productSkcId,
-        productSkuId,
-        skuExtCode: nextSkuExtCodeKeyword.trim() || undefined,
+        ...filters,
         page: nextPage,
         pageSize: nextPageSize,
       });
@@ -125,6 +204,156 @@ const ShopSkuPage = () => {
     } finally {
       setLoading(false);
     }
+  }
+
+  function buildBatchFilterSummary(filters: ReturnType<typeof buildQueryFilters>) {
+    const items: string[] = [];
+    if (filters.productSkcId !== undefined) {
+      items.push(`SKC ID=${filters.productSkcId}`);
+    }
+    if (filters.productSkuId !== undefined) {
+      items.push(`SKUID=${filters.productSkuId}`);
+    }
+    if (filters.skuExtCode) {
+      items.push(`SKU外部编码包含“${filters.skuExtCode}”`);
+    }
+    if (filters.virtualStockGtZero) {
+      items.push('库存>0');
+    }
+    if (filters.minSupplierPrice !== undefined) {
+      items.push(`最低供货价>=${formatMoney(filters.minSupplierPrice)}`);
+    }
+    if (filters.maxSupplierPrice !== undefined) {
+      items.push(`最高供货价<=${formatMoney(filters.maxSupplierPrice)}`);
+    }
+    return items.length ? items.join('；') : '未设置';
+  }
+
+  function showBatchResult(result: BatchZeroShopSkuVirtualStockResultVO, responseMessage?: string) {
+    const messages = Array.isArray(result.messages) ? result.messages.filter(Boolean) : [];
+    modal.info({
+      title: '批量置0结果',
+      width: 720,
+      content: (
+        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+          <Typography.Text>{responseMessage || '批量置0已执行完成'}</Typography.Text>
+          <Typography.Text>
+            命中 {result.matchedCount} 个，成功 {result.updatedCount} 个，已是0 {result.alreadyZeroCount} 个，失败 {result.failedCount} 个
+          </Typography.Text>
+          {messages.length ? (
+            <div
+              style={{
+                maxHeight: 260,
+                overflowY: 'auto',
+                padding: 12,
+                borderRadius: 8,
+                background: '#fafafa',
+                border: '1px solid #f0f0f0',
+              }}
+            >
+              <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                {messages.slice(0, 18).map((item, index) => (
+                  <Typography.Text key={`${index}-${item}`} type={item.includes('失败') ? 'danger' : undefined}>
+                    {item}
+                  </Typography.Text>
+                ))}
+              </Space>
+            </div>
+          ) : null}
+        </Space>
+      ),
+    });
+  }
+
+  async function handleBatchZeroVirtualStock() {
+    if (!shopId) {
+      message.warning('请先选择店铺');
+      return;
+    }
+
+    let filters: ReturnType<typeof buildQueryFilters>;
+    try {
+      filters = buildQueryFilters();
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '筛选条件不正确');
+      return;
+    }
+
+    const hasBatchFilter = Boolean(
+        filters.productSkcId !== undefined ||
+        filters.productSkuId !== undefined ||
+        filters.skuExtCode ||
+        filters.virtualStockGtZero ||
+        filters.minSupplierPrice !== undefined ||
+        filters.maxSupplierPrice !== undefined,
+    );
+    if (!hasBatchFilter) {
+      message.warning('请至少填写一个筛选条件后再批量置0库存');
+      return;
+    }
+    if (warehouseLoading) {
+      message.info('仓库列表加载中，请稍后再试');
+      return;
+    }
+    if (!warehouseOptions.length) {
+      message.warning('当前店铺暂无可用仓库，请先同步仓库数据后再批量置0');
+      return;
+    }
+
+    const warehouseSelectOptions = warehouseOptions.map((item) => ({
+      value: item.warehouseId,
+      label: buildWarehouseOptionLabel(item),
+    }));
+    let selectedWarehouseId: string | undefined;
+
+    modal.confirm({
+      title: '确认批量置0库存',
+      okText: '确认置0',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      content: (
+        <Space direction="vertical" size={8}>
+          <Typography.Paragraph style={{ marginBottom: 0 }}>
+            会对当前筛选命中的店铺 SKU 调用库存接口，并按你选择的仓库把匹配到的库存降到 0。
+          </Typography.Paragraph>
+          <Select
+            showSearch
+            optionFilterProp="label"
+            placeholder="请选择本次批量置0使用的仓库"
+            options={warehouseSelectOptions}
+            style={{ width: '100%' }}
+            onChange={(value) => {
+              selectedWarehouseId = value;
+            }}
+          />
+          <Typography.Text type="secondary">当前筛选条件：{buildBatchFilterSummary(filters)}</Typography.Text>
+          <Typography.Text type="secondary">如果某些 SKU 提示仓库 ID 错误，换成该 SKU 所属仓库后再执行。</Typography.Text>
+          <Typography.Text type="secondary">为了安全起见，这个操作只会处理当前筛选命中的数据，不会只处理当前分页。</Typography.Text>
+        </Space>
+      ),
+      onOk: async () => {
+        if (!selectedWarehouseId) {
+          message.warning('请先选择仓库');
+          return Promise.reject();
+        }
+        setBatchZeroLoading(true);
+        try {
+          const res = await syncApi.batchZeroShopSkuVirtualStock({
+            shopId,
+            ...filters,
+            warehouseId: selectedWarehouseId,
+          });
+          message.success(res.message || '批量置0完成');
+          showBatchResult(res.data, res.message);
+          await load(page, pageSize, shopId, productSkcIdKeyword, productSkuIdKeyword, skuExtCodeKeyword, virtualStockGtZero, minSupplierPriceYuan, maxSupplierPriceYuan);
+        } catch (error) {
+          message.error(error instanceof Error ? error.message : '批量置0失败');
+          throw error;
+        } finally {
+          setBatchZeroLoading(false);
+        }
+      },
+    });
   }
 
   useEffect(() => {
@@ -174,6 +403,15 @@ const ShopSkuPage = () => {
       setSavingSkuIds((current) => ({ ...current, [record.productSkuId as number]: false }));
     }
   }
+
+  const hasBatchFilter = Boolean(
+      productSkcIdKeyword.trim() ||
+      productSkuIdKeyword.trim() ||
+      skuExtCodeKeyword.trim() ||
+      virtualStockGtZero === true ||
+      (minSupplierPriceYuan !== null && minSupplierPriceYuan !== undefined) ||
+      (maxSupplierPriceYuan !== null && maxSupplierPriceYuan !== undefined),
+  );
 
   const columns: ColumnsType<ShopSkuItemVO> = [
     {
@@ -283,7 +521,8 @@ const ShopSkuPage = () => {
               setShopId(value);
               saveStoredShopFilter(SHOP_FILTER_STORAGE_KEY, value);
               setPage(1);
-              void load(1, pageSize, value, productSkcIdKeyword, productSkuIdKeyword, skuExtCodeKeyword);
+              void loadWarehouses(value);
+              void load(1, pageSize, value, productSkcIdKeyword, productSkuIdKeyword, skuExtCodeKeyword, virtualStockGtZero, minSupplierPriceYuan, maxSupplierPriceYuan);
             }}
             placeholder="选择店铺"
             style={{ width: 220 }}
@@ -310,23 +549,62 @@ const ShopSkuPage = () => {
             allowClear
             style={{ width: 220 }}
           />
+          <Select
+            value={virtualStockGtZero}
+            onChange={(value) => setVirtualStockGtZero(value)}
+            placeholder="库存筛选"
+            allowClear
+            style={{ width: 160 }}
+            options={[
+              { value: true, label: '库存大于0' },
+            ]}
+          />
+          <InputNumber
+            min={0}
+            precision={2}
+            controls={false}
+            value={minSupplierPriceYuan ?? undefined}
+            onChange={(value) => setMinSupplierPriceYuan(typeof value === 'number' ? value : null)}
+            placeholder="最低供货价(元)"
+            style={{ width: 180 }}
+          />
+          <InputNumber
+            min={0}
+            precision={2}
+            controls={false}
+            value={maxSupplierPriceYuan ?? undefined}
+            onChange={(value) => setMaxSupplierPriceYuan(typeof value === 'number' ? value : null)}
+            placeholder="最高供货价(元)"
+            style={{ width: 180 }}
+          />
           <Button
             type="primary"
             loading={loading}
             onClick={() => {
               setPage(1);
-              void load(1, pageSize, shopId, productSkcIdKeyword, productSkuIdKeyword, skuExtCodeKeyword);
+              void load(1, pageSize, shopId, productSkcIdKeyword, productSkuIdKeyword, skuExtCodeKeyword, virtualStockGtZero, minSupplierPriceYuan, maxSupplierPriceYuan);
             }}
           >
             查询
+          </Button>
+          <Button
+            danger
+            loading={batchZeroLoading}
+            disabled={!shopId || !hasBatchFilter}
+            onClick={() => void handleBatchZeroVirtualStock()}
+          >
+            批量置0库存
           </Button>
           <Button
             onClick={() => {
               setProductSkcIdKeyword('');
               setProductSkuIdKeyword('');
               setSkuExtCodeKeyword('');
+              setVirtualStockGtZero(undefined);
+              setMinSupplierPriceYuan(null);
+              setMaxSupplierPriceYuan(null);
               setPage(1);
-              void load(1, pageSize, shopId, '', '', '');
+              void load(1, pageSize, shopId, '', '', '', undefined, null, null);
             }}
           >
             重置
@@ -353,7 +631,7 @@ const ShopSkuPage = () => {
             const nextPageSize = pagination.pageSize || 20;
             setPage(nextPage);
             setPageSize(nextPageSize);
-            void load(nextPage, nextPageSize, shopId, productSkcIdKeyword, productSkuIdKeyword, skuExtCodeKeyword);
+            void load(nextPage, nextPageSize, shopId, productSkcIdKeyword, productSkuIdKeyword, skuExtCodeKeyword, virtualStockGtZero, minSupplierPriceYuan, maxSupplierPriceYuan);
           }}
         />
       </Card>

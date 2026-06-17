@@ -23,15 +23,26 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import type { MenuProps, TablePaginationConfig } from 'antd';
 import { useEffect, useState } from 'react';
+import { alibabaImageProxyConfigApi } from '@/api/alibabaImageProxyConfig';
 import { productCollectionsApi } from '@/api/productCollections';
 import { publishLogsApi } from '@/api/publishLogs';
 import { temuShopsApi } from '@/api/temuShops';
-import type { ProductCollectionRow, PublishLogVO, TemuCategoryOption, TemuCategorySummary, TemuShopVO } from '@/types/api';
+import type {
+  AlibabaImageProxyConfigVO,
+  ProductCollectionRow,
+  PublishLogVO,
+  TemuCategoryOption,
+  TemuCategorySummary,
+  TemuShopVO,
+} from '@/types/api';
+import { buildAlibabaImageProxyUrl } from '@/utils/alibabaImageProxy';
 import TemuAttributesModal from './components/TemuAttributesModal';
 import TemuSkuConverterModal from './components/TemuSkuConverterModal';
 
 interface CollectionFilters {
+  id?: number;
   q: string;
+  skuIdKeyword: string;
   sourcePlatform?: string;
   targetShopId?: string;
   collectionStatus?: number;
@@ -55,7 +66,9 @@ interface PublishTipStateItem {
 }
 
 const initialFilters: CollectionFilters = {
+  id: undefined,
   q: '',
+  skuIdKeyword: '',
   sourcePlatform: undefined,
   targetShopId: undefined,
   collectionStatus: undefined,
@@ -198,6 +211,7 @@ const ProductCollectionsPage = () => {
   const [editOpen, setEditOpen] = useState(false);
   const [editingRecord, setEditingRecord] = useState<ProductCollectionRow | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
+  const [editingShopId, setEditingShopId] = useState<string | undefined>();
   const [savingEdit, setSavingEdit] = useState(false);
   const [matchOpen, setMatchOpen] = useState(false);
   const [matchingRecord, setMatchingRecord] = useState<ProductCollectionRow | null>(null);
@@ -209,6 +223,16 @@ const ProductCollectionsPage = () => {
   const [skuConvertOpen, setSkuConvertOpen] = useState(false);
   const [skuConvertRecord, setSkuConvertRecord] = useState<ProductCollectionRow | null>(null);
   const [publishTipState, setPublishTipState] = useState<Record<string, PublishTipStateItem>>({});
+  const [imageProxyConfig, setImageProxyConfig] = useState<AlibabaImageProxyConfigVO | null>(null);
+
+  async function loadImageProxyConfig() {
+    try {
+      const res = await alibabaImageProxyConfigApi.current();
+      setImageProxyConfig(res.data || null);
+    } catch {
+      setImageProxyConfig(null);
+    }
+  }
 
   async function loadTargetShops() {
     setLoadingTargetShops(true);
@@ -254,7 +278,9 @@ const ProductCollectionsPage = () => {
     setLoading(true);
     try {
       const res = await productCollectionsApi.list({
+        id: nextFilters.id,
         q: nextFilters.q || undefined,
+        skuIdKeyword: nextFilters.skuIdKeyword || undefined,
         sourcePlatform: nextFilters.sourcePlatform || undefined,
         targetShopId: nextFilters.targetShopId || undefined,
         collectionStatus: nextFilters.collectionStatus,
@@ -282,6 +308,7 @@ const ProductCollectionsPage = () => {
   }
 
   useEffect(() => {
+    void loadImageProxyConfig();
     void loadTargetShops();
     void loadTemuCategories(initialFilters.showDeleted);
     void fetchList(1, 20, initialFilters);
@@ -350,6 +377,7 @@ const ProductCollectionsPage = () => {
   function openEdit(record: ProductCollectionRow) {
     setEditingRecord(record);
     setEditingTitle(record.productName || '');
+    setEditingShopId(record.targetShopIds?.length === 1 ? record.targetShopIds[0] : undefined);
     setEditOpen(true);
   }
 
@@ -363,10 +391,17 @@ const ProductCollectionsPage = () => {
       message.error('标题不能为空');
       return;
     }
+    if (!editingShopId) {
+      message.error('请选择一个店铺');
+      return;
+    }
 
     setSavingEdit(true);
     try {
-      await productCollectionsApi.update(editingRecord.id, { productName: title });
+      await productCollectionsApi.update(editingRecord.id, {
+        productName: title,
+        targetShopIds: [editingShopId],
+      });
       message.success('已保存');
       setEditOpen(false);
       await fetchList();
@@ -564,12 +599,20 @@ const ProductCollectionsPage = () => {
       dataIndex: 'productMainImage',
       key: 'productMainImage',
       width: 88,
-      render: (value: string | null) =>
-        value ? (
-          <Image src={value} width={64} height={64} style={{ borderRadius: 8, objectFit: 'cover' }} />
+      render: (value: string | null, record) => {
+        const imageUrl = buildAlibabaImageProxyUrl(value, imageProxyConfig);
+        return imageUrl ? (
+          <Image
+            src={imageUrl}
+            width={64}
+            height={64}
+            alt={record.productName || String(record.id)}
+            style={{ borderRadius: 8, objectFit: 'cover' }}
+          />
         ) : (
           <Typography.Text type="secondary">-</Typography.Text>
-        ),
+        );
+      },
     },
     {
       title: '商品',
@@ -620,6 +663,16 @@ const ProductCollectionsPage = () => {
         if (record.ocrStatus === 1) return <Tag color="processing">OCR中</Tag>;
         if (record.ocrStatus === 3) return <Tag color="error">失败</Tag>;
         return <Tag>待OCR</Tag>;
+      },
+    },
+    {
+      title: '中文图片',
+      dataIndex: 'chineseImageCount',
+      key: 'chineseImageCount',
+      width: 100,
+      render: (value: ProductCollectionRow['chineseImageCount']) => {
+        const count = Number(value || 0);
+        return count > 0 ? <Tag color="orange">{count}</Tag> : <Typography.Text type="secondary">0</Typography.Text>;
       },
     },
     {
@@ -705,7 +758,7 @@ const ProductCollectionsPage = () => {
           },
           {
             key: 'edit',
-            label: '编辑标题',
+            label: '编辑商品',
           },
           ...(record.execStatus === 1 || record.execStatus === 3
             ? [
@@ -771,12 +824,36 @@ const ProductCollectionsPage = () => {
       <Card bodyStyle={{ paddingBottom: 18 }}>
         <Form layout="vertical" onFinish={reload}>
           <Row gutter={[16, 8]}>
+            <Col xs={24} md={12} xl={4}>
+              <Form.Item label="ID">
+                <InputNumber
+                  value={filters.id}
+                  min={1}
+                  precision={0}
+                  onChange={(value) => updateFilter('id', value ?? undefined)}
+                  placeholder="商品ID"
+                  style={{ width: '100%' }}
+                  onPressEnter={reload}
+                />
+              </Form.Item>
+            </Col>
             <Col xs={24} md={12} xl={6}>
               <Form.Item label="关键词">
                 <Input
                   value={filters.q}
                   onChange={(event) => updateFilter('q', event.target.value)}
                   placeholder="商品名 / product_id"
+                  allowClear
+                  onPressEnter={reload}
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12} xl={6}>
+              <Form.Item label="SKUID">
+                <Input
+                  value={filters.skuIdKeyword}
+                  onChange={(event) => updateFilter('skuIdKeyword', event.target.value)}
+                  placeholder="模糊搜索 SKU ID"
                   allowClear
                   onPressEnter={reload}
                 />
@@ -900,7 +977,7 @@ const ProductCollectionsPage = () => {
           dataSource={rows}
           loading={loading}
           tableLayout="fixed"
-          scroll={{ x: 1760 }}
+          scroll={{ x: 1860 }}
           pagination={{
             current: page,
             pageSize,
@@ -921,16 +998,30 @@ const ProductCollectionsPage = () => {
 
       <Modal
         open={editOpen}
-        title="编辑标题"
+        title="编辑商品"
         confirmLoading={savingEdit}
         onOk={() => {
           void saveEdit();
         }}
-        onCancel={() => setEditOpen(false)}
+        onCancel={() => {
+          setEditOpen(false);
+          setEditingShopId(undefined);
+        }}
       >
         <Form layout="vertical">
           <Form.Item label="标题" required>
             <Input value={editingTitle} onChange={(event) => setEditingTitle(event.target.value)} allowClear />
+          </Form.Item>
+          <Form.Item label="绑定店铺" required>
+            <Select
+              value={editingShopId}
+              onChange={(value) => setEditingShopId(value)}
+              options={targetShopOptions}
+              loading={loadingTargetShops}
+              showSearch
+              optionFilterProp="label"
+              placeholder="请选择一个店铺"
+            />
           </Form.Item>
         </Form>
       </Modal>

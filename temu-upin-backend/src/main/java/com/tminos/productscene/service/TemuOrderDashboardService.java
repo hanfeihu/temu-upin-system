@@ -67,6 +67,31 @@ public class TemuOrderDashboardService {
             order by days.day
             """;
 
+    private static final String RECENT_DISTINCT_SKU_SQL = """
+            with days as (
+                select cast(generate_series(cast(:startDate as date), cast(:endDate as date), interval '1 day') as date) as day
+            ),
+            stats as (
+                select
+                    cast(timezone('Asia/Shanghai', to_timestamp(o.order_time_ms / 1000.0)) as date) as day,
+                    cast(count(distinct coalesce(
+                        nullif(btrim(o.matched_temu_sku_id), ''),
+                        nullif(concat_ws('#', nullif(btrim(o.goods_id), ''), nullif(btrim(o.spec), '')), ''),
+                        o.order_sn
+                    )) as bigint) as value
+                from temu_orders o
+                where o.shop_record_id = :shopRecordId
+                  and o.order_time_ms >= :startMs
+                  and o.order_time_ms < :endExclusiveMs
+                  and coalesce(o.order_status, -1) <> 3
+                group by 1
+            )
+            select days.day, coalesce(stats.value, 0) as value
+            from days
+            left join stats on stats.day = days.day
+            order by days.day
+            """;
+
     private static final String HISTORICAL_SIGNED_AFTERSALE_SQL = """
             with days as (
                 select cast(generate_series(cast(:startDate as date), cast(:endDate as date), interval '1 day') as date) as day
@@ -105,6 +130,120 @@ public class TemuOrderDashboardService {
             order by days.day
             """;
 
+    private static final String TODAY_PARENT_ORDER_COUNT_SQL = """
+            select cast(count(distinct coalesce(nullif(btrim(o.parent_order_sn), ''), o.order_sn)) as bigint) as value
+            from temu_orders o
+            where o.shop_record_id = :shopRecordId
+              and o.order_time_ms >= :startMs
+              and o.order_time_ms < :endExclusiveMs
+              and coalesce(o.order_status, -1) <> 3
+            """;
+
+    private static final String TODAY_SALES_AMOUNT_SQL = """
+            with today_orders as (
+                select
+                    o.shop_id,
+                    o.site_id,
+                    cast(o.matched_temu_sku_id as bigint) as product_sku_id,
+                    coalesce(o.quantity, 1) as quantity
+                from temu_orders o
+                where o.shop_record_id = :shopRecordId
+                  and o.order_time_ms >= :startMs
+                  and o.order_time_ms < :endExclusiveMs
+                  and coalesce(o.order_status, -1) <> 3
+                  and o.matched_temu_sku_id ~ '^[0-9]+$'
+            )
+            select cast(coalesce(sum(
+                coalesce(site_price.supplier_price, sku_price.supplier_price) * today_orders.quantity
+            ), 0) as bigint) as value
+            from today_orders
+            join temu_goods_sku_price sku_price
+              on sku_price.shop_id = today_orders.shop_id
+             and sku_price.product_sku_id = today_orders.product_sku_id
+            left join temu_goods_sku_site_price site_price
+              on site_price.sku_price_id = sku_price.id
+             and site_price.site_id = today_orders.site_id
+            where coalesce(site_price.supplier_price, sku_price.supplier_price) is not null
+            """;
+
+    private static final String TODAY_PROFIT_SQL = """
+            with latest_logistics as (
+                select distinct on (l.shop_record_id, l.parent_order_sn)
+                    l.shop_record_id,
+                    l.parent_order_sn,
+                    l.first_leg_logistics_fee,
+                    l.updated_at,
+                    l.id
+                from temu_order_logistics l
+                where l.shop_record_id = :shopRecordId
+                order by l.shop_record_id, l.parent_order_sn, l.updated_at desc, l.id desc
+            ),
+            latest_single_item_fee as (
+                select product_sku_id, first_leg_logistics_fee
+                from (
+                    select
+                        cast(o.matched_temu_sku_id as bigint) as product_sku_id,
+                        logistics.first_leg_logistics_fee as first_leg_logistics_fee,
+                        row_number() over (
+                            partition by cast(o.matched_temu_sku_id as bigint)
+                            order by coalesce(o.order_time_ms, o.update_time_ms, 0) desc, o.id desc
+                        ) as rn
+                    from temu_orders o
+                    join latest_logistics logistics
+                      on logistics.shop_record_id = o.shop_record_id
+                     and logistics.parent_order_sn = o.parent_order_sn
+                    where o.shop_record_id = :shopRecordId
+                      and o.matched_temu_sku_id ~ '^[0-9]+$'
+                      and o.quantity = 1
+                      and logistics.first_leg_logistics_fee is not null
+                      and not exists (
+                          select 1
+                          from temu_orders sibling
+                          where sibling.shop_record_id = o.shop_record_id
+                            and sibling.parent_order_sn = o.parent_order_sn
+                            and sibling.id <> o.id
+                      )
+                ) ranked
+                where rn = 1
+            ),
+            today_orders as (
+                select
+                    o.id,
+                    o.shop_id,
+                    o.site_id,
+                    cast(o.matched_temu_sku_id as bigint) as product_sku_id,
+                    coalesce(o.quantity, 1) as quantity
+                from temu_orders o
+                where o.shop_record_id = :shopRecordId
+                  and o.order_time_ms >= :startMs
+                  and o.order_time_ms < :endExclusiveMs
+                  and coalesce(o.order_status, -1) <> 3
+                  and o.matched_temu_sku_id ~ '^[0-9]+$'
+            )
+            select cast(coalesce(sum(
+                (
+                    coalesce(site_price.supplier_price, sku_price.supplier_price)
+                    - purchase_price.purchase_price
+                    - cast(round(fee.first_leg_logistics_fee * 100) as bigint)
+                ) * today_orders.quantity
+            ), 0) as bigint) as value
+            from today_orders
+            join temu_goods_sku_price sku_price
+              on sku_price.shop_id = today_orders.shop_id
+             and sku_price.product_sku_id = today_orders.product_sku_id
+            left join temu_goods_sku_site_price site_price
+              on site_price.sku_price_id = sku_price.id
+             and site_price.site_id = today_orders.site_id
+            join temu_shop_sku_purchase_price purchase_price
+              on purchase_price.shop_id = today_orders.shop_id
+             and purchase_price.product_sku_id = today_orders.product_sku_id
+            join latest_single_item_fee fee
+              on fee.product_sku_id = today_orders.product_sku_id
+            where coalesce(site_price.supplier_price, sku_price.supplier_price) is not null
+              and purchase_price.purchase_price is not null
+              and fee.first_leg_logistics_fee is not null
+            """;
+
     @PersistenceContext
     private EntityManager entityManager;
 
@@ -127,8 +266,15 @@ public class TemuOrderDashboardService {
                 queryDailyValues(RECENT_ORDER_COUNT_SQL, shop.getId(), recentStart, recentEnd);
         List<TemuOrderDashboardDTO.DailyValue> recentQuantitySeries =
                 queryDailyValues(RECENT_QUANTITY_SQL, shop.getId(), recentStart, recentEnd);
+        List<TemuOrderDashboardDTO.DailyValue> recentDistinctSkuSeries =
+                queryDailyValues(RECENT_DISTINCT_SKU_SQL, shop.getId(), recentStart, recentEnd);
         List<TemuOrderDashboardDTO.DailyCompareValue> historicalSignedAftersaleSeries =
                 queryHistoricalCompareValues(shop.getId(), historicalStart, historicalEnd);
+        long todayProfit = querySingleValue(TODAY_PROFIT_SQL, shop.getId(), today, today);
+        long todaySalesAmount = querySingleValue(TODAY_SALES_AMOUNT_SQL, shop.getId(), today, today);
+        long todayQuantity = getLastDailyValue(recentQuantitySeries);
+        long todayDistinctSkuCount = getLastDailyValue(recentDistinctSkuSeries);
+        long todayParentOrderCount = querySingleValue(TODAY_PARENT_ORDER_COUNT_SQL, shop.getId(), today, today);
 
         return TemuOrderDashboardDTO.Response.builder()
                 .shop(TemuOrderDashboardDTO.Shop.builder()
@@ -143,9 +289,15 @@ public class TemuOrderDashboardService {
                         .recentQuantity(sumValues(recentQuantitySeries))
                         .historicalSignedParentCount(sumSignedValues(historicalSignedAftersaleSeries))
                         .historicalAftersaleParentCount(sumAftersaleValues(historicalSignedAftersaleSeries))
+                        .todayProfit(todayProfit)
+                        .todaySalesAmount(todaySalesAmount)
+                        .todayQuantity(todayQuantity)
+                        .todayDistinctSkuCount(todayDistinctSkuCount)
+                        .todayParentOrderCount(todayParentOrderCount)
                         .build())
                 .recentOrderCountSeries(recentOrderCountSeries)
                 .recentQuantitySeries(recentQuantitySeries)
+                .recentDistinctSkuSeries(recentDistinctSkuSeries)
                 .historicalSignedAftersaleSeries(historicalSignedAftersaleSeries)
                 .build();
     }
@@ -204,6 +356,15 @@ public class TemuOrderDashboardService {
         return query;
     }
 
+    private long querySingleValue(String sql, Long shopRecordId, LocalDate startDate, LocalDate endDate) {
+        Query query = entityManager.createNativeQuery(sql);
+        query.setParameter("shopRecordId", shopRecordId);
+        query.setParameter("startMs", toStartMillis(startDate));
+        query.setParameter("endExclusiveMs", toStartMillis(endDate.plusDays(1)));
+        Object result = query.getSingleResult();
+        return toLong(result);
+    }
+
     private TemuOrderDashboardDTO.DateWindow toWindow(LocalDate startDate, LocalDate endDate, String prefix) {
         return TemuOrderDashboardDTO.DateWindow.builder()
                 .startDate(startDate.format(DATE_FORMATTER))
@@ -258,6 +419,14 @@ public class TemuOrderDashboardService {
             total += row == null || row.getValue() == null ? 0L : row.getValue();
         }
         return total;
+    }
+
+    private long getLastDailyValue(List<TemuOrderDashboardDTO.DailyValue> rows) {
+        if (rows == null || rows.isEmpty()) {
+            return 0L;
+        }
+        TemuOrderDashboardDTO.DailyValue last = rows.get(rows.size() - 1);
+        return last == null || last.getValue() == null ? 0L : last.getValue();
     }
 
     private long sumSignedValues(List<TemuOrderDashboardDTO.DailyCompareValue> rows) {

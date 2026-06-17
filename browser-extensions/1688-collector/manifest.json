@@ -46,6 +46,8 @@
   "host_permissions": [
     "https://www.tminos.com/*",
     "https://dev.tminos.com/*",
+    "https://youyou.tminos.com/*",
+    "http://chenqi.tminos.com:20080/*",
     "http://127.0.0.1:8080/*"
   ]
 }

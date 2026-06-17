@@ -31,7 +31,6 @@ public class TemuAutoPublishTaskClaimService {
                                 "and (temu_published is null or temu_published = false) " +
                                 "and (collection_status = 0 or collection_status is null) " +
                                 "and exec_status = 2 " +
-                                "and ocr_status = 2 " +
                                 "and temu_catid is not null and btrim(temu_catid) <> '' " +
                                 "and temu_attributes is not null and btrim(temu_attributes) <> '' " +
                                 "order by updated_at asc " +

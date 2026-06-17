@@ -27,10 +27,20 @@ public class ImageOcrTaskController {
             @RequestParam(value = "execStatus", required = false) Integer execStatus,
             @RequestParam(value = "filtered", required = false) Boolean filtered,
             @RequestParam(value = "containsChinese", required = false) Boolean containsChinese,
+            @RequestParam(value = "translateStatus", required = false) String translateStatus,
+            @RequestParam(value = "imageWidthMin", required = false) Integer imageWidthMin,
+            @RequestParam(value = "imageWidthMax", required = false) Integer imageWidthMax,
+            @RequestParam(value = "imageHeightMin", required = false) Integer imageHeightMin,
+            @RequestParam(value = "imageHeightMax", required = false) Integer imageHeightMax,
             @RequestParam(value = "page", defaultValue = "0") int page,
             @RequestParam(value = "size", defaultValue = "20") int size
     ) {
-        return ResponseEntity.ok(ApiResponse.success(service.list(spuId, productId, imageType, execStatus, filtered, containsChinese, page, size)));
+        return ResponseEntity.ok(ApiResponse.success(service.list(
+                spuId, productId, imageType, execStatus, filtered, containsChinese,
+                translateStatus,
+                imageWidthMin, imageWidthMax, imageHeightMin, imageHeightMax,
+                page, size
+        )));
     }
 
     @GetMapping("/stats")
@@ -39,9 +49,30 @@ public class ImageOcrTaskController {
             @RequestParam(value = "productId", required = false) String productId,
             @RequestParam(value = "imageType", required = false) Integer imageType,
             @RequestParam(value = "filtered", required = false) Boolean filtered,
-            @RequestParam(value = "containsChinese", required = false) Boolean containsChinese
+            @RequestParam(value = "containsChinese", required = false) Boolean containsChinese,
+            @RequestParam(value = "translateStatus", required = false) String translateStatus,
+            @RequestParam(value = "imageWidthMin", required = false) Integer imageWidthMin,
+            @RequestParam(value = "imageWidthMax", required = false) Integer imageWidthMax,
+            @RequestParam(value = "imageHeightMin", required = false) Integer imageHeightMin,
+            @RequestParam(value = "imageHeightMax", required = false) Integer imageHeightMax
     ) {
-        return ResponseEntity.ok(ApiResponse.success(service.stats(spuId, productId, imageType, filtered, containsChinese)));
+        return ResponseEntity.ok(ApiResponse.success(service.stats(
+                spuId, productId, imageType, filtered, containsChinese,
+                translateStatus,
+                imageWidthMin, imageWidthMax, imageHeightMin, imageHeightMax
+        )));
+    }
+
+    @PostMapping("/backfill-image-sizes")
+    public ResponseEntity<ApiResponse<ImageOcrDTO.BackfillImageSizeResult>> backfillImageSizes(
+            @RequestParam(value = "limit", defaultValue = "100") int limit
+    ) {
+        return ResponseEntity.ok(ApiResponse.success(service.backfillMissingImageSizes(limit)));
+    }
+
+    @PostMapping("/delete-size-filtered-images")
+    public ResponseEntity<ApiResponse<ImageOcrDTO.DeleteSizeFilteredImagesResult>> deleteSizeFilteredImages() {
+        return ResponseEntity.ok(ApiResponse.success(service.deleteEnabledSizeFilteredImages()));
     }
 
     @PostMapping

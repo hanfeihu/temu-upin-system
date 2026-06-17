@@ -33,6 +33,17 @@ import { loadStoredShopFilter, resolveStoredShopFilter, saveStoredShopFilter } f
 
 const SHOP_FILTER_STORAGE_KEY = 'sync-goods';
 
+function parseNumericKeyword(raw: string, label: string) {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (!/^\d+$/.test(trimmed)) {
+    throw new Error(`${label} 只能输入数字`);
+  }
+  return Number(trimmed);
+}
+
 function boolText(value?: boolean | null) {
   if (value === null || value === undefined) {
     return '-';
@@ -105,7 +116,10 @@ const SyncGoodsPage = () => {
   const [shops, setShops] = useState<Array<{ value: string; label: string }>>([]);
   const [shopId, setShopId] = useState<string | undefined>(() => loadStoredShopFilter(SHOP_FILTER_STORAGE_KEY));
   const [keyword, setKeyword] = useState('');
+  const [productSkuIdKeyword, setProductSkuIdKeyword] = useState('');
   const [skcSiteStatus, setSkcSiteStatus] = useState<number | undefined>(1);
+  const [activityBlacklisted, setActivityBlacklisted] = useState<boolean | undefined>(undefined);
+  const [allSkuOutOfStock, setAllSkuOutOfStock] = useState<boolean | undefined>(undefined);
   const [minSupplierPrice, setMinSupplierPrice] = useState<number>();
   const [maxSupplierPrice, setMaxSupplierPrice] = useState<number>();
   const [loading, setLoading] = useState(false);
@@ -134,7 +148,7 @@ const SyncGoodsPage = () => {
     }
     setShopId(nextShopId);
     saveStoredShopFilter(SHOP_FILTER_STORAGE_KEY, nextShopId);
-    await load(1, 20, nextShopId, keyword, skcSiteStatus, minSupplierPrice, maxSupplierPrice);
+    await load(1, 20, nextShopId, keyword, productSkuIdKeyword, skcSiteStatus, activityBlacklisted, allSkuOutOfStock, minSupplierPrice, maxSupplierPrice);
   }
 
   async function load(
@@ -142,11 +156,22 @@ const SyncGoodsPage = () => {
     nextPageSize = pageSize,
     nextShopId = shopId,
     nextKeyword = keyword,
+    nextProductSkuIdKeyword = productSkuIdKeyword,
     nextSkcSiteStatus = skcSiteStatus,
+    nextActivityBlacklisted = activityBlacklisted,
+    nextAllSkuOutOfStock = allSkuOutOfStock,
     nextMinSupplierPrice = minSupplierPrice,
     nextMaxSupplierPrice = maxSupplierPrice,
   ) {
     if (!nextShopId) {
+      return;
+    }
+
+    let productSkuId: number | undefined;
+    try {
+      productSkuId = parseNumericKeyword(nextProductSkuIdKeyword, 'SKUID');
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '查询条件不正确');
       return;
     }
 
@@ -155,7 +180,10 @@ const SyncGoodsPage = () => {
       const res = await syncApi.getGoodsList({
         shopId: nextShopId,
         keyword: nextKeyword.trim() || undefined,
+        productSkuId,
         skcSiteStatus: nextSkcSiteStatus,
+        activityBlacklisted: nextActivityBlacklisted,
+        allSkuOutOfStock: nextAllSkuOutOfStock,
         minSupplierPrice: nextMinSupplierPrice,
         maxSupplierPrice: nextMaxSupplierPrice,
         page: nextPage,
@@ -198,7 +226,11 @@ const SyncGoodsPage = () => {
       const params = new URLSearchParams();
       params.set('shopId', shopId);
       if (keyword.trim()) params.set('keyword', keyword.trim());
+      const productSkuId = parseNumericKeyword(productSkuIdKeyword, 'SKUID');
+      if (productSkuId !== undefined) params.set('productSkuId', String(productSkuId));
       if (skcSiteStatus !== undefined) params.set('skcSiteStatus', String(skcSiteStatus));
+      if (activityBlacklisted !== undefined) params.set('activityBlacklisted', String(activityBlacklisted));
+      if (allSkuOutOfStock !== undefined) params.set('allSkuOutOfStock', String(allSkuOutOfStock));
       if (minSupplierPrice !== undefined) params.set('minSupplierPrice', String(minSupplierPrice));
       if (maxSupplierPrice !== undefined) params.set('maxSupplierPrice', String(maxSupplierPrice));
 
@@ -243,7 +275,7 @@ const SyncGoodsPage = () => {
           setDetailOpen(false);
           setDetail(null);
           message.success('同步数据已清空');
-          await load(1, pageSize, shopId, keyword, skcSiteStatus, minSupplierPrice, maxSupplierPrice);
+          await load(1, pageSize, shopId, keyword, productSkuIdKeyword, skcSiteStatus, activityBlacklisted, allSkuOutOfStock, minSupplierPrice, maxSupplierPrice);
           setPage(1);
         } catch (error) {
           message.error(error instanceof Error ? error.message : '清空失败');
@@ -301,6 +333,13 @@ const SyncGoodsPage = () => {
       key: 'skcSiteStatus',
       width: 100,
       render: (value: SyncGoodsListItemVO['skcSiteStatus']) => skcSiteStatusTag(value),
+    },
+    {
+      title: '活动黑名单',
+      dataIndex: 'activityBlacklisted',
+      key: 'activityBlacklisted',
+      width: 120,
+      render: (value: SyncGoodsListItemVO['activityBlacklisted']) => (value ? <Tag color="red">已拉黑</Tag> : <Tag>正常</Tag>),
     },
     {
       title: '叶子类目',
@@ -472,7 +511,7 @@ const SyncGoodsPage = () => {
               setShopId(value);
               saveStoredShopFilter(SHOP_FILTER_STORAGE_KEY, value);
               setPage(1);
-              void load(1, pageSize, value, keyword, skcSiteStatus, minSupplierPrice, maxSupplierPrice);
+              void load(1, pageSize, value, keyword, productSkuIdKeyword, skcSiteStatus, activityBlacklisted, allSkuOutOfStock, minSupplierPrice, maxSupplierPrice);
             }}
             placeholder="店铺"
             style={{ width: 220 }}
@@ -485,6 +524,13 @@ const SyncGoodsPage = () => {
             allowClear
             style={{ width: 360 }}
           />
+          <Input
+            value={productSkuIdKeyword}
+            onChange={(event) => setProductSkuIdKeyword(event.target.value)}
+            placeholder="SKUID，例如 85855391884"
+            allowClear
+            style={{ width: 220 }}
+          />
           <Select
             value={skcSiteStatus}
             onChange={setSkcSiteStatus}
@@ -494,6 +540,27 @@ const SyncGoodsPage = () => {
             options={[
               { value: 1, label: '已加站' },
               { value: 0, label: '未加站' },
+            ]}
+          />
+          <Select
+            value={allSkuOutOfStock}
+            onChange={setAllSkuOutOfStock}
+            allowClear
+            placeholder="库存状态"
+            style={{ width: 150 }}
+            options={[
+              { value: true, label: '无库存产品' },
+            ]}
+          />
+          <Select
+            value={activityBlacklisted}
+            onChange={setActivityBlacklisted}
+            allowClear
+            placeholder="活动黑名单"
+            style={{ width: 160 }}
+            options={[
+              { value: true, label: '活动黑名单产品' },
+              { value: false, label: '非活动黑名单' },
             ]}
           />
           <InputNumber
@@ -513,7 +580,7 @@ const SyncGoodsPage = () => {
             loading={loading}
             onClick={() => {
               setPage(1);
-              void load(1, pageSize, shopId, keyword, skcSiteStatus, minSupplierPrice, maxSupplierPrice);
+              void load(1, pageSize, shopId, keyword, productSkuIdKeyword, skcSiteStatus, activityBlacklisted, allSkuOutOfStock, minSupplierPrice, maxSupplierPrice);
             }}
           >
             查询
@@ -521,11 +588,14 @@ const SyncGoodsPage = () => {
           <Button
             onClick={() => {
               setKeyword('');
+              setProductSkuIdKeyword('');
               setSkcSiteStatus(1);
+              setActivityBlacklisted(undefined);
+              setAllSkuOutOfStock(undefined);
               setMinSupplierPrice(undefined);
               setMaxSupplierPrice(undefined);
               setPage(1);
-              void load(1, 20, shopId, '', 1, undefined, undefined);
+              void load(1, 20, shopId, '', '', 1, undefined, undefined, undefined, undefined);
             }}
           >
             重置
@@ -559,7 +629,7 @@ const SyncGoodsPage = () => {
             const nextPageSize = pagination.pageSize || 20;
             setPage(nextPage);
             setPageSize(nextPageSize);
-            void load(nextPage, nextPageSize, shopId, keyword, skcSiteStatus, minSupplierPrice, maxSupplierPrice);
+            void load(nextPage, nextPageSize, shopId, keyword, productSkuIdKeyword, skcSiteStatus, activityBlacklisted, allSkuOutOfStock, minSupplierPrice, maxSupplierPrice);
           }}
         />
       </Card>

@@ -1,10 +1,17 @@
-import { App, Button, Card, Drawer, Form, Image, Input, InputNumber, Modal, Select, Space, Table, Tag, Typography } from 'antd';
+import { App, Button, Card, Descriptions, Drawer, Form, Image, Input, InputNumber, Modal, Select, Space, Table, Tag, Typography } from 'antd';
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table';
 import type { Key } from 'react';
 import { useEffect, useState } from 'react';
 import { syncApi } from '@/api/sync';
 import { temuShopsApi } from '@/api/temuShops';
-import type { PriceReviewBatchPayload, PriceReviewOrderVO, PriceReviewSkuVO, TemuShopVO } from '@/types/api';
+import type {
+  PriceReviewBatchPayload,
+  PriceReviewLowPriceRejectWorkerConfigVO,
+  PriceReviewLowPriceRejectWorkerStatusVO,
+  PriceReviewOrderVO,
+  PriceReviewSkuVO,
+  TemuShopVO,
+} from '@/types/api';
 import { formatDateTime, formatPrice, safeJsonParse } from '@/utils/format';
 import { loadStoredShopFilter, resolveStoredShopFilter, saveStoredShopFilter } from '@/utils/shopFilter';
 
@@ -24,8 +31,22 @@ const reviewColorMap: Record<string, string> = {
   APPROVED: 'green',
   REJECT: 'red',
   REJECTED: 'red',
+  COMPLETED: 'default',
   PENDING: 'processing',
 };
+
+const REJECT_REASON_TYPE_OPTIONS = [
+  { value: 0, label: '材质' },
+  { value: 1, label: '功能' },
+  { value: 2, label: '其他' },
+  { value: 3, label: '品类' },
+  { value: 4, label: '外观' },
+  { value: 5, label: '版型' },
+  { value: 6, label: '图案' },
+  { value: 7, label: '规格尺寸' },
+  { value: 8, label: '品牌' },
+];
+const DEFAULT_REJECT_REASON = '价格太低';
 
 function summarizePurchasePrice(skus?: PriceReviewSkuVO[] | null) {
   const prices = Array.from(
@@ -47,7 +68,159 @@ function summarizePurchasePrice(skus?: PriceReviewSkuVO[] | null) {
   return `采购价（${formatPrice(Math.min(...prices))} 起）`;
 }
 
+function formatCollectedPriceSource(source?: string | null) {
+  const normalized = String(source || '').trim().toUpperCase();
+  if (!normalized) {
+    return '未知来源';
+  }
+  if (normalized === 'TEMU') {
+    return 'temu';
+  }
+  if (normalized === '1688') {
+    return '1688';
+  }
+  return source || '未知来源';
+}
+
+function summarizeCollectedPrice(skus?: PriceReviewSkuVO[] | null) {
+  const matched = (skus || [])
+    .filter((item): item is PriceReviewSkuVO & { collectedPrice: number; collectedPriceSource: string | null } => item.collectedPrice !== null && item.collectedPrice !== undefined)
+    .map((item) => ({
+      price: item.collectedPrice,
+      source: formatCollectedPriceSource(item.collectedPriceSource),
+    }));
+
+  if (!matched.length) {
+    return '采集价格未匹配';
+  }
+
+  const uniquePairs = Array.from(new Set(matched.map((item) => `${item.source}:${item.price}`)));
+  if (uniquePairs.length === 1) {
+    const [source, priceText] = uniquePairs[0].split(':');
+    return `采集价（${formatPrice(Number(priceText))}, ${source}）`;
+  }
+
+  const minPrice = Math.min(...matched.map((item) => item.price));
+  const sourceSet = Array.from(new Set(matched.map((item) => item.source)));
+  return `采集价（${formatPrice(minPrice)} 起, ${sourceSet.length === 1 ? sourceSet[0] : '多来源'}）`;
+}
+
+function summarizeFirstCollectedPrice(skus?: PriceReviewSkuVO[] | null) {
+  const firstSku = (skus || [])[0];
+  if (!firstSku || firstSku.collectedPrice === null || firstSku.collectedPrice === undefined) {
+    return '采集价格未匹配';
+  }
+  return `采集价（${formatPrice(firstSku.collectedPrice)}, ${formatCollectedPriceSource(firstSku.collectedPriceSource)}）`;
+}
+
+function formatYuanAmount(value?: number | string | null) {
+  if (value === null || value === undefined || value === '') {
+    return '-';
+  }
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue)) {
+    return String(value);
+  }
+  return `¥${numberValue.toFixed(2)}`;
+}
+
+function formatWeightG(value?: number | string | null) {
+  if (value === null || value === undefined || value === '') {
+    return '-';
+  }
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue)) {
+    return `${value} g`;
+  }
+  if (numberValue >= 1000) {
+    return `${(numberValue / 1000).toFixed(2)} kg (${numberValue.toFixed(0)} g)`;
+  }
+  return `${numberValue.toFixed(0)} g`;
+}
+
+function formatMaybePercent(value?: string | null) {
+  if (!value) {
+    return '-';
+  }
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue)) {
+    return value;
+  }
+  if (numberValue > 0 && numberValue <= 1) {
+    return `${(numberValue * 100).toFixed(2)}%`;
+  }
+  return `${numberValue.toFixed(2)}%`;
+}
+
+function toFiniteNumber(value?: number | string | null) {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : null;
+}
+
+function calculateEstimatedFirstLegYuan(maxWeightG?: number | string | null) {
+  const weightG = toFiniteNumber(maxWeightG);
+  if (weightG === null) {
+    return null;
+  }
+  return (Math.max(weightG, 30) / 1000) * 69 + 6;
+}
+
+function calculateCollectedCostSummary(skus?: PriceReviewSkuVO[] | null, suggestSupplyPrice?: number | null) {
+  const firstMatched = (skus || []).find((item) => item.collectedPrice !== null && item.collectedPrice !== undefined);
+  if (!firstMatched || firstMatched.collectedPrice === null || firstMatched.collectedPrice === undefined) {
+    return null;
+  }
+
+  const baseFreight = toFiniteNumber(firstMatched.collectedBaseFreight);
+  const firstLeg = calculateEstimatedFirstLegYuan(firstMatched.collectedMaxWeightG);
+  const baseFreightCents = baseFreight === null ? null : Math.round(baseFreight * 100);
+  const purchaseCents = Number(firstMatched.collectedPrice || 0) + (baseFreightCents === null ? 0 : baseFreightCents);
+  const firstLegCents = firstLeg === null ? null : Math.round(firstLeg * 100);
+  const profitCents = suggestSupplyPrice !== null
+    && suggestSupplyPrice !== undefined
+    && firstLegCents !== null
+    ? Number(suggestSupplyPrice) - purchaseCents - firstLegCents
+    : null;
+
+  const profitType: 'danger' | 'success' | 'warning' | undefined =
+    profitCents === null ? undefined : profitCents < 0 ? 'danger' : profitCents > 0 ? 'success' : 'warning';
+
+  return {
+    baseFreightCents,
+    purchaseCents,
+    firstLegCents,
+    profitCents,
+    profitType,
+  };
+}
+
+function summarizeCollectedCostRows(skus?: PriceReviewSkuVO[] | null, suggestSupplyPrice?: number | null) {
+  const summary = calculateCollectedCostSummary(skus, suggestSupplyPrice);
+  if (!summary) {
+    return null;
+  }
+  return {
+    baseFreightText: summary.baseFreightCents === null ? '-' : formatPrice(summary.baseFreightCents),
+    purchaseText: formatPrice(summary.purchaseCents),
+    firstLegText: summary.firstLegCents === null ? '-' : formatPrice(summary.firstLegCents),
+    profitText: summary.profitCents === null ? '-' : formatPrice(summary.profitCents),
+    profitType: summary.profitType,
+  };
+}
+
 const SHOP_FILTER_STORAGE_KEY = 'sync-price-review';
+const DEFAULT_LOW_PRICE_REJECT_THRESHOLD = 20;
+const PROFIT_APPROVE_THRESHOLD_CENTS = 1000;
+const DEFAULT_LOW_PRICE_REJECT_WORKER_CONFIG = {
+  maxSuggestSupplyPriceYuan: 20,
+  pollMinutes: 5,
+  batchSize: 20,
+  reasonType: 2,
+  reasonText: DEFAULT_REJECT_REASON,
+};
 
 const SyncPriceReviewPage = () => {
   const { message } = App.useApp();
@@ -68,9 +241,15 @@ const SyncPriceReviewPage = () => {
   const [reviewing, setReviewing] = useState(false);
   const [reviewMode, setReviewMode] = useState<'APPROVE' | 'REJECT'>('APPROVE');
   const [reviewTargets, setReviewTargets] = useState<EditableReviewOrder[]>([]);
-  const [reasonType, setReasonType] = useState<number>(1);
-  const [reasonText, setReasonText] = useState('');
+  const [reasonType, setReasonType] = useState<number>(2);
+  const [reasonText, setReasonText] = useState(DEFAULT_REJECT_REASON);
   const [externalLinksText, setExternalLinksText] = useState('');
+  const [lowPriceRejectOpen, setLowPriceRejectOpen] = useState(false);
+  const [lowPriceRejectThreshold, setLowPriceRejectThreshold] = useState<number>(DEFAULT_LOW_PRICE_REJECT_THRESHOLD);
+  const [collectedSourceSku, setCollectedSourceSku] = useState<PriceReviewSkuVO | null>(null);
+  const [workerConfig, setWorkerConfig] = useState(DEFAULT_LOW_PRICE_REJECT_WORKER_CONFIG);
+  const [workerStatus, setWorkerStatus] = useState<PriceReviewLowPriceRejectWorkerStatusVO | null>(null);
+  const [workerLoading, setWorkerLoading] = useState(false);
 
   async function loadShops() {
     const res = await temuShopsApi.list({ enabled: true });
@@ -88,6 +267,32 @@ const SyncPriceReviewPage = () => {
     setShopId(nextShopId);
     saveStoredShopFilter(SHOP_FILTER_STORAGE_KEY, nextShopId);
     await load(1, 20, nextShopId, orderStatus, reviewAction);
+  }
+
+  function applyWorkerConfig(config?: PriceReviewLowPriceRejectWorkerConfigVO | null) {
+    if (!config) {
+      return;
+    }
+    setWorkerConfig({
+      maxSuggestSupplyPriceYuan: Number(config.maxSuggestSupplyPrice ?? 2000) / 100,
+      pollMinutes: Math.max(Number(config.pollMs ?? 300000) / 60000, 0.17),
+      batchSize: Number(config.batchSize ?? 20),
+      reasonType: Number(config.reasonType ?? 2),
+      reasonText: config.reasonText || DEFAULT_REJECT_REASON,
+    });
+  }
+
+  async function loadWorker() {
+    try {
+      const [configRes, statusRes] = await Promise.all([
+        syncApi.getPriceReviewLowPriceRejectWorkerConfig(),
+        syncApi.getPriceReviewLowPriceRejectWorkerStatus(),
+      ]);
+      applyWorkerConfig(configRes.data);
+      setWorkerStatus(statusRes.data || null);
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '加载低价自动拒绝配置失败');
+    }
   }
 
   async function load(nextPage = page, nextPageSize = pageSize, nextShopId = shopId, nextOrderStatus = orderStatus, nextReviewAction = reviewAction) {
@@ -115,6 +320,7 @@ const SyncPriceReviewPage = () => {
 
   useEffect(() => {
     void loadShops();
+    void loadWorker();
   }, []);
 
   function formatSites(value: string | null) {
@@ -129,6 +335,7 @@ const SyncPriceReviewPage = () => {
         APPROVED: '已同意',
         REJECT: '已拒绝',
         REJECTED: '已拒绝',
+        COMPLETED: '已完成',
         PENDING: '待处理',
       }[value || 'PENDING'] || value || '待处理'
     );
@@ -164,9 +371,9 @@ const SyncPriceReviewPage = () => {
       return;
     }
     setReviewMode(mode);
-    setReasonText('');
+    setReasonText(DEFAULT_REJECT_REASON);
     setExternalLinksText('');
-    setReasonType(1);
+    setReasonType(2);
     if (mode === 'APPROVE') {
       setReviewTargets(records.map((item) => ({ ...item, skuList: item.skuList || [] })));
       setReviewOpen(true);
@@ -179,6 +386,31 @@ const SyncPriceReviewPage = () => {
       setReviewOpen(true);
     } catch (error) {
       message.error(error instanceof Error ? error.message : '加载拒绝详情失败');
+    } finally {
+      setReviewing(false);
+    }
+  }
+
+  async function batchMarkCompleted(records: PriceReviewOrderVO[]) {
+    if (!records.length) {
+      message.warning('请先选择核价单');
+      return;
+    }
+    if (!shopId) {
+      message.warning('请先选择店铺');
+      return;
+    }
+    setReviewing(true);
+    try {
+      const res = await syncApi.batchLocalCompletePriceReview({
+        shopId,
+        orderIds: records.map((item) => item.id),
+      });
+      message.success(res.message || '批量标记已完成成功');
+      setSelectedRowKeys([]);
+      await load();
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '批量标记已完成失败');
     } finally {
       setReviewing(false);
     }
@@ -197,6 +429,77 @@ const SyncPriceReviewPage = () => {
           : order,
       ),
     );
+  }
+
+  const lowPriceThresholdInFen = Math.round((Number(lowPriceRejectThreshold) || 0) * 100);
+  const lowPriceRejectTargets = rows.filter(
+    (item) =>
+      item.suggestSupplyPrice !== null &&
+      item.suggestSupplyPrice !== undefined &&
+      item.suggestSupplyPrice <= lowPriceThresholdInFen,
+  );
+  const profitApproveTargets = rows.filter((item) => {
+    const costSummary = calculateCollectedCostSummary(item.skuList || [], item.suggestSupplyPrice);
+    return costSummary?.profitCents !== null
+      && costSummary?.profitCents !== undefined
+      && costSummary.profitCents >= PROFIT_APPROVE_THRESHOLD_CENTS;
+  });
+
+  function openLowPriceReject() {
+    setLowPriceRejectThreshold(DEFAULT_LOW_PRICE_REJECT_THRESHOLD);
+    setLowPriceRejectOpen(true);
+  }
+
+  async function submitLowPriceReject() {
+    if (!lowPriceRejectTargets.length) {
+      message.warning('当前页没有符合条件的核价单');
+      return;
+    }
+    setLowPriceRejectOpen(false);
+    await startReview(lowPriceRejectTargets, 'REJECT');
+  }
+
+  async function startProfitApprove() {
+    if (!profitApproveTargets.length) {
+      message.warning('当前页没有总预估利润超过或等于10元的核价单');
+      return;
+    }
+    await startReview(profitApproveTargets, 'APPROVE');
+  }
+
+  async function saveWorkerConfig() {
+    setWorkerLoading(true);
+    try {
+      const res = await syncApi.updatePriceReviewLowPriceRejectWorkerConfig({
+        configName: '低价自动拒绝',
+        maxSuggestSupplyPrice: Math.round(Number(workerConfig.maxSuggestSupplyPriceYuan || 0) * 100),
+        pollMs: Math.round(Number(workerConfig.pollMinutes || 5) * 60000),
+        batchSize: Math.round(Number(workerConfig.batchSize || 20)),
+        reasonType: Math.round(Number(workerConfig.reasonType ?? 2)),
+        reasonText: workerConfig.reasonText || DEFAULT_REJECT_REASON,
+      });
+      setWorkerStatus(res.data || null);
+      message.success('低价自动拒绝配置已保存');
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '保存低价自动拒绝配置失败');
+    } finally {
+      setWorkerLoading(false);
+    }
+  }
+
+  async function toggleWorker(nextRunning: boolean) {
+    setWorkerLoading(true);
+    try {
+      const res = nextRunning
+        ? await syncApi.startPriceReviewLowPriceRejectWorker()
+        : await syncApi.stopPriceReviewLowPriceRejectWorker();
+      setWorkerStatus(res.data || null);
+      message.success(nextRunning ? '低价自动拒绝已启动' : '低价自动拒绝已停止');
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : nextRunning ? '启动失败' : '停止失败');
+    } finally {
+      setWorkerLoading(false);
+    }
   }
 
   function buildPayload(): PriceReviewBatchPayload {
@@ -232,6 +535,10 @@ const SyncPriceReviewPage = () => {
 
       if (!componentList.length && !externalLinkList.length && !rejectPrices.length) {
         throw new Error('拒绝时请至少填写原因、外链或新的申报价');
+      }
+
+      if (externalLinkList.length && !componentList.length) {
+        throw new Error('填写外部链接时，请至少填写一条拒绝原因');
       }
 
       if (componentList.length || externalLinkList.length) {
@@ -297,14 +604,26 @@ const SyncPriceReviewPage = () => {
     {
       title: '价格',
       key: 'priceInfo',
-      width: 160,
-      render: (_, record) => (
-        <Space direction="vertical" size={2} style={{ alignItems: 'center', width: '100%' }}>
-          <Typography.Text strong>{formatPrice(record.suggestSupplyPrice)}</Typography.Text>
-          <Typography.Text type="secondary">→ {formatPrice(record.supplyPrice)}</Typography.Text>
-          <Typography.Text type="secondary">{summarizePurchasePrice(record.skuList || [])}</Typography.Text>
-        </Space>
-      ),
+      width: 230,
+      render: (_, record) => {
+        const costRows = summarizeCollectedCostRows(record.skuList || [], record.suggestSupplyPrice);
+        return (
+          <Space direction="vertical" size={2} style={{ alignItems: 'center', width: '100%' }}>
+            <Typography.Text strong>{formatPrice(record.suggestSupplyPrice)}</Typography.Text>
+            <Typography.Text type="secondary">→ {formatPrice(record.supplyPrice)}</Typography.Text>
+            <Typography.Text type="secondary">{summarizePurchasePrice(record.skuList || [])}</Typography.Text>
+            <Typography.Text type="secondary">{summarizeFirstCollectedPrice(record.skuList || [])}</Typography.Text>
+            {costRows ? (
+              <Space direction="vertical" size={0} style={{ alignItems: 'center', width: '100%' }}>
+                <Typography.Text type="secondary">基础运费 {costRows.baseFreightText}</Typography.Text>
+                <Typography.Text type="secondary">总采购价 {costRows.purchaseText}</Typography.Text>
+                <Typography.Text type="secondary">总预估头程 {costRows.firstLegText}</Typography.Text>
+                <Typography.Text type={costRows.profitType}>总预估利润 {costRows.profitText}</Typography.Text>
+              </Space>
+            ) : null}
+          </Space>
+        );
+      },
     },
     {
       title: '操作',
@@ -331,12 +650,116 @@ const SyncPriceReviewPage = () => {
     { title: '编码', dataIndex: 'extCode', key: 'extCode', width: 120 },
     { title: '规格', dataIndex: 'specInfo', key: 'specInfo' },
     { title: '采购价', key: 'purchasePrice', width: 120, render: (_, record) => record.purchasePrice !== null && record.purchasePrice !== undefined ? formatPrice(record.purchasePrice) : '未配置' },
+    {
+      title: '采集价格',
+      key: 'collectedPrice',
+      width: 170,
+      render: (_, record) =>
+        record.collectedPrice !== null && record.collectedPrice !== undefined ? (
+          <Space direction="vertical" size={0}>
+            <Button type="link" size="small" style={{ padding: 0 }} onClick={() => setCollectedSourceSku(record)}>
+              {formatPrice(record.collectedPrice)}
+            </Button>
+            <Typography.Text type="secondary">{formatCollectedPriceSource(record.collectedPriceSource)}</Typography.Text>
+          </Space>
+        ) : (
+          '未匹配'
+        ),
+    },
     { title: '当前供货价', key: 'currentSupplyPrice', width: 140, render: (_, record) => formatPrice(record.currentSupplyPrice) },
     { title: '建议新价', key: 'newPrice', width: 140, render: (_, record) => formatPrice(record.newPrice) },
   ];
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <Card
+        title="低价自动拒绝"
+        extra={
+          <Space>
+            <Tag color={workerStatus?.running ? 'green' : 'default'}>
+              {workerStatus?.running ? '运行中' : '已停止'}
+            </Tag>
+            <Button loading={workerLoading} onClick={() => void loadWorker()}>
+              刷新状态
+            </Button>
+            <Button loading={workerLoading} onClick={() => void saveWorkerConfig()}>
+              保存配置
+            </Button>
+            {workerStatus?.running ? (
+              <Button danger loading={workerLoading} onClick={() => void toggleWorker(false)}>
+                停止
+              </Button>
+            ) : (
+              <Button type="primary" loading={workerLoading} onClick={() => void toggleWorker(true)}>
+                启动
+              </Button>
+            )}
+          </Space>
+        }
+      >
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Space wrap align="center">
+            <Typography.Text>每</Typography.Text>
+            <InputNumber
+              min={0.17}
+              step={1}
+              precision={2}
+              value={workerConfig.pollMinutes}
+              onChange={(value) => setWorkerConfig((current) => ({ ...current, pollMinutes: Number(value || 5) }))}
+              style={{ width: 120 }}
+              addonAfter="分钟"
+            />
+            <Typography.Text>扫描一次，自动拒绝建议价低于等于</Typography.Text>
+            <InputNumber
+              min={0.01}
+              step={1}
+              precision={2}
+              value={workerConfig.maxSuggestSupplyPriceYuan}
+              onChange={(value) => setWorkerConfig((current) => ({ ...current, maxSuggestSupplyPriceYuan: Number(value || 20) }))}
+              style={{ width: 140 }}
+              addonAfter="元"
+            />
+            <Typography.Text>的待处理核价单，单次最多</Typography.Text>
+            <InputNumber
+              min={1}
+              max={200}
+              step={1}
+              precision={0}
+              value={workerConfig.batchSize}
+              onChange={(value) => setWorkerConfig((current) => ({ ...current, batchSize: Number(value || 20) }))}
+              style={{ width: 120 }}
+              addonAfter="条"
+            />
+          </Space>
+          <Space wrap align="center">
+            <Typography.Text>拒绝类型</Typography.Text>
+            <Select
+              value={workerConfig.reasonType}
+              onChange={(value) => setWorkerConfig((current) => ({ ...current, reasonType: value }))}
+              options={REJECT_REASON_TYPE_OPTIONS}
+              style={{ width: 150 }}
+            />
+            <Typography.Text>拒绝原因</Typography.Text>
+            <Input
+              value={workerConfig.reasonText}
+              onChange={(event) => setWorkerConfig((current) => ({ ...current, reasonText: event.target.value }))}
+              style={{ width: 260 }}
+              placeholder={DEFAULT_REJECT_REASON}
+            />
+          </Space>
+          <Space size={[12, 6]} wrap>
+            <Typography.Text type="secondary">成功 {workerStatus?.successCount ?? 0}</Typography.Text>
+            <Typography.Text type="secondary">失败 {workerStatus?.failureCount ?? 0}</Typography.Text>
+            <Typography.Text type="secondary">最近扫描 {formatDateTime(workerStatus?.lastScanAt)}</Typography.Text>
+            <Typography.Text type="secondary">最近处理 {formatDateTime(workerStatus?.lastWorkAt)}</Typography.Text>
+            <Typography.Text type="secondary">最近订单 {workerStatus?.lastOrderId || '-'}</Typography.Text>
+            {workerStatus?.lastError ? (
+              <Typography.Text type="danger">错误 {workerStatus.lastError}</Typography.Text>
+            ) : null}
+          </Space>
+        </Space>
+      </Card>
+
       <Card>
         <Space wrap>
           <Select
@@ -352,7 +775,7 @@ const SyncPriceReviewPage = () => {
             options={shops}
           />
           <Select value={orderStatus} onChange={setOrderStatus} style={{ width: 150 }} options={[{ value: 1, label: '待处理' }, { value: 2, label: '处理中' }, { value: 3, label: '已完成' }]} />
-          <Select value={reviewAction} onChange={setReviewAction} style={{ width: 150 }} options={[{ value: 'PENDING', label: '待处理' }, { value: 'APPROVE', label: '已同意' }, { value: 'REJECT', label: '已拒绝' }]} />
+          <Select value={reviewAction} onChange={setReviewAction} style={{ width: 150 }} options={[{ value: 'PENDING', label: '待处理' }, { value: 'APPROVE', label: '已同意' }, { value: 'REJECT', label: '已拒绝' }, { value: 'COMPLETED', label: '已完成' }]} />
           <Button type="primary" loading={loading} onClick={() => {
             setPage(1);
             void load(1, pageSize, shopId, orderStatus, reviewAction);
@@ -370,8 +793,17 @@ const SyncPriceReviewPage = () => {
           <Button disabled={!selectedRowKeys.length} onClick={() => void startReview(rows.filter((item) => selectedRowKeys.includes(item.id)), 'APPROVE')}>
             批量同意 ({selectedRowKeys.length})
           </Button>
+          <Button disabled={!profitApproveTargets.length} loading={reviewing} onClick={() => void startProfitApprove()}>
+            利润≥10批量同意 ({profitApproveTargets.length})
+          </Button>
           <Button danger disabled={!selectedRowKeys.length} onClick={() => void startReview(rows.filter((item) => selectedRowKeys.includes(item.id)), 'REJECT')}>
             批量拒绝 ({selectedRowKeys.length})
+          </Button>
+          <Button disabled={!selectedRowKeys.length} loading={reviewing} onClick={() => void batchMarkCompleted(rows.filter((item) => selectedRowKeys.includes(item.id)))}>
+            批量标记已完成 ({selectedRowKeys.length})
+          </Button>
+          <Button danger disabled={!rows.length} onClick={openLowPriceReject}>
+            低价批量拒绝
           </Button>
         </Space>
       </Card>
@@ -414,7 +846,8 @@ const SyncPriceReviewPage = () => {
                 <span>申报价: {formatPrice(detail.supplyPrice)}</span>
                 <span>建议价: {formatPrice(detail.suggestSupplyPrice)}</span>
                 <span>{summarizePurchasePrice(detail.skuList || [])}</span>
-                <span>审核状态: {reviewText(detail.reviewAction)}</span>
+                <span>{summarizeCollectedPrice(detail.skuList || [])}</span>
+                <span>处理状态: {reviewText(detail.reviewAction)}</span>
               </Space>
             </Card>
             <Card size="small" title="SKU 列表">
@@ -423,6 +856,135 @@ const SyncPriceReviewPage = () => {
           </Space>
         ) : null}
       </Drawer>
+
+      <Modal
+        open={!!collectedSourceSku}
+        title="采集价格来源"
+        width={820}
+        footer={null}
+        onCancel={() => setCollectedSourceSku(null)}
+      >
+        {collectedSourceSku ? (
+          <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            <Descriptions size="small" bordered column={2}>
+              <Descriptions.Item label="采集价">{formatPrice(collectedSourceSku.collectedPrice)}</Descriptions.Item>
+              <Descriptions.Item label="来源">{formatCollectedPriceSource(collectedSourceSku.collectedPriceSource)}</Descriptions.Item>
+              <Descriptions.Item label="采集商品ID">{collectedSourceSku.collectedProductCollectionId || '-'}</Descriptions.Item>
+              <Descriptions.Item label="选品池ID">{collectedSourceSku.collectedSelectionPoolId || '-'}</Descriptions.Item>
+              <Descriptions.Item label="1688商品ID">{collectedSourceSku.collectedProductId || '-'}</Descriptions.Item>
+              <Descriptions.Item label="SKU编码">{collectedSourceSku.collectedSkuId || collectedSourceSku.extCode || '-'}</Descriptions.Item>
+              <Descriptions.Item label="SKU规格" span={2}>{collectedSourceSku.collectedSkuSpec || collectedSourceSku.specInfo || '-'}</Descriptions.Item>
+              <Descriptions.Item label="商品名称" span={2}>
+                {collectedSourceSku.collectedProductUrl ? (
+                  <Typography.Link href={collectedSourceSku.collectedProductUrl} target="_blank">
+                    {collectedSourceSku.collectedProductName || collectedSourceSku.collectedProductUrl}
+                  </Typography.Link>
+                ) : (
+                  collectedSourceSku.collectedProductName || '-'
+                )}
+              </Descriptions.Item>
+              <Descriptions.Item label="基础运费">{formatYuanAmount(collectedSourceSku.collectedBaseFreight)}</Descriptions.Item>
+              <Descriptions.Item label="最大重量">{formatWeightG(collectedSourceSku.collectedMaxWeightG)}</Descriptions.Item>
+              <Descriptions.Item label="上架日期">{formatDateTime(collectedSourceSku.collectedPublishedAt1688)}</Descriptions.Item>
+              <Descriptions.Item label="推送日期">{formatDateTime(collectedSourceSku.collectedPushedAt)}</Descriptions.Item>
+              <Descriptions.Item label="商家名称">{collectedSourceSku.collectedCompanyName || '-'}</Descriptions.Item>
+              <Descriptions.Item label="商家地区">{collectedSourceSku.collectedCompanyLocation || '-'}</Descriptions.Item>
+              <Descriptions.Item label="发货地">{collectedSourceSku.collectedShippingLocation || '-'}</Descriptions.Item>
+              <Descriptions.Item label="实力商家">{collectedSourceSku.collectedMerchantPowerSeller === null || collectedSourceSku.collectedMerchantPowerSeller === undefined ? '-' : collectedSourceSku.collectedMerchantPowerSeller ? '是' : '否'}</Descriptions.Item>
+              <Descriptions.Item label="复购率">{formatMaybePercent(collectedSourceSku.collectedMerchantRepeatCustomerRate)}</Descriptions.Item>
+              <Descriptions.Item label="服务分">{collectedSourceSku.collectedMerchantServiceScore || '-'}</Descriptions.Item>
+              <Descriptions.Item label="准时发货率">{formatMaybePercent(collectedSourceSku.collectedMerchantOnTimeDeliveryRate)}</Descriptions.Item>
+              <Descriptions.Item label="好评率">{formatMaybePercent(collectedSourceSku.collectedMerchantShopPositiveRate)}</Descriptions.Item>
+              <Descriptions.Item label="经营年限">{collectedSourceSku.collectedMerchantSettledYears || '-'}</Descriptions.Item>
+              <Descriptions.Item label="主营业务">{collectedSourceSku.collectedMerchantMainBusiness || '-'}</Descriptions.Item>
+            </Descriptions>
+          </Space>
+        ) : null}
+      </Modal>
+
+      <Modal
+        open={lowPriceRejectOpen}
+        title="低价批量拒绝"
+        width={900}
+        onOk={() => void submitLowPriceReject()}
+        onCancel={() => setLowPriceRejectOpen(false)}
+        okText={`拒绝当前 ${lowPriceRejectTargets.length} 条`}
+      >
+        <Space direction="vertical" size={16} style={{ width: '100%' }}>
+          <Space wrap align="center">
+            <Typography.Text>筛选当前页建议价低于等于</Typography.Text>
+            <InputNumber
+              min={0}
+              step={1}
+              precision={2}
+              value={lowPriceRejectThreshold}
+              onChange={(value) => setLowPriceRejectThreshold(typeof value === 'number' ? value : DEFAULT_LOW_PRICE_REJECT_THRESHOLD)}
+              style={{ width: 140 }}
+              addonAfter="元"
+            />
+            <Typography.Text type="secondary">当前命中 {lowPriceRejectTargets.length} 条</Typography.Text>
+          </Space>
+          <Table<PriceReviewOrderVO>
+            rowKey="id"
+            size="small"
+            pagination={false}
+            scroll={{ y: 360 }}
+            locale={{ emptyText: '当前页没有符合条件的数据' }}
+            dataSource={lowPriceRejectTargets}
+            columns={[
+              {
+                title: '订单ID',
+                dataIndex: 'orderId',
+                key: 'orderId',
+                width: 180,
+                render: (value, record) => value || record.id,
+              },
+              {
+                title: '建议价',
+                dataIndex: 'suggestSupplyPrice',
+                key: 'suggestSupplyPrice',
+                width: 120,
+                render: (value) => formatPrice(value),
+              },
+              {
+                title: '当前申报价',
+                dataIndex: 'supplyPrice',
+                key: 'supplyPrice',
+                width: 120,
+                render: (value) => formatPrice(value),
+              },
+              {
+                title: '采购价',
+                key: 'purchasePrice',
+                width: 150,
+                render: (_, record) => summarizePurchasePrice(record.skuList || []),
+              },
+              {
+                title: '采集价',
+                key: 'collectedPrice',
+                width: 180,
+                render: (_, record) => summarizeFirstCollectedPrice(record.skuList || []),
+              },
+              {
+                title: 'SKU',
+                key: 'skuInfo',
+                render: (_, record) => {
+                  const firstSku = (record.skuList || [])[0];
+                  if (!firstSku) {
+                    return '-';
+                  }
+                  return (
+                    <Space direction="vertical" size={2}>
+                      <Typography.Text>SKU {firstSku.productSkuId || '-'}</Typography.Text>
+                      <Typography.Text type="secondary">{firstSku.specInfo || '-'}</Typography.Text>
+                    </Space>
+                  );
+                },
+              },
+            ]}
+          />
+        </Space>
+      </Modal>
 
       <Modal
         open={reviewOpen}
@@ -438,7 +1000,7 @@ const SyncPriceReviewPage = () => {
             <>
               <Form layout="vertical">
                 <Form.Item label="原因类型">
-                  <Select value={reasonType} onChange={setReasonType} options={[{ value: 1, label: '一般原因' }, { value: 2, label: '价格原因' }, { value: 3, label: '其他原因' }]} />
+                  <Select value={reasonType} onChange={setReasonType} options={REJECT_REASON_TYPE_OPTIONS} />
                 </Form.Item>
                 <Form.Item label="拒绝原因，每行一条">
                   <Input.TextArea rows={4} value={reasonText} onChange={(e) => setReasonText(e.target.value)} />

@@ -24,6 +24,13 @@ type OrderTrendChartProps = {
   series: TrendSeries[];
 };
 
+type SummaryCardItem = {
+  key: string;
+  label: string;
+  value?: number | null;
+  kind?: 'count' | 'currency';
+};
+
 const formatCompactNumber = (value?: number | null) => {
   const numeric = Number(value ?? 0);
   if (!Number.isFinite(numeric)) {
@@ -33,6 +40,45 @@ const formatCompactNumber = (value?: number | null) => {
     return `${(numeric / 10000).toFixed(numeric >= 100000 ? 0 : 1)}万`;
   }
   return `${Math.round(numeric)}`;
+};
+
+const formatCompactCurrency = (value?: number | null) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return '-';
+  }
+
+  const yuan = numeric / 100;
+  const absolute = Math.abs(yuan);
+  if (absolute >= 10000) {
+    const compact = `${(absolute / 10000).toFixed(absolute >= 100000 ? 0 : 1)}万`;
+    return `${yuan < 0 ? '-' : ''}¥${compact}`;
+  }
+
+  return yuan.toLocaleString('zh-CN', {
+    style: 'currency',
+    currency: 'CNY',
+    minimumFractionDigits: absolute >= 1000 ? 0 : 2,
+    maximumFractionDigits: 2,
+  });
+};
+
+const formatSummaryValue = (item: SummaryCardItem) => (
+  item.kind === 'currency' ? formatCompactCurrency(item.value) : formatCompactNumber(item.value)
+);
+
+const resolveSummaryTone = (item: SummaryCardItem) => {
+  if (item.kind !== 'currency') {
+    return '';
+  }
+  const numeric = Number(item.value ?? 0);
+  if (numeric > 0) {
+    return 'is-positive';
+  }
+  if (numeric < 0) {
+    return 'is-negative';
+  }
+  return 'is-neutral';
 };
 
 const formatTooltipDate = (value?: string) => {
@@ -89,11 +135,11 @@ const OrderTrendChart = ({ title, subtitle, dates, series }: OrderTrendChartProp
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [containerWidth, setContainerWidth] = useState(920);
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
-  const chartHeight = 320;
-  const paddingTop = 18;
+  const chartHeight = 280;
+  const paddingTop = 14;
   const paddingRight = 18;
-  const paddingBottom = 42;
-  const paddingLeft = 50;
+  const paddingBottom = 34;
+  const paddingLeft = 42;
 
   useEffect(() => {
     const element = containerRef.current;
@@ -356,14 +402,69 @@ const OrderDashboardPage = () => {
 
   const activeShop = shops.find((item) => item.id === activeShopRecordId) ?? null;
 
-  const recentDates = dashboard?.recentOrderCountSeries.map((item: TemuOrderDashboardDailyValueVO) => item.date) ?? [];
-  const recentOrderSeries = dashboard?.recentOrderCountSeries.map((item: TemuOrderDashboardDailyValueVO) => item.value) ?? [];
-  const recentQuantitySeries = dashboard?.recentQuantitySeries.map((item: TemuOrderDashboardDailyValueVO) => item.value) ?? [];
-  const historicalDates = dashboard?.historicalSignedAftersaleSeries.map((item: TemuOrderDashboardDailyCompareValueVO) => item.date) ?? [];
-  const historicalSignedSeries =
-    dashboard?.historicalSignedAftersaleSeries.map((item: TemuOrderDashboardDailyCompareValueVO) => item.signedValue) ?? [];
-  const historicalAftersaleSeries =
-    dashboard?.historicalSignedAftersaleSeries.map((item: TemuOrderDashboardDailyCompareValueVO) => item.aftersaleValue) ?? [];
+  const recentOrderCountRows = dashboard?.recentOrderCountSeries ?? [];
+  const recentQuantityRows = dashboard?.recentQuantitySeries ?? [];
+  const recentDistinctSkuRows = dashboard?.recentDistinctSkuSeries ?? [];
+  const historicalCompareRows = dashboard?.historicalSignedAftersaleSeries ?? [];
+
+  const recentDates = recentOrderCountRows.map((item: TemuOrderDashboardDailyValueVO) => item.date);
+  const recentOrderSeries = recentOrderCountRows.map((item: TemuOrderDashboardDailyValueVO) => item.value);
+  const recentQuantitySeries = recentQuantityRows.map((item: TemuOrderDashboardDailyValueVO) => item.value);
+  const recentDistinctSkuSeries = recentDistinctSkuRows.map((item: TemuOrderDashboardDailyValueVO) => item.value);
+  const historicalDates = historicalCompareRows.map((item: TemuOrderDashboardDailyCompareValueVO) => item.date);
+  const historicalSignedSeries = historicalCompareRows.map((item: TemuOrderDashboardDailyCompareValueVO) => item.signedValue);
+  const historicalAftersaleSeries = historicalCompareRows.map((item: TemuOrderDashboardDailyCompareValueVO) => item.aftersaleValue);
+  const summaryCards: SummaryCardItem[] = dashboard
+    ? [
+        {
+          key: 'recent-child-order-count',
+          label: '最近30天子单数',
+          value: dashboard.totals?.recentChildOrderCount,
+        },
+        {
+          key: 'recent-quantity',
+          label: '最近30天出货数量',
+          value: dashboard.totals?.recentQuantity,
+        },
+        {
+          key: 'historical-signed-parent-count',
+          label: '15天前30天签收父单数',
+          value: dashboard.totals?.historicalSignedParentCount,
+        },
+        {
+          key: 'historical-aftersale-parent-count',
+          label: '15天前30天售后父单数',
+          value: dashboard.totals?.historicalAftersaleParentCount,
+        },
+        {
+          key: 'today-profit',
+          label: '今日利润（跳过缺数）',
+          value: dashboard.totals?.todayProfit,
+          kind: 'currency',
+        },
+        {
+          key: 'today-sales-amount',
+          label: '今日销售额',
+          value: dashboard.totals?.todaySalesAmount,
+          kind: 'currency',
+        },
+        {
+          key: 'today-quantity',
+          label: '今日出货数（数量维度）',
+          value: dashboard.totals?.todayQuantity,
+        },
+        {
+          key: 'today-distinct-sku-count',
+          label: '今日出货SKU数',
+          value: dashboard.totals?.todayDistinctSkuCount,
+        },
+        {
+          key: 'today-parent-order-count',
+          label: '今日订单数（父订单维度）',
+          value: dashboard.totals?.todayParentOrderCount,
+        },
+      ]
+    : [];
 
   const tabItems = shops.map((item) => ({
     key: String(item.id),
@@ -413,22 +514,12 @@ const OrderDashboardPage = () => {
         <>
           {dashboard ? (
             <div className="order-dashboard-summary-grid">
-              <div className="order-dashboard-summary-card">
-                <span className="summary-label">最近30天子单数</span>
-                <strong>{formatCompactNumber(dashboard.totals?.recentChildOrderCount)}</strong>
-              </div>
-              <div className="order-dashboard-summary-card">
-                <span className="summary-label">最近30天出货数量</span>
-                <strong>{formatCompactNumber(dashboard.totals?.recentQuantity)}</strong>
-              </div>
-              <div className="order-dashboard-summary-card">
-                <span className="summary-label">15天前30天签收父单数</span>
-                <strong>{formatCompactNumber(dashboard.totals?.historicalSignedParentCount)}</strong>
-              </div>
-              <div className="order-dashboard-summary-card">
-                <span className="summary-label">15天前30天售后父单数</span>
-                <strong>{formatCompactNumber(dashboard.totals?.historicalAftersaleParentCount)}</strong>
-              </div>
+              {summaryCards.map((item) => (
+                <div key={item.key} className={`order-dashboard-summary-card ${resolveSummaryTone(item)}`.trim()}>
+                  <span className="summary-label">{item.label}</span>
+                  <strong>{formatSummaryValue(item)}</strong>
+                </div>
+              ))}
             </div>
           ) : null}
 
@@ -476,7 +567,7 @@ const OrderDashboardPage = () => {
 
               <OrderTrendChart
                 title="最近30天出货数量曲线"
-                subtitle="按子订单数量汇总，若单个订单某 SKU 数量为 2，则按 2 计入出货数量"
+                subtitle="按子订单数量汇总，同时展示每天出货 SKU 种类数；若单个订单某 SKU 数量为 2，则按 2 计入出货数量"
                 dates={recentDates}
                 series={[
                   {
@@ -484,6 +575,12 @@ const OrderDashboardPage = () => {
                     name: '出货数量',
                     color: '#7c3aed',
                     values: recentQuantitySeries,
+                  },
+                  {
+                    key: 'recent-distinct-sku-count',
+                    name: '出货SKU数',
+                    color: '#14b8a6',
+                    values: recentDistinctSkuSeries,
                   },
                 ]}
               />

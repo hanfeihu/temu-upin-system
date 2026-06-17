@@ -1,4 +1,5 @@
 import {
+  DatabaseOutlined,
   DownloadOutlined,
   LineChartOutlined,
   LogoutOutlined,
@@ -21,6 +22,7 @@ import { useAuth } from '@/context/AuthContext';
 const { Header, Sider, Content } = Layout;
 const { Text } = Typography;
 const PLUGIN_DOWNLOAD_PATH = '/downloads/tminos-1688-collector-latest.zip';
+const PRODUCT_DASHBOARD_PATH = '/platform/product-dashboard';
 const ORDER_DASHBOARD_PATH = '/platform/order-dashboard';
 
 const BasicLayout = () => {
@@ -63,6 +65,10 @@ const BasicLayout = () => {
 
   function openOrderDashboard() {
     window.open(ORDER_DASHBOARD_PATH, '_blank', 'noopener,noreferrer');
+  }
+
+  function openProductDashboard() {
+    window.open(PRODUCT_DASHBOARD_PATH, '_blank', 'noopener,noreferrer');
   }
 
   return (
@@ -123,6 +129,9 @@ const BasicLayout = () => {
             <Flex align="center" gap={12}>
               <Button icon={<DownloadOutlined />} onClick={downloadPlugin}>
                 下载插件
+              </Button>
+              <Button icon={<DatabaseOutlined />} onClick={openProductDashboard}>
+                商品数据看板
               </Button>
               <Button icon={<LineChartOutlined />} onClick={openOrderDashboard}>
                 订单大屏

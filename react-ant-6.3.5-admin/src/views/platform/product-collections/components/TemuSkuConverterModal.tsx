@@ -1,8 +1,10 @@
 import { App, Button, Input, InputNumber, Modal, Popconfirm, Space, Table, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useState } from 'react';
+import { alibabaImageProxyConfigApi } from '@/api/alibabaImageProxyConfig';
 import { productCollectionsApi } from '@/api/productCollections';
-import type { ProductCollectionRow, ProductCollectionTemuSkuVO } from '@/types/api';
+import type { AlibabaImageProxyConfigVO, ProductCollectionRow, ProductCollectionTemuSkuVO } from '@/types/api';
+import { buildAlibabaImageProxyUrl } from '@/utils/alibabaImageProxy';
 
 interface TemuSkuConverterModalProps {
   open: boolean;
@@ -51,6 +53,18 @@ function toNumber(value: unknown) {
   return Number.isFinite(num) ? num : 0;
 }
 
+const SUPPLY_PRICE_FIXED_ADD = 6;
+const SUPPLY_PRICE_WEIGHT_RATE_PER_G = 0.069;
+const SUPPLY_PRICE_MULTIPLIER = 6;
+
+function calculateSupplyPrice(originPrice: number, weightG: number) {
+  return Math.round(
+    (originPrice + SUPPLY_PRICE_FIXED_ADD + weightG * SUPPLY_PRICE_WEIGHT_RATE_PER_G)
+      * SUPPLY_PRICE_MULTIPLIER
+      * 100,
+  ) / 100;
+}
+
 function buildEditableRow(row: ProductCollectionTemuSkuVO, index: number): EditableTemuSkuRow {
   return {
     ...row,
@@ -70,6 +84,16 @@ const TemuSkuConverterModal = ({ open, record, onClose }: TemuSkuConverterModalP
     url: '',
     uploading: false,
   });
+  const [imageProxyConfig, setImageProxyConfig] = useState<AlibabaImageProxyConfigVO | null>(null);
+
+  async function loadImageProxyConfig() {
+    try {
+      const response = await alibabaImageProxyConfigApi.current();
+      setImageProxyConfig(response.data || null);
+    } catch {
+      setImageProxyConfig(null);
+    }
+  }
 
   async function loadExisting() {
     if (!record?.id) {
@@ -91,6 +115,7 @@ const TemuSkuConverterModal = ({ open, record, onClose }: TemuSkuConverterModalP
     }
 
     setRows([]);
+    void loadImageProxyConfig();
     void loadExisting();
   }, [open, record?.id]);
 
@@ -228,7 +253,7 @@ const TemuSkuConverterModal = ({ open, record, onClose }: TemuSkuConverterModalP
     updateRow(index, (row) => {
       const originPrice = toNumber(row.originPrice);
       const weightG = toNumber(row.weightG);
-      const supplyPrice = Math.round(((originPrice + 6 + weightG * 0.069) * 3) * 100) / 100;
+      const supplyPrice = calculateSupplyPrice(originPrice, weightG);
       return {
         ...row,
         supplyPrice,
@@ -309,7 +334,11 @@ const TemuSkuConverterModal = ({ open, record, onClose }: TemuSkuConverterModalP
           }}
         >
           {row.image ? (
-            <img src={row.image} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+            <img
+              src={buildAlibabaImageProxyUrl(row.image, imageProxyConfig)}
+              alt=""
+              style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+            />
           ) : (
             <span style={{ fontSize: 12, color: 'rgba(15,23,42,0.55)', fontWeight: 700 }}>点击设置</span>
           )}

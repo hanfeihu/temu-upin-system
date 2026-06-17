@@ -1,0 +1,26 @@
+BEGIN
+SELECT 0
+INSERT 0 1
+SELECT 0
+INSERT 0 1
+SELECT 0
+INSERT 0 1
+UPDATE 1
+UPDATE 1
+UPDATE 1
+  id  |   offer_id    | moq_snapshot | start_batch_qty_snapshot | moq_text_snapshot 
+------+---------------+--------------+--------------------------+-------------------
+ 7554 | 1042648594954 |           10 |                       10 | ¥1.20 10支起批
+(1 row)
+
+  id   |   sku_spec_text    | sku_price_snapshot | estimated_purchase_price |                                                                                     sku_spec_json                                                                                     
+-------+--------------------+--------------------+--------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ 89922 | 角杆绿色>HB 10支装 |             1.2000 |                   1.2000 | {name:角杆绿色 10支装,skuId:6064581264187,stock:999999,price:1.20,image:https://cbu01.alicdn.com/img/ibank/O1CN01jRculo1H1HBz4TQdH_!!4072270697-0-cib.jpg,bundleQty:10,bundleUnit:支}
+(1 row)
+
+ detail_moq | detail_moq_text | detail_price_range_text |                                                                        detail_sku_data_json                                                                         
+------------+-----------------+-------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ 10         | ¥1.20 10支起批  | ¥1.20 10支起批          | {skus:[{name:角杆绿色 10支装,skuId:6064581264187,stock:999999,price:1.20,image:https://cbu01.alicdn.com/img/ibank/O1CN01jRculo1H1HBz4TQdH_!!4072270697-0-cib.jpg}]}
+(1 row)
+
+COMMIT

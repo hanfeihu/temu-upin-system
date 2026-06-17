@@ -2,10 +2,11 @@ package com.tminos.productscene.service;
 
 import com.aliyun.oss.OSS;
 import com.aliyun.oss.OSSClientBuilder;
+import com.aliyun.oss.ClientException;
 import com.aliyun.oss.model.ObjectMetadata;
 import com.aliyun.oss.OSSException;
-import com.aliyun.oss.ClientException;
 import com.tminos.productscene.config.OssConfig;
+import com.tminos.productscene.minio.MinioStorageClient;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -25,9 +26,10 @@ import java.util.UUID;
 public class OssService {
 
     private final OssConfig ossConfig;
+    private final MinioStorageClient minioStorageClient;
 
     public boolean isEnabled() {
-        return ossConfig != null && ossConfig.isEnabled();
+        return isMinioEnabled() || isAliyunEnabled();
     }
 
     public record OssPingResult(boolean ok, String message, String requestId, String errorCode) {}
@@ -38,10 +40,28 @@ public class OssService {
         if (file == null || file.isEmpty()) {
             throw new IllegalArgumentException("File is empty");
         }
-        if (!ossConfig.isEnabled()) {
-            throw new IllegalStateException("OSS is disabled (aliyun.oss.enabled=false)");
+        if (isMinioEnabled()) {
+            return uploadSkuImageToMinio(file);
         }
+        if (!isAliyunEnabled()) {
+            throw new IllegalStateException("Storage is disabled (aliyun.oss.enabled=false and tminos.minio.enabled=false)");
+        }
+        return uploadSkuImageToAliyun(file);
+    }
 
+    private String uploadSkuImageToMinio(MultipartFile file) {
+        String originalName = file.getOriginalFilename();
+        String ext = guessExtension(originalName, file.getContentType());
+        String key = buildObjectKey("sku", ext);
+        try (InputStream inputStream = file.getInputStream()) {
+            return minioStorageClient.upload(key, inputStream, file.getSize(), file.getContentType());
+        } catch (Exception e) {
+            log.error("MinIO upload failed: {}", e.getMessage(), e);
+            throw new RuntimeException("MinIO upload failed: " + e.getMessage(), e);
+        }
+    }
+
+    private String uploadSkuImageToAliyun(MultipartFile file) {
         String accessKeyId = ossConfig.getAccessKeyId();
         String accessKeySecret = ossConfig.getAccessKeySecret();
         if (accessKeyId != null) {
@@ -60,9 +80,7 @@ public class OssService {
         String originalName = file.getOriginalFilename();
         String ext = guessExtension(originalName, file.getContentType());
 
-        LocalDate today = LocalDate.now();
-        String key = String.format(Locale.ROOT, "sku/%04d/%02d/%02d/%s%s",
-                today.getYear(), today.getMonthValue(), today.getDayOfMonth(), UUID.randomUUID(), ext);
+        String key = buildObjectKey("sku", ext);
 
         OSS client = null;
         try {
@@ -83,7 +101,7 @@ public class OssService {
                 client.putObject(ossConfig.getBucket(), key, is, meta);
             }
 
-            return toPublicUrl(key);
+            return toAliyunPublicUrl(key);
         } catch (Exception e) {
             log.error("OSS upload failed: {}", e.getMessage(), e);
             throw new RuntimeException("OSS upload failed: " + e.getMessage(), e);
@@ -101,11 +119,22 @@ public class OssService {
         if (!StringUtils.hasText(url)) {
             return new OssDeleteResult(false, true, "Empty url", null, null);
         }
-        if (!ossConfig.isEnabled()) {
-            return new OssDeleteResult(false, true, "OSS disabled", null, null);
+
+        if (isMinioEnabled()) {
+            MinioStorageClient.MinioDeleteResult minioDeleteResult = minioStorageClient.deleteByUrl(url);
+            if (!minioDeleteResult.skipped()) {
+                return new OssDeleteResult(minioDeleteResult.deleted(), false, minioDeleteResult.message(), null, null);
+            }
+            if (!isAliyunEnabled()) {
+                return new OssDeleteResult(false, true, minioDeleteResult.message(), null, null);
+            }
         }
 
-        String key = extractKeyIfOwned(url);
+        if (!isAliyunEnabled()) {
+            return new OssDeleteResult(false, true, "Storage disabled", null, null);
+        }
+
+        String key = extractAliyunKeyIfOwned(url);
         if (!StringUtils.hasText(key)) {
             return new OssDeleteResult(false, true, "URL not owned by configured OSS", null, null);
         }
@@ -134,7 +163,7 @@ public class OssService {
         }
     }
 
-    private String extractKeyIfOwned(String url) {
+    private String extractAliyunKeyIfOwned(String url) {
         String raw = url.trim();
         int q = raw.indexOf('?');
         if (q >= 0) {
@@ -169,10 +198,22 @@ public class OssService {
         if (bytes == null || bytes.length == 0) {
             throw new IllegalArgumentException("Empty bytes");
         }
-        if (!ossConfig.isEnabled()) {
-            throw new IllegalStateException("OSS is disabled (aliyun.oss.enabled=false)");
+        if (isMinioEnabled()) {
+            return uploadBytesToMinio(keyPrefix, bytes, contentType);
         }
+        if (!isAliyunEnabled()) {
+            throw new IllegalStateException("Storage is disabled (aliyun.oss.enabled=false and tminos.minio.enabled=false)");
+        }
+        return uploadBytesToAliyun(keyPrefix, bytes, contentType);
+    }
 
+    private String uploadBytesToMinio(String keyPrefix, byte[] bytes, String contentType) {
+        String key = buildObjectKey(keyPrefix, ".png");
+        String finalContentType = StringUtils.hasText(contentType) ? contentType : "image/png";
+        return minioStorageClient.uploadBytes(key, bytes, finalContentType);
+    }
+
+    private String uploadBytesToAliyun(String keyPrefix, byte[] bytes, String contentType) {
         String accessKeyId = ossConfig.getAccessKeyId();
         String accessKeySecret = ossConfig.getAccessKeySecret();
         if (accessKeyId != null) accessKeyId = accessKeyId.trim();
@@ -185,9 +226,7 @@ public class OssService {
             throw new IllegalStateException("Missing OSS config: aliyun.oss.endpoint / aliyun.oss.bucket");
         }
 
-        LocalDate today = LocalDate.now();
-        String key = String.format(Locale.ROOT, "%s/%04d/%02d/%02d/%s.png",
-                normalizePrefix(keyPrefix), today.getYear(), today.getMonthValue(), today.getDayOfMonth(), UUID.randomUUID());
+        String key = buildObjectKey(keyPrefix, ".png");
 
         OSS client = null;
         try {
@@ -203,7 +242,7 @@ public class OssService {
             }
 
             client.putObject(ossConfig.getBucket(), key, new java.io.ByteArrayInputStream(bytes), meta);
-            return toPublicUrl(key);
+            return toAliyunPublicUrl(key);
         } catch (Exception e) {
             log.error("OSS upload bytes failed: {}", e.getMessage(), e);
             throw new RuntimeException("OSS upload failed: " + e.getMessage(), e);
@@ -232,8 +271,12 @@ public class OssService {
     }
 
     public OssPingResult ping() {
-        if (!ossConfig.isEnabled()) {
-            return new OssPingResult(false, "OSS disabled", null, null);
+        if (isMinioEnabled()) {
+            MinioStorageClient.MinioPingResult pingResult = minioStorageClient.ping();
+            return new OssPingResult(pingResult.ok(), pingResult.message(), null, null);
+        }
+        if (!isAliyunEnabled()) {
+            return new OssPingResult(false, "Storage disabled", null, null);
         }
         if (!StringUtils.hasText(ossConfig.getEndpoint()) || !StringUtils.hasText(ossConfig.getBucket())) {
             return new OssPingResult(false, "Missing endpoint/bucket", null, null);
@@ -269,7 +312,7 @@ public class OssService {
         }
     }
 
-    private String toPublicUrl(String key) {
+    private String toAliyunPublicUrl(String key) {
         String base;
         if (StringUtils.hasText(ossConfig.getPublicDomain())) {
             base = ossConfig.getPublicDomain().trim();
@@ -280,6 +323,25 @@ public class OssService {
             base = "https://" + ossConfig.getBucket() + "." + ossConfig.getEndpoint();
         }
         return base + (key.startsWith("/") ? key : "/" + key);
+    }
+
+    private boolean isAliyunEnabled() {
+        return ossConfig != null && ossConfig.isEnabled();
+    }
+
+    private boolean isMinioEnabled() {
+        return minioStorageClient != null && minioStorageClient.isEnabled();
+    }
+
+    private String buildObjectKey(String keyPrefix, String extension) {
+        LocalDate today = LocalDate.now();
+        return String.format(Locale.ROOT, "%s/%04d/%02d/%02d/%s%s",
+                normalizePrefix(keyPrefix),
+                today.getYear(),
+                today.getMonthValue(),
+                today.getDayOfMonth(),
+                UUID.randomUUID(),
+                extension);
     }
 
     private String guessExtension(String originalName, String contentType) {

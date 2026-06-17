@@ -25,17 +25,17 @@ public class ImageOcrConsumerController {
      * Get one task and mark it running.
      */
     @PostMapping("/tasks/claim")
-    public ResponseEntity<ApiResponse<ImageOcrTask>> claim(@RequestBody(required = false) ImageOcrDTO.ClaimTaskRequest req) {
+    public ResponseEntity<ApiResponse<ImageOcrDTO.OcrTaskResponse>> claim(@RequestBody(required = false) ImageOcrDTO.ClaimTaskRequest req) {
         String ip = req == null ? null : req.getPublicIp();
         ImageOcrTask t = service.claimOne(ip);
-        return ResponseEntity.ok(ApiResponse.success(t));
+        return ResponseEntity.ok(ApiResponse.success(service.toExternalResponse(t)));
     }
 
     /**
      * Complete a task. If ocrText provided -> success; else -> failed.
      */
     @PostMapping("/tasks/complete")
-    public ResponseEntity<ApiResponse<ImageOcrTask>> complete(@Valid @RequestBody ImageOcrDTO.CompleteTaskRequest req) {
-        return ResponseEntity.ok(ApiResponse.success(service.complete(req)));
+    public ResponseEntity<ApiResponse<ImageOcrDTO.OcrTaskResponse>> complete(@Valid @RequestBody ImageOcrDTO.CompleteTaskRequest req) {
+        return ResponseEntity.ok(ApiResponse.success(service.toExternalResponse(service.complete(req))));
     }
 }

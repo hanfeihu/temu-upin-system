@@ -18,6 +18,7 @@ import {
   Table,
   Tag,
   Typography,
+  Upload,
 } from 'antd';
 import {
   AppstoreOutlined,
@@ -38,21 +39,26 @@ import {
   SwapOutlined,
   TableOutlined,
   TagOutlined,
+  UploadOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
+import type { UploadProps } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import { alibabaImageProxyConfigApi } from '@/api/alibabaImageProxyConfig';
 import {
   productCollectionsApi,
   type ProductCollectionSplitPayload,
   type ProductCollectionUpdatePayload,
 } from '@/api/productCollections';
 import type {
+  AlibabaImageProxyConfigVO,
   ProductCollectionDetailVO,
   ProductCollectionSkuPropVO,
   ProductCollectionSkuRowVO,
   ProductCollectionTemuSkuVO,
 } from '@/types/api';
+import { buildAlibabaImageProxyUrl } from '@/utils/alibabaImageProxy';
 import { formatDateTime, prettyJson, safeJsonParse } from '@/utils/format';
 import './ProductCollectionDetailPage.css';
 
@@ -60,6 +66,17 @@ interface KeyValueRow {
   key: string;
   name: string;
   value: string;
+}
+
+function prettyPrintJsonText(text?: string | null) {
+  if (!text) {
+    return '';
+  }
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2);
+  } catch {
+    return text;
+  }
 }
 
 interface SplitGroupState {
@@ -98,6 +115,12 @@ interface FusionState {
   loading: boolean;
   saving: boolean;
   errorMsg: string;
+}
+
+interface TemuSkuImageReplaceState {
+  open: boolean;
+  row: ProductCollectionTemuSkuVO | null;
+  uploading: boolean;
 }
 
 const languageOptions = [
@@ -457,6 +480,25 @@ const ProductCollectionDetailPage = () => {
   const [splitSaving, setSplitSaving] = useState(false);
   const [splitGroups, setSplitGroups] = useState<SplitGroupState[]>([]);
   const [splitAssignments, setSplitAssignments] = useState<Record<number, string>>({});
+  const [imageProxyConfig, setImageProxyConfig] = useState<AlibabaImageProxyConfigVO | null>(null);
+  const [temuSkuImageReplace, setTemuSkuImageReplace] = useState<TemuSkuImageReplaceState>({
+    open: false,
+    row: null,
+    uploading: false,
+  });
+
+  async function loadImageProxyConfig() {
+    try {
+      const res = await alibabaImageProxyConfigApi.current();
+      setImageProxyConfig(res.data || null);
+    } catch {
+      setImageProxyConfig(null);
+    }
+  }
+
+  function displayImageUrl(url?: string | null) {
+    return buildAlibabaImageProxyUrl(url, imageProxyConfig);
+  }
 
   async function loadDetail(showPageLoading = true) {
     if (!Number.isFinite(collectionId) || collectionId <= 0) {
@@ -482,6 +524,7 @@ const ProductCollectionDetailPage = () => {
   }
 
   useEffect(() => {
+    void loadImageProxyConfig();
     void loadDetail();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [collectionId]);
@@ -533,6 +576,15 @@ const ProductCollectionDetailPage = () => {
     return detail.skuRows.find((row) => matchesSkuSelection(row, selectedSku)) || detail.skuRows[0] || null;
   }, [detail?.skuRows, selectedSku]);
   const allFieldKeys = useMemo(() => (detail ? Object.keys(detail).sort((a, b) => a.localeCompare(b)) : []), [detail]);
+  const hasPublishResponse = !!(
+    detail?.lastPublishRunId ||
+    detail?.lastPublishStatus ||
+    detail?.lastPublishGoodsId ||
+    detail?.lastPublishResponseRaw ||
+    detail?.lastPublishError ||
+    detail?.lastPublishStartedAt ||
+    detail?.lastPublishFinishedAt
+  );
   const splitSkuRows = useMemo(
     () =>
       (detail?.skuRows || [])
@@ -613,7 +665,7 @@ const ProductCollectionDetailPage = () => {
                 >
                   {videoPoster ? (
                     <>
-                      <img src={videoPoster} alt="video cover" loading="lazy" />
+                      <img src={displayImageUrl(videoPoster)} alt="video cover" loading="lazy" />
                       <span className="pcd-video-play" aria-hidden="true">
                         <PlayCircleOutlined />
                       </span>
@@ -638,7 +690,7 @@ const ProductCollectionDetailPage = () => {
                   }}
                   title={`图片 ${index + 1}`}
                 >
-                  <img src={imageUrl} alt={`thumb-${index + 1}`} loading="lazy" />
+                  <img src={displayImageUrl(imageUrl)} alt={`thumb-${index + 1}`} loading="lazy" />
                 </button>
               ))}
             </div>
@@ -649,7 +701,7 @@ const ProductCollectionDetailPage = () => {
               <div className="pcd-main-image-container">
                 {activeImage ? (
                   <>
-                    <img src={activeImage} alt={detail.productName || 'product'} loading="lazy" />
+                    <img src={displayImageUrl(activeImage)} alt={detail.productName || 'product'} loading="lazy" />
                     <div className="pcd-main-actions">
                       <button className="pcd-main-action" type="button" title="图片融合" onClick={openFusion}>
                         <AppstoreOutlined />
@@ -687,8 +739,57 @@ const ProductCollectionDetailPage = () => {
         </div>
       </div>
 
-      <div className="pcd-info-col">
+        <div className="pcd-info-col">
         <div className="pcd-product-title">{detail.productName || '-'}</div>
+
+        {detail.temuPublished ? (
+          <div className="pcd-publish-row">
+            <Tag color="green">已发布</Tag>
+            <span>发布时间 {formatDateTime(detail.temuPublishedAt)}</span>
+            {detail.temuGoodsId ? <span>goodsId {detail.temuGoodsId}</span> : null}
+            {detail.lastPublishRunId ? <span>runId {detail.lastPublishRunId}</span> : null}
+          </div>
+        ) : null}
+
+        {hasPublishResponse ? (
+          <Card
+            size="small"
+            className="pcd-publish-response-card"
+            title="发布返回"
+            extra={<Tag color={detail.lastPublishStatus === 'SUCCEEDED' ? 'green' : detail.lastPublishStatus === 'FAILED' ? 'red' : 'blue'}>{detail.lastPublishStatus || '-'}</Tag>}
+          >
+            <Descriptions size="small" column={2}>
+              <Descriptions.Item label="runId">{detail.lastPublishRunId || '-'}</Descriptions.Item>
+              <Descriptions.Item label="goodsId">{detail.lastPublishGoodsId || detail.temuGoodsId || '-'}</Descriptions.Item>
+              <Descriptions.Item label="开始时间">{formatDateTime(detail.lastPublishStartedAt) || '-'}</Descriptions.Item>
+              <Descriptions.Item label="结束时间">{formatDateTime(detail.lastPublishFinishedAt) || '-'}</Descriptions.Item>
+            </Descriptions>
+            {detail.lastPublishResponseRaw ? (
+              <Typography.Paragraph
+                copyable
+                style={{
+                  marginTop: 10,
+                  marginBottom: 0,
+                  maxHeight: 220,
+                  overflow: 'auto',
+                  padding: 10,
+                  borderRadius: 6,
+                  background: '#fafafa',
+                  whiteSpace: 'pre-wrap',
+                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+                }}
+              >
+                {prettyPrintJsonText(detail.lastPublishResponseRaw)}
+              </Typography.Paragraph>
+            ) : detail.lastPublishError ? (
+              <Typography.Paragraph type="danger" copyable style={{ marginTop: 10, marginBottom: 0 }}>
+                {detail.lastPublishError}
+              </Typography.Paragraph>
+            ) : (
+              <Typography.Text type="secondary">暂无 TEMU 返回内容</Typography.Text>
+            )}
+          </Card>
+        ) : null}
 
         {(detail.targetShopNames || []).length ? (
           <div className="pcd-shop-row">
@@ -785,7 +886,7 @@ const ProductCollectionDetailPage = () => {
                               }))
                             }
                           >
-                            {value.image ? <img src={value.image} alt={currentValue} loading="lazy" /> : null}
+                            {value.image ? <img src={displayImageUrl(value.image)} alt={currentValue} loading="lazy" /> : null}
                             <span>{currentValue || '-'}</span>
                           </button>
                         );
@@ -853,7 +954,7 @@ const ProductCollectionDetailPage = () => {
             <div className="pcd-detail-images">
               {detailImages.map((imageUrl, index) => (
                 <div key={`${imageUrl}-${index}`} className="pcd-detail-image-item">
-                  <img src={imageUrl} alt={`detail-${index + 1}`} loading="lazy" />
+                  <img src={displayImageUrl(imageUrl)} alt={`detail-${index + 1}`} loading="lazy" />
                   <button
                     className="pcd-detail-add-carousel"
                     type="button"
@@ -912,6 +1013,7 @@ const ProductCollectionDetailPage = () => {
               </div>
               <div className="pcd-temu-sku-table">
                 <div className="pcd-temu-sku-head">
+                  <span>图片</span>
                   <span>属性</span>
                   <span>供货价</span>
                   <span>重量</span>
@@ -922,6 +1024,24 @@ const ProductCollectionDetailPage = () => {
                     key={`${row.temuSkuId || row.originSkuId || row.specKey || 'temu'}-${index}`}
                     className="pcd-temu-sku-row"
                   >
+                    <button
+                      className="pcd-temu-sku-image-btn"
+                      type="button"
+                      title="点击替换 SKU 图片"
+                      onClick={() => openTemuSkuImageReplace(row)}
+                    >
+                      {row.image ? (
+                        <Image
+                          src={displayImageUrl(row.image)}
+                          width={46}
+                          height={46}
+                          preview={false}
+                          style={{ borderRadius: 8, objectFit: 'cover' }}
+                        />
+                      ) : (
+                        <PictureOutlined />
+                      )}
+                    </button>
                     <span className="pcd-mono" title={row.specKey || ''}>
                       {row.specKey || parseSpecJsonText(row.specJson)}
                     </span>
@@ -983,7 +1103,7 @@ const ProductCollectionDetailPage = () => {
       render: (_, record) =>
         record.image ? (
           <Image
-            src={record.image}
+            src={displayImageUrl(record.image)}
             width={56}
             height={56}
             preview={false}
@@ -1033,6 +1153,46 @@ const ProductCollectionDetailPage = () => {
     await loadDetail(false);
     message.success(successText);
   }
+
+  function openTemuSkuImageReplace(row: ProductCollectionTemuSkuVO) {
+    if (!row.id) {
+      message.warning('请先保存 TEMU SKU 后再替换图片');
+      return;
+    }
+    setTemuSkuImageReplace({
+      open: true,
+      row,
+      uploading: false,
+    });
+  }
+
+  async function uploadAndReplaceTemuSkuImage(file: File) {
+    const row = temuSkuImageReplace.row;
+    if (!detail?.id || !row?.id) {
+      message.error('缺少 SKU 信息');
+      return;
+    }
+    setTemuSkuImageReplace((current) => ({ ...current, uploading: true }));
+    try {
+      await productCollectionsApi.uploadTemuSkuImageFile(detail.id, row.id, file);
+      await loadDetail(false);
+      message.success('SKU 图片已替换');
+      setTemuSkuImageReplace({ open: false, row: null, uploading: false });
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '替换失败');
+      setTemuSkuImageReplace((current) => ({ ...current, uploading: false }));
+    }
+  }
+
+  const temuSkuImageUploadProps: UploadProps = {
+    accept: 'image/*',
+    maxCount: 1,
+    showUploadList: false,
+    beforeUpload: (file) => {
+      void uploadAndReplaceTemuSkuImage(file);
+      return false;
+    },
+  };
 
   function openExternal(url?: string | null) {
     if (!url) {
@@ -1669,7 +1829,7 @@ const ProductCollectionDetailPage = () => {
               <div className="pcd-img-title">原图</div>
               <div className="pcd-img-frame">
                 {translateState.originalUrl ? (
-                  <img src={translateState.originalUrl} alt="original" />
+                  <img src={displayImageUrl(translateState.originalUrl)} alt="original" />
                 ) : (
                   <div className="pcd-img-placeholder">暂无原图</div>
                 )}
@@ -1680,7 +1840,7 @@ const ProductCollectionDetailPage = () => {
               <div className="pcd-img-title">翻译结果</div>
               <div className="pcd-img-frame">
                 {translateState.storedUrl || translateState.translatedUrl ? (
-                  <img src={translateState.storedUrl || translateState.translatedUrl} alt="translated" />
+                  <img src={displayImageUrl(translateState.storedUrl || translateState.translatedUrl)} alt="translated" />
                 ) : (
                   <div className="pcd-img-placeholder">
                     {translateState.loading ? '正在翻译...' : '点击“开始翻译”生成结果'}
@@ -1734,7 +1894,7 @@ const ProductCollectionDetailPage = () => {
                     }}
                   >
                     <img
-                      src={imageUrl}
+                      src={displayImageUrl(imageUrl)}
                       alt={`fusion-${index + 1}`}
                       style={{ width: 74, height: 74, borderRadius: 8, objectFit: 'cover' }}
                     />
@@ -1826,7 +1986,7 @@ const ProductCollectionDetailPage = () => {
               <Card size="small" title="生成结果">
                 {fusionState.resultUrl ? (
                   <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                    <Image src={fusionState.resultUrl} width="100%" />
+                    <Image src={displayImageUrl(fusionState.resultUrl)} width="100%" />
                     <Typography.Paragraph copyable style={{ marginBottom: 0 }}>
                       {fusionState.resultUrl}
                     </Typography.Paragraph>
@@ -1845,6 +2005,35 @@ const ProductCollectionDetailPage = () => {
               </Card>
             </Col>
           </Row>
+        </Space>
+      </Modal>
+
+      <Modal
+        open={temuSkuImageReplace.open}
+        title="替换 TEMU SKU 图片"
+        width={520}
+        footer={null}
+        onCancel={() => setTemuSkuImageReplace({ open: false, row: null, uploading: false })}
+      >
+        <Space direction="vertical" size={14} style={{ width: '100%' }}>
+          <div className="pcd-temu-sku-upload-preview">
+            {temuSkuImageReplace.row?.image ? (
+              <Image src={displayImageUrl(temuSkuImageReplace.row.image)} width={120} height={120} />
+            ) : (
+              <PictureOutlined />
+            )}
+          </div>
+          <Descriptions size="small" column={1} bordered>
+            <Descriptions.Item label="SKU">
+              {temuSkuImageReplace.row?.specKey || parseSpecJsonText(temuSkuImageReplace.row?.specJson)}
+            </Descriptions.Item>
+          </Descriptions>
+          <Upload {...temuSkuImageUploadProps}>
+            <Button type="primary" icon={<UploadOutlined />} loading={temuSkuImageReplace.uploading}>
+              选择本地图片并替换
+            </Button>
+          </Upload>
+          <Typography.Text type="secondary">图片会先上传到系统存储，再上传到 TEMU 图片空间，并写回当前 SKU。</Typography.Text>
         </Space>
       </Modal>
 
@@ -1897,7 +2086,7 @@ const ProductCollectionDetailPage = () => {
               <div key={row.id} className="pcd-split-sku-item">
                 <div className="pcd-split-sku-main">
                   {row.image ? (
-                    <img src={row.image} alt={row.specKey || row.skuId} className="pcd-split-sku-image" />
+                    <img src={displayImageUrl(row.image)} alt={row.specKey || row.skuId} className="pcd-split-sku-image" />
                   ) : (
                     <div className="pcd-split-sku-image pcd-split-sku-image-empty">无图</div>
                   )}

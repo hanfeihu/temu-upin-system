@@ -10,6 +10,8 @@ import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
 import jakarta.annotation.PreDestroy;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -185,24 +187,27 @@ public class TemuAutoPublishWorker {
             } catch (Exception ignored) {
             }
 
+            String eligibilityJson = null;
             try {
                 if (autoPublishLogService != null) {
-                    autoPublishLogService.data(autoRunId, "ELIGIBILITY", "not eligible", java.util.Map.of(
+                    Map<String, Object> eligibilityData = mapAllowingNulls(
                             "eligible", false,
                             "reasons", r.reasons(),
                             "checks", r.checks(),
                             "debug", r.debug()
-                    ));
-                    String eligibilityJson = autoPublishLogService.toJsonSafe(java.util.Map.of(
-                            "eligible", false,
-                            "reasons", r.reasons(),
-                            "checks", r.checks(),
-                            "debug", r.debug()
-                    ));
+                    );
+                    autoPublishLogService.data(autoRunId, "ELIGIBILITY", "not eligible", eligibilityData);
+                    eligibilityJson = autoPublishLogService.toJsonSafe(eligibilityData);
+                }
+            } catch (Exception ignored) {
+            }
+            try {
+                if (autoPublishLogService != null) {
                     autoPublishLogService.finishSkipped(autoRunId, eligibilityJson, autoPublishLogService.buildEligibilityDisplaySummary(r));
                     autoPublishLogService.info(autoRunId, "END", "auto publish run finished (skipped)");
                 }
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                log.warn("TemuAutoPublishWorker finish skipped failed spuId={} autoRunId={}: {}", spuId, autoRunId, e.getMessage());
             }
             log.debug("TemuAutoPublishWorker skip spuId={} reasons={} debug={}", spuId, r.reasons(), r.debug());
             try {
@@ -284,6 +289,21 @@ public class TemuAutoPublishWorker {
         } catch (Exception ignored) {
         }
         return true;
+    }
+
+    private Map<String, Object> mapAllowingNulls(Object... keyValues) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        if (keyValues == null) {
+            return out;
+        }
+        for (int i = 0; i + 1 < keyValues.length; i += 2) {
+            Object key = keyValues[i];
+            if (key == null) {
+                continue;
+            }
+            out.put(String.valueOf(key), keyValues[i + 1]);
+        }
+        return out;
     }
 
     private void sleepQuietly(long ms) {

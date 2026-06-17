@@ -4,7 +4,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tminos.temu.upin.sdk.v2.client.TemuOpenApiClient;
 import com.tminos.temu.upin.sdk.v2.common.TemuOpenApiCredentials;
-import com.tminos.temu.upin.sdk.v2.common.TemuOpenApiEndpoints;
 import org.springframework.stereotype.Service;
 
 import java.util.Collection;
@@ -43,7 +42,7 @@ public class TemuOrderOpenApiService {
         if (updateAtEndSec != null) {
             params.put("updateAtEnd", updateAtEndSec);
         }
-        return callApiWithFallbacks(creds, params, API_ORDER_LIST, API_ORDER_LIST_LEGACY);
+        return callApiWithApiFallbacks(creds, params, API_ORDER_LIST, API_ORDER_LIST_LEGACY);
     }
 
     public JsonNode listParentAftersales(TemuOpenApiCredentials creds,
@@ -98,11 +97,7 @@ public class TemuOrderOpenApiService {
         if (parentAfterSalesSnList != null && !parentAfterSalesSnList.isEmpty()) {
             params.put("parentAfterSalesSnList", parentAfterSalesSnList);
         }
-        return callApiWithFallbacks(creds, params, API_PARENT_AFTERSALES_LIST);
-    }
-
-    private JsonNode callApiOrThrow(TemuOpenApiCredentials creds, String apiType, Map<String, Object> params) {
-        return callApiOrThrow(creds, apiType, params, TemuOpenApiEndpoints.API_BASE_URL);
+        return callApiWithApiFallbacks(creds, params, API_PARENT_AFTERSALES_LIST);
     }
 
     private JsonNode callApiOrThrow(TemuOpenApiCredentials creds,
@@ -130,19 +125,17 @@ public class TemuOrderOpenApiService {
         }
     }
 
-    private JsonNode callApiWithFallbacks(TemuOpenApiCredentials creds,
-                                          Map<String, Object> params,
-                                          String... apiTypes) {
+    private JsonNode callApiWithApiFallbacks(TemuOpenApiCredentials creds,
+                                             Map<String, Object> params,
+                                             String... apiTypes) {
         IllegalStateException lastException = null;
-        for (String routerUrl : new String[]{TemuOpenApiEndpoints.API_BASE_URL, ORDER_APP_ROUTER_URL}) {
-            for (String apiType : apiTypes) {
-                try {
-                    return callApiOrThrow(creds, apiType, params, routerUrl);
-                } catch (IllegalStateException ex) {
-                    lastException = ex;
-                    if (!containsRetryableCompatibilityError(ex)) {
-                        throw ex;
-                    }
+        for (String apiType : apiTypes) {
+            try {
+                return callApiOrThrow(creds, apiType, params, ORDER_APP_ROUTER_URL);
+            } catch (IllegalStateException ex) {
+                lastException = ex;
+                if (!containsRetryableCompatibilityError(ex)) {
+                    throw ex;
                 }
             }
         }

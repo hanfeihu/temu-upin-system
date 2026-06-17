@@ -21,11 +21,65 @@ public class ThreadPoolConfig {
      */
     private Integer imageTranslateWorkers = 10;
 
+    /**
+     * Async sync-task executor core threads.
+     */
+    private Integer syncTaskCorePoolSize = 3;
+
+    /**
+     * Async sync-task executor max threads.
+     */
+    private Integer syncTaskMaxPoolSize = 10;
+
+    /**
+     * Async sync-task executor queue size.
+     */
+    private Integer syncTaskQueueCapacity = 50;
+
+    /**
+     * Shared sync worker pool core threads.
+     */
+    private Integer syncWorkerCorePoolSize = 10;
+
+    /**
+     * Shared sync worker pool max threads.
+     */
+    private Integer syncWorkerMaxPoolSize = 20;
+
+    /**
+     * Shared sync worker pool queue size.
+     */
+    private Integer syncWorkerQueueCapacity = 500;
+
     public Integer getWorkers() {
         return workers;
     }
 
     public Integer getImageTranslateWorkers() {
         return imageTranslateWorkers;
+    }
+
+    public Integer getSyncTaskCorePoolSize() {
+        return syncTaskCorePoolSize;
+    }
+
+    public Integer getSyncTaskMaxPoolSize() {
+        return syncTaskMaxPoolSize;
+    }
+
+    public Integer getSyncTaskQueueCapacity() {
+        return syncTaskQueueCapacity;
+    }
+
+    public Integer getSyncWorkerCorePoolSize() {
+        return syncWorkerCorePoolSize;
+    }
+
+    public Integer getSyncWorkerMaxPoolSize() {
+        return syncWorkerMaxPoolSize;
+    }
+
+    public Integer getSyncWorkerQueueCapacity() {
+        return syncWorkerQueueCapacity;
     }
 }

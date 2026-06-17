@@ -1,5 +1,5 @@
 import { App, Button, Card, Drawer, Input, Select, Space, Table, Tag, Typography } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
+import type { ColumnsType, TablePaginationConfig } from 'antd/es/table';
 import { useEffect, useState } from 'react';
 import { postImportLogsApi } from '@/api/postImportLogs';
 import type { PostImportRunVO, PublishLogVO } from '@/types/api';
@@ -52,19 +52,32 @@ const PostImportLogsPage = () => {
   const [status, setStatus] = useState<string>();
   const [loading, setLoading] = useState(false);
   const [runs, setRuns] = useState<PostImportRunVO[]>([]);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [total, setTotal] = useState(0);
   const [logsOpen, setLogsOpen] = useState(false);
   const [logsLoading, setLogsLoading] = useState(false);
   const [logs, setLogs] = useState<PublishLogVO[]>([]);
+  const [logsPage, setLogsPage] = useState(1);
+  const [logsPageSize, setLogsPageSize] = useState(20);
   const [selectedRun, setSelectedRun] = useState<PostImportRunVO | null>(null);
 
-  async function reload(nextSpuId = spuId) {
+  async function reload(nextPage = page, nextPageSize = pageSize, nextSpuId = spuId, nextStatus = status) {
     setLoading(true);
     try {
-      const normalized = String(nextSpuId || '').trim();
-      const res = await postImportLogsApi.listRuns(normalized);
-      setRuns(Array.isArray(res.data) ? res.data : []);
-      if (!res.data.length) {
-        message.info(normalized ? '没有找到该 spuId 的自动化记录' : '暂无自动化记录');
+      const normalizedSpuId = String(nextSpuId || '').trim();
+      const normalizedStatus = String(nextStatus || '').trim();
+      const res = await postImportLogsApi.searchRuns({
+        spuId: normalizedSpuId || undefined,
+        status: normalizedStatus || undefined,
+        page: Math.max(nextPage - 1, 0),
+        size: nextPageSize,
+      });
+      const content = Array.isArray(res.data.content) ? res.data.content : [];
+      setRuns(content);
+      setTotal(Number(res.data.totalElements || 0));
+      if (!content.length) {
+        message.info(normalizedSpuId ? '没有找到该 spuId 的自动化记录' : '暂无自动化记录');
       }
     } catch (error) {
       message.error(error instanceof Error ? error.message : '加载失败');
@@ -74,13 +87,15 @@ const PostImportLogsPage = () => {
   }
 
   useEffect(() => {
-    void reload('');
+    void reload(1, 20, '', undefined);
   }, []);
 
   async function openLogs(record: PostImportRunVO) {
     setSelectedRun(record);
     setLogsOpen(true);
     setLogs([]);
+    setLogsPage(1);
+    setLogsPageSize(20);
     setLogsLoading(true);
     try {
       const res = await postImportLogsApi.listLogs(record.id);
@@ -108,8 +123,6 @@ const PostImportLogsPage = () => {
       message.error(error instanceof Error ? error.message : '获取样本失败');
     }
   }
-
-  const filteredRuns = status ? runs.filter((item) => item.status === status) : runs;
 
   const columns: ColumnsType<PostImportRunVO> = [
     { title: 'runId', dataIndex: 'id', key: 'id', width: 90 },
@@ -192,7 +205,17 @@ const PostImportLogsPage = () => {
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       <Card>
         <Space wrap>
-          <Input value={spuId} onChange={(e) => setSpuId(e.target.value)} placeholder="输入 spuId，例如 107" style={{ width: 220 }} allowClear onPressEnter={() => void reload()} />
+          <Input
+            value={spuId}
+            onChange={(e) => setSpuId(e.target.value)}
+            placeholder="输入 spuId，例如 107"
+            style={{ width: 220 }}
+            allowClear
+            onPressEnter={() => {
+              setPage(1);
+              void reload(1, pageSize);
+            }}
+          />
           <Select
             value={status}
             onChange={setStatus}
@@ -205,7 +228,14 @@ const PostImportLogsPage = () => {
               { label: '进行中', value: 'STARTED' },
             ]}
           />
-          <Button type="primary" loading={loading} onClick={() => void reload()}>
+          <Button
+            type="primary"
+            loading={loading}
+            onClick={() => {
+              setPage(1);
+              void reload(1, pageSize);
+            }}
+          >
             查询
           </Button>
         </Space>
@@ -215,9 +245,24 @@ const PostImportLogsPage = () => {
         <Table<PostImportRunVO>
           rowKey="id"
           columns={columns}
-          dataSource={filteredRuns}
+          dataSource={runs}
           loading={loading}
-          pagination={false}
+          pagination={{
+            current: page,
+            pageSize,
+            total,
+            showSizeChanger: true,
+            showQuickJumper: true,
+            showTotal: (count) => `共 ${count} 条`,
+            pageSizeOptions: ['10', '20', '50', '100'],
+          }}
+          onChange={(pagination: TablePaginationConfig) => {
+            const nextPage = pagination.current || 1;
+            const nextPageSize = pagination.pageSize || 20;
+            setPage(nextPage);
+            setPageSize(nextPageSize);
+            void reload(nextPage, nextPageSize);
+          }}
           scroll={{ x: 980 }}
         />
       </Card>
@@ -226,7 +271,10 @@ const PostImportLogsPage = () => {
         open={logsOpen}
         title={selectedRun ? `自动化日志 runId=${selectedRun.id} spuId=${selectedRun.spuId} 状态=${selectedRun.status || '-'}` : '自动化日志'}
         width={900}
-        onClose={() => setLogsOpen(false)}
+        onClose={() => {
+          setLogsOpen(false);
+          setLogsPage(1);
+        }}
       >
         <div style={{ marginBottom: 16 }}>
           <Button disabled={!selectedRun} onClick={() => void copySample(selectedRun)}>
@@ -239,7 +287,19 @@ const PostImportLogsPage = () => {
           columns={logColumns}
           dataSource={logs}
           loading={logsLoading}
-          pagination={false}
+          pagination={{
+            current: logsPage,
+            pageSize: logsPageSize,
+            total: logs.length,
+            showSizeChanger: true,
+            showQuickJumper: true,
+            showTotal: (count) => `共 ${count} 条日志`,
+            pageSizeOptions: ['10', '20', '50', '100'],
+          }}
+          onChange={(pagination: TablePaginationConfig) => {
+            setLogsPage(pagination.current || 1);
+            setLogsPageSize(pagination.pageSize || 20);
+          }}
           size="small"
         />
       </Drawer>

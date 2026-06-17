@@ -39,6 +39,9 @@ public class TargetShopBindingService {
         if (normalizedIds.isEmpty()) {
             return new TargetShopBinding(Collections.emptyList(), Collections.emptyList());
         }
+        if (normalizedIds.size() > 1) {
+            throw new IllegalArgumentException("一个商品只能绑定一个店铺，请只选择一个店铺");
+        }
 
         List<TemuShop> shops = temuShopRepository.findByShopIdIn(normalizedIds);
         Map<String, TemuShop> shopMap = new LinkedHashMap<>();

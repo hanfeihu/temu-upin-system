@@ -1,3 +1,27 @@
+const SHANGHAI_TIME_ZONE = 'Asia/Shanghai';
+
+function formatTimestampByTimeZone(value: number, includeSeconds: boolean) {
+  const date = new Date(value);
+  const formatter = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: SHANGHAI_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: includeSeconds ? '2-digit' : undefined,
+    hour12: false,
+  });
+  const parts = formatter.formatToParts(date).reduce<Record<string, string>>((acc, part) => {
+    if (part.type !== 'literal') {
+      acc[part.type] = part.value;
+    }
+    return acc;
+  }, {});
+  const second = includeSeconds ? `:${parts.second || '00'}` : '';
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}${second}`;
+}
+
 export function formatDateTime(value: string | number[] | null | undefined) {
   if (!value) {
     return '-';
@@ -25,16 +49,14 @@ export function formatTimestamp(value: number | null | undefined) {
   if (!value) {
     return '-';
   }
-  return formatDateTime(new Date(value).toISOString());
+  return formatTimestampByTimeZone(value, true);
 }
 
 export function formatTimestampMinute(value: number | null | undefined) {
   if (!value) {
     return '-';
   }
-  const date = new Date(value);
-  const pad = (input: number) => String(input).padStart(2, '0');
-  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`;
+  return formatTimestampByTimeZone(value, false);
 }
 
 export function formatPrice(value: number | string | null | undefined, divisor = 100) {

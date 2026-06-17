@@ -30,6 +30,7 @@
     </dependencies>
   <modules>
     <module>temu-upin-sdk</module>
+    <module>temu-upin-minio-sdk</module>
     <module>temu-upin-common</module>
     <module>temu-upin-sync</module>
     <module>temu-upin-backend</module>

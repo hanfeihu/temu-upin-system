@@ -1,9 +1,7 @@
 package com.tminos.productscene.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.tminos.productscene.entity.ImageOcrTask;
 import com.tminos.productscene.entity.ProductCollection;
-import com.tminos.productscene.repository.ImageOcrTaskRepository;
 import com.tminos.productscene.repository.ProductCollectionTemuSkuRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -19,14 +17,11 @@ public class TemuAutoPublishEligibilityService {
     public static final int PRODUCT_OCR_STATUS_SUCCESS = 2;
     public static final int PRODUCT_EXEC_STATUS_SUCCESS = 2;
 
-    private final ImageOcrTaskRepository ocrTaskRepo;
     private final ProductCollectionTemuSkuRepository temuSkuRepo;
     private final ObjectMapper objectMapper;
 
-    public TemuAutoPublishEligibilityService(ImageOcrTaskRepository ocrTaskRepo,
-                                            ProductCollectionTemuSkuRepository temuSkuRepo,
+    public TemuAutoPublishEligibilityService(ProductCollectionTemuSkuRepository temuSkuRepo,
                                             ObjectMapper objectMapper) {
-        this.ocrTaskRepo = ocrTaskRepo;
         this.temuSkuRepo = temuSkuRepo;
         this.objectMapper = objectMapper;
     }
@@ -61,21 +56,19 @@ public class TemuAutoPublishEligibilityService {
         ));
         if (!r0) reasons.add("collectionStatus not 未发布 (pre-claim)");
 
-        // 1) OCR status must be success (2)
+        // 1) OCR status is informational only. Auto publish no longer blocks Chinese images.
         Integer ocrStatus = pc.getOcrStatus();
         debug.put("ocrStatus", ocrStatus);
-        boolean r1 = (ocrStatus != null && ocrStatus == PRODUCT_OCR_STATUS_SUCCESS);
         checks.add(new RuleCheck(
                 "R1",
-                "OCR status completed",
-                r1,
+                "OCR status is not required",
+                true,
                 Map.of(
-                        "expected", "ocrStatus == 2",
+                        "expected", "allow any OCR status",
                         "actual", ocrStatus,
-                        "display", "OCR status: " + (ocrStatus == null ? "null" : String.valueOf(ocrStatus)) + " (need 2)"
+                        "display", "OCR status: " + (ocrStatus == null ? "null" : String.valueOf(ocrStatus)) + " (not required)"
                 )
         ));
-        if (!r1) reasons.add("ocrStatus not success");
 
         // 2) Exec status must be success (2)
         Integer execStatus = pc.getExecStatus();
@@ -139,59 +132,22 @@ public class TemuAutoPublishEligibilityService {
         ));
         if (!r5) reasons.add("temuAttributes empty");
 
-                // 6) Only 1688-imported products need OCR Chinese text validation.
-                boolean shouldCheckOcrChinese = !isTemuSourcePlatform(pc.getSourcePlatform());
-                List<ImageOcrTask> tasks = shouldCheckOcrChinese ? ocrTaskRepo.findBySpuId(pc.getId()) : List.of();
-                int checked = 0;
-                int chineseHitTasks = 0;
-                List<Long> chineseHitTaskIds = new ArrayList<>();
-                if (tasks != null) {
-                        for (ImageOcrTask t : tasks) {
-                                if (t == null) continue;
-                                if (Boolean.TRUE.equals(t.getFiltered())) {
-                                        continue;
-                                }
-                                if (t.getExecStatus() == null || t.getExecStatus() != ImageOcrTask.STATUS_SUCCESS) {
-                                        continue;
-                                }
-                                String text = t.getExecResult();
-                                if (!StringUtils.hasText(text)) {
-                                        continue;
-                                }
-                                checked++;
-                                boolean containsChinese = t.getContainsChinese() != null
-                                                ? Boolean.TRUE.equals(t.getContainsChinese())
-                                                : containsChinese(text);
-                                if (containsChinese) {
-                                        chineseHitTasks++;
-                                        if (t.getId() != null) chineseHitTaskIds.add(t.getId());
-                                }
-                        }
-                }
-                debug.put("sourcePlatform", pc.getSourcePlatform());
-                debug.put("ocrChineseCheckApplied", shouldCheckOcrChinese);
-                debug.put("ocrCheckedNotFilteredCount", checked);
-                debug.put("ocrChineseHitTaskCount", chineseHitTasks);
-                boolean r6 = !shouldCheckOcrChinese || chineseHitTasks == 0;
+        // 6) Chinese text in images is allowed for auto publish.
+        debug.put("sourcePlatform", pc.getSourcePlatform());
+        debug.put("ocrChineseCheckApplied", false);
         checks.add(new RuleCheck(
                 "R6",
-                                "1688 source OCR text must not contain Chinese characters for filtered=false images",
-                r6,
+                "Chinese images are allowed",
+                true,
                 Map.of(
-                                                "expected", shouldCheckOcrChinese ? "chineseHitTasks == 0" : "skip for TEMU source",
-                                                "actual", Map.of(
-                                                                "sourcePlatform", pc.getSourcePlatform(),
-                                                                "checkApplied", shouldCheckOcrChinese,
-                                                                "checked", checked,
-                                                                "chineseHitTasks", chineseHitTasks,
-                                                                "taskIds", chineseHitTaskIds
-                                                ),
-                                                "display", shouldCheckOcrChinese
-                                                                ? "OCR(chinese hit): " + chineseHitTasks + " tasks / checked " + checked
-                                                                : "OCR chinese check skipped for TEMU source"
+                        "expected", "skip OCR Chinese validation",
+                        "actual", Map.of(
+                                "sourcePlatform", pc.getSourcePlatform(),
+                                "checkApplied", false
+                        ),
+                        "display", "OCR chinese check skipped"
                 )
         ));
-                if (!r6) reasons.add("ocrText contains Chinese characters (not-filtered 1688 images)");
 
                 // 7) TEMU sku count > 0
         int temuSkuCount = temuSkuRepo.findBySpuIdOrderByIdAsc(pc.getId()).size();
@@ -225,20 +181,6 @@ public class TemuAutoPublishEligibilityService {
             return 0;
         }
     }
-
-    private boolean containsChinese(String text) {
-        if (!StringUtils.hasText(text)) return false;
-        // Basic CJK Unified Ideographs block.
-        for (int i = 0; i < text.length(); i++) {
-            char c = text.charAt(i);
-            if (c >= '\u4E00' && c <= '\u9FFF') return true;
-        }
-        return false;
-    }
-
-        private boolean isTemuSourcePlatform(String sourcePlatform) {
-                return StringUtils.hasText(sourcePlatform) && "TEMU".equalsIgnoreCase(sourcePlatform.trim());
-        }
 
     public record RuleCheck(String ruleId, String ruleName, boolean passed, Map<String, Object> details) {
     }

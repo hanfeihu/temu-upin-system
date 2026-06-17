@@ -17,6 +17,7 @@ import java.net.URL;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.security.MessageDigest;
 import java.time.Duration;
 import java.util.Base64;
 
@@ -38,6 +39,10 @@ public class TemuImageNormalizeService {
     }
 
     public Result normalizeToTemu800(String url) throws Exception {
+        return normalizeToTemu800(url, null);
+    }
+
+    public Result normalizeToTemu800(String url, String shopId) throws Exception {
         if (!StringUtils.hasText(url)) {
             throw new IllegalArgumentException("image url is required");
         }
@@ -48,7 +53,7 @@ public class TemuImageNormalizeService {
         String candidate = original;
         boolean isKwcdn = isTemuKwcdn(candidate);
         if (!isKwcdn) {
-            TemuOpenApiCredentials creds = temuOpenApiCredentialService.getDefaultTemuOpenApiCredentialsOrThrow();
+            TemuOpenApiCredentials creds = resolveProductCredentials(shopId);
             String uploadedRaw = uploadByUrlWithRetry(creds, candidate);
             String uploadedUrl = parseUploadedImageUrlOrThrow(uploadedRaw);
             candidate = normalizeUrlString(uploadedUrl);
@@ -69,6 +74,7 @@ public class TemuImageNormalizeService {
                 r.setUploadedUrl(candidate);
                 r.setWidth(null);
                 r.setHeight(null);
+                r.setMd5(null);
                 r.setChanged(true);
                 r.setReason("uploaded_to_kwcdn_decode_failed");
                 return r;
@@ -84,6 +90,7 @@ public class TemuImageNormalizeService {
             r.setUploadedUrl(candidate);
             r.setWidth(info.width);
             r.setHeight(info.height);
+            r.setMd5(md5Hex(info.bytes));
             r.setChanged(uploadedByUrlFirst);
             r.setReason(uploadedByUrlFirst ? "uploaded_to_kwcdn" : "already_800_kwcdn");
             return r;
@@ -104,6 +111,7 @@ public class TemuImageNormalizeService {
                 r.setUploadedUrl(candidate);
                 r.setWidth(info.width);
                 r.setHeight(info.height);
+                r.setMd5(info.bytes == null ? null : md5Hex(info.bytes));
                 r.setChanged(uploadedByUrlFirst);
                 r.setReason("kwcdn_decode_failed");
                 return r;
@@ -116,7 +124,7 @@ public class TemuImageNormalizeService {
         ByteArrayOutputStream bos = new ByteArrayOutputStream();
         ImageIO.write(out, "jpg", bos);
         String base64 = "data:image/jpeg;base64," + Base64.getEncoder().encodeToString(bos.toByteArray());
-        TemuOpenApiCredentials creds = temuOpenApiCredentialService.getDefaultTemuOpenApiCredentialsOrThrow();
+        TemuOpenApiCredentials creds = resolveProductCredentials(shopId);
         String uploadedRaw2 = uploadBase64WithRetry(creds, base64);
         String uploadedUrl2 = parseUploadedImageUrlOrThrow(uploadedRaw2);
 
@@ -126,9 +134,17 @@ public class TemuImageNormalizeService {
         r.setUploadedUrl(uploadedUrl2);
         r.setWidth(TARGET_W);
         r.setHeight(TARGET_H);
+        r.setMd5(md5Hex(bos.toByteArray()));
         r.setChanged(true);
         r.setReason(uploadedByUrlFirst ? "uploaded_to_kwcdn_then_resized" : "resized_to_800_then_uploaded");
         return r;
+    }
+
+    private TemuOpenApiCredentials resolveProductCredentials(String shopId) {
+        if (StringUtils.hasText(shopId)) {
+            return temuOpenApiCredentialService.getTemuOpenApiCredentialsByExactShopIdOrThrow(shopId);
+        }
+        return temuOpenApiCredentialService.getDefaultTemuOpenApiCredentialsOrThrow();
     }
 
     public ImageSize probeImageSize(String url) throws Exception {
@@ -137,6 +153,63 @@ public class TemuImageNormalizeService {
         }
         ImageInfo info = probe(normalizeUrlString(url));
         return new ImageSize(info.width, info.height);
+    }
+
+    public ImageMetadata probeImageMetadata(String url) throws Exception {
+        if (!StringUtils.hasText(url)) {
+            throw new IllegalArgumentException("image url is required");
+        }
+        ImageInfo info = probe(normalizeUrlString(url));
+        return new ImageMetadata(info.width, info.height, md5Hex(info.bytes));
+    }
+
+    public Result normalizeBytesToTemu800(byte[] bytes, String sourceLabel, String shopId) throws Exception {
+        if (bytes == null || bytes.length == 0) {
+            throw new IllegalArgumentException("image bytes are required");
+        }
+        BufferedImage src = ImageIO.read(new ByteArrayInputStream(bytes));
+        if (src == null) {
+            throw new IllegalStateException("Failed to decode AI translated image");
+        }
+
+        BufferedImage out = stretchResize(src, TARGET_W, TARGET_H);
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        ImageIO.write(out, "jpg", bos);
+        String base64 = "data:image/jpeg;base64," + Base64.getEncoder().encodeToString(bos.toByteArray());
+        TemuOpenApiCredentials creds = resolveProductCredentials(shopId);
+        String uploadedRaw = uploadBase64WithRetry(creds, base64);
+        String uploadedUrl = parseUploadedImageUrlOrThrow(uploadedRaw);
+
+        Result r = new Result();
+        r.setOriginalUrl(sourceLabel);
+        r.setNormalizedUrl("<ai-translated-800x800>");
+        r.setUploadedUrl(uploadedUrl);
+        r.setWidth(TARGET_W);
+        r.setHeight(TARGET_H);
+        r.setMd5(md5Hex(bos.toByteArray()));
+        r.setChanged(true);
+        r.setReason("ai_translated_resized_to_800_then_uploaded");
+        return r;
+    }
+
+    public Result normalizeImageUrlToTemu800(String imageUrl, String sourceLabel, String shopId) throws Exception {
+        if (!StringUtils.hasText(imageUrl)) {
+            throw new IllegalArgumentException("image url is required");
+        }
+        byte[] bytes = downloadBytes(normalizeUrlString(imageUrl));
+        return normalizeBytesToTemu800(bytes, StringUtils.hasText(sourceLabel) ? sourceLabel : imageUrl, shopId);
+    }
+
+    private String md5Hex(byte[] bytes) throws Exception {
+        if (bytes == null || bytes.length == 0) {
+            return null;
+        }
+        byte[] digest = MessageDigest.getInstance("MD5").digest(bytes);
+        StringBuilder out = new StringBuilder(digest.length * 2);
+        for (byte b : digest) {
+            out.append(String.format("%02x", b & 0xff));
+        }
+        return out.toString();
     }
 
     private String parseUploadedImageUrlOrThrow(String raw) {
@@ -313,6 +386,7 @@ public class TemuImageNormalizeService {
         private String uploadedUrl;
         private Integer width;
         private Integer height;
+        private String md5;
         private Boolean changed;
         private String reason;
 
@@ -326,6 +400,8 @@ public class TemuImageNormalizeService {
         public void setWidth(Integer width) { this.width = width; }
         public Integer getHeight() { return height; }
         public void setHeight(Integer height) { this.height = height; }
+        public String getMd5() { return md5; }
+        public void setMd5(String md5) { this.md5 = md5; }
         public Boolean getChanged() { return changed; }
         public void setChanged(Boolean changed) { this.changed = changed; }
         public String getReason() { return reason; }
@@ -333,6 +409,9 @@ public class TemuImageNormalizeService {
     }
 
     public record ImageSize(int width, int height) {
+    }
+
+    public record ImageMetadata(int width, int height, String md5) {
     }
 
 }

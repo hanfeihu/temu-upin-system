@@ -19,11 +19,13 @@ public class TemuOrderAutoSyncScheduler {
 
     private final TemuShopService shopService;
     private final TemuOrderService orderService;
+    private final DianxiaomiOrderSyncService dianxiaomiOrderSyncService;
     private final TemuOrderAftersaleService aftersaleService;
 
     private final AtomicBoolean incrementalRunning = new AtomicBoolean(false);
     private final AtomicBoolean compensationRunning = new AtomicBoolean(false);
     private final AtomicBoolean aftersaleOpenStatusRefreshRunning = new AtomicBoolean(false);
+    private final AtomicBoolean dianxiaomiOrderSyncRunning = new AtomicBoolean(false);
 
     @Value("${temu.order.auto-sync.enabled:true}")
     private boolean enabled;
@@ -43,11 +45,16 @@ public class TemuOrderAutoSyncScheduler {
     @Value("${temu.order.auto-sync.aftersale-open-refresh-enabled:true}")
     private boolean aftersaleOpenRefreshEnabled;
 
+    @Value("${temu.order.auto-sync.dianxiaomi-enabled:true}")
+    private boolean dianxiaomiEnabled;
+
     public TemuOrderAutoSyncScheduler(TemuShopService shopService,
                                       TemuOrderService orderService,
+                                      DianxiaomiOrderSyncService dianxiaomiOrderSyncService,
                                       TemuOrderAftersaleService aftersaleService) {
         this.shopService = shopService;
         this.orderService = orderService;
+        this.dianxiaomiOrderSyncService = dianxiaomiOrderSyncService;
         this.aftersaleService = aftersaleService;
     }
 
@@ -106,6 +113,37 @@ public class TemuOrderAutoSyncScheduler {
             }
         } finally {
             aftersaleOpenStatusRefreshRunning.set(false);
+        }
+    }
+
+    @Scheduled(
+            fixedDelayString = "${temu.order.auto-sync.dianxiaomi-poll-ms:300000}",
+            initialDelayString = "${temu.order.auto-sync.dianxiaomi-initial-delay-ms:90000}"
+    )
+    public void runDianxiaomiOrderSync() {
+        if (!enabled || !dianxiaomiEnabled || !dianxiaomiOrderSyncRunning.compareAndSet(false, true)) {
+            return;
+        }
+        try {
+            TemuOrderDTO.SyncRequest request = new TemuOrderDTO.SyncRequest();
+            request.setPageSize(100);
+            request.setMaxPages(10);
+            List<TemuOrderDTO.SyncResponse> results = dianxiaomiOrderSyncService.sync(request);
+            for (TemuOrderDTO.SyncResponse result : results) {
+                if (result == null || (result.isSuccess() && result.getTotalCount() <= 0)) {
+                    continue;
+                }
+                log.info("店小秘订单自动同步 shopId={}, total={}, created={}, updated={}, matched={}, success={}, message={}",
+                        result.getShopId(),
+                        result.getTotalCount(),
+                        result.getCreatedCount(),
+                        result.getUpdatedCount(),
+                        result.getMatchedCount(),
+                        result.isSuccess(),
+                        result.getMessage());
+            }
+        } finally {
+            dianxiaomiOrderSyncRunning.set(false);
         }
     }
 

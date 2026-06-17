@@ -16,6 +16,7 @@ public class TemuOrderDashboardDTO {
         private Totals totals;
         private List<DailyValue> recentOrderCountSeries;
         private List<DailyValue> recentQuantitySeries;
+        private List<DailyValue> recentDistinctSkuSeries;
         private List<DailyCompareValue> historicalSignedAftersaleSeries;
     }
 
@@ -43,6 +44,11 @@ public class TemuOrderDashboardDTO {
         private Long recentQuantity;
         private Long historicalSignedParentCount;
         private Long historicalAftersaleParentCount;
+        private Long todayProfit;
+        private Long todaySalesAmount;
+        private Long todayQuantity;
+        private Long todayDistinctSkuCount;
+        private Long todayParentOrderCount;
     }
 
     @Data

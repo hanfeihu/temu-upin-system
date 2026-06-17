@@ -12,7 +12,9 @@ import type {
 } from '@/types/api';
 
 export interface ProductCollectionListParams {
+  id?: number;
   q?: string;
+  skuIdKeyword?: string;
   sourcePlatform?: string;
   targetShopId?: string;
   collectionStatus?: number;
@@ -42,6 +44,8 @@ interface PublishToTemuResponse {
 interface TemuSkuImageUploadResponse {
   originalUrl?: string;
   imageUrl?: string;
+  storedUrl?: string;
+  sku?: ProductCollectionTemuSkuVO;
 }
 
 export interface ProductCollectionUpdatePayload {
@@ -245,6 +249,17 @@ export const productCollectionsApi = {
     return client.post(`/platform/product-collections/${id}/temu/skus/image/upload`, { imageUrl }, { timeout: 240000 }) as Promise<
       ApiResponse<TemuSkuImageUploadResponse>
     >;
+  },
+
+  uploadTemuSkuImageFile(id: number, skuId: number, file: File) {
+    const formData = new FormData();
+    formData.append('file', file);
+    return client.post(`/platform/product-collections/${id}/temu/skus/${skuId}/image/file`, formData, {
+      timeout: 240000,
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    }) as Promise<ApiResponse<TemuSkuImageUploadResponse>>;
   },
 
   listTemuAttrRules(params: { enabled?: boolean; leafCatId?: string } = {}) {

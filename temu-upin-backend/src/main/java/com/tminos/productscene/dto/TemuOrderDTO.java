@@ -34,6 +34,8 @@ public class TemuOrderDTO {
         private String matchedSkuSpecName;
         private String matchedProductName;
         private BigDecimal matchedSupplyPrice;
+        private Integer purchasePrice;
+        private BigDecimal matchedFirstLegLogisticsFee;
         private Long salesQuantity;
         private Long aftersaleQuantity;
         private BigDecimal aftersaleRate;
@@ -84,6 +86,8 @@ public class TemuOrderDTO {
         private String matchedSkuSpecName;
         private String matchedProductName;
         private BigDecimal matchedSupplyPrice;
+        private Integer purchasePrice;
+        private BigDecimal matchedFirstLegLogisticsFee;
         private Long salesQuantity;
         private Long aftersaleQuantity;
         private BigDecimal aftersaleRate;
@@ -101,6 +105,8 @@ public class TemuOrderDTO {
         private Long shopRecordId;
         private Boolean fullSync;
         private Integer hoursBack;
+        private Integer pageSize;
+        private Integer maxPages;
     }
 
     @Data
@@ -124,6 +130,11 @@ public class TemuOrderDTO {
         private String referenceNo;
         private String shippingMethodNo;
         private String trackingNumber;
+    }
+
+    @Data
+    public static class ManualPackageNumberRequest {
+        private String packageNumber;
     }
 
     @Data

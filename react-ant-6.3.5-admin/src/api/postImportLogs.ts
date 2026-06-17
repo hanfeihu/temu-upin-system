@@ -1,7 +1,20 @@
 import client from '@/api/client';
-import type { ApiResponse, PostImportRunVO, PublishLogVO } from '@/types/api';
+import type { ApiResponse, PostImportRunVO, PublishLogVO, SpringPage } from '@/types/api';
+
+export interface PostImportLogsSearchParams {
+  spuId?: string;
+  status?: string;
+  page?: number;
+  size?: number;
+}
 
 export const postImportLogsApi = {
+  searchRuns(params: PostImportLogsSearchParams) {
+    return client.get('/platform/post-import/runs/search', {
+      params,
+    }) as Promise<ApiResponse<SpringPage<PostImportRunVO>>>;
+  },
+
   listRuns(spuId?: string) {
     const normalized = String(spuId || '').trim();
     if (!normalized) {

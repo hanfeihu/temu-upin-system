@@ -3,9 +3,17 @@
 
 globalThis.TMINOS_COLLECTOR_DEFAULTS = {
   environments: {
+    hanfeihu: {
+      label: '韩飞虎',
+      baseUrl: 'https://youyou.tminos.com'
+    },
     dev: {
       label: '开发环境',
       baseUrl: 'https://dev.tminos.com'
+    },
+    chenqi: {
+      label: 'chenqi服务器',
+      baseUrl: 'http://chenqi.tminos.com:20080'
     },
     local: {
       label: '本地环境',
@@ -17,6 +25,7 @@ globalThis.TMINOS_COLLECTOR_DEFAULTS = {
   authLoginPath: '/api/auth/login',
   shopListPath: '/api/platform/temu-shops',
   endpointPath: '/api/platform/product-drafts/import',
+  cardLinkEndpointPath: '/api/platform/alibaba1688-card-links/import',
   siteProfiles: {
     generic: {
       label: '商品采集助手',

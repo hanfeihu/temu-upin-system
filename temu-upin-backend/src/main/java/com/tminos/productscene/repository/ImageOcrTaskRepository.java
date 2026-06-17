@@ -25,6 +25,24 @@ public interface ImageOcrTaskRepository extends JpaRepository<ImageOcrTask, Long
     @Query("select count(t) from ImageOcrTask t where t.spuId = :spuId")
     long countBySpuId(@Param("spuId") Long spuId);
 
+    @Query("select t from ImageOcrTask t where t.imageUrl is not null and (t.imageWidth is null or t.imageHeight is null or t.imageMd5 is null) order by t.id asc")
+    List<ImageOcrTask> findMissingImageMetadata(Pageable pageable);
+
+    @Query("select count(t) from ImageOcrTask t where t.imageUrl is not null and (t.imageWidth is null or t.imageHeight is null or t.imageMd5 is null)")
+    long countMissingImageMetadata();
+
+    @Query("""
+            select t from ImageOcrTask t
+            where exists (
+                select c from ImageOcrSizeFilterConfig c
+                where c.enabled = true
+                  and c.imageWidth = t.imageWidth
+                  and c.imageHeight = t.imageHeight
+            )
+            order by t.spuId asc, t.sourceField asc, t.sourceIndex asc, t.id asc
+            """)
+    List<ImageOcrTask> findEnabledSizeFilteredTasks();
+
     @Query("select t from ImageOcrTask t where t.execStatus = 0 order by t.id asc")
     List<ImageOcrTask> findPending(Pageable pageable);
 

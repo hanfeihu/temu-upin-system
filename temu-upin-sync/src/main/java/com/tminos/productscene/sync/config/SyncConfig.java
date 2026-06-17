@@ -2,6 +2,7 @@ package com.tminos.productscene.sync.config;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
@@ -14,13 +15,30 @@ import java.util.concurrent.TimeUnit;
 @Configuration
 @EnableAsync
 public class SyncConfig {
+    @Value("${thread-pool.sync-task-core-pool-size:3}")
+    private int syncTaskCorePoolSize;
+
+    @Value("${thread-pool.sync-task-max-pool-size:10}")
+    private int syncTaskMaxPoolSize;
+
+    @Value("${thread-pool.sync-task-queue-capacity:50}")
+    private int syncTaskQueueCapacity;
+
+    @Value("${thread-pool.sync-worker-core-pool-size:10}")
+    private int syncWorkerCorePoolSize;
+
+    @Value("${thread-pool.sync-worker-max-pool-size:20}")
+    private int syncWorkerMaxPoolSize;
+
+    @Value("${thread-pool.sync-worker-queue-capacity:500}")
+    private int syncWorkerQueueCapacity;
 
     @Bean("syncTaskExecutor")
     public Executor syncTaskExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(3);
-        executor.setMaxPoolSize(10);
-        executor.setQueueCapacity(50);
+        executor.setCorePoolSize(Math.max(1, syncTaskCorePoolSize));
+        executor.setMaxPoolSize(Math.max(syncTaskCorePoolSize, syncTaskMaxPoolSize));
+        executor.setQueueCapacity(Math.max(1, syncTaskQueueCapacity));
         executor.setThreadNamePrefix("sync-task-");
         executor.initialize();
         return executor;
@@ -32,8 +50,10 @@ public class SyncConfig {
     @Bean("syncWorkerPool")
     public ExecutorService syncWorkerPool() {
         return new ThreadPoolExecutor(
-                10, 20, 60, TimeUnit.SECONDS,
-                new LinkedBlockingQueue<>(500),
+                Math.max(1, syncWorkerCorePoolSize),
+                Math.max(syncWorkerCorePoolSize, syncWorkerMaxPoolSize),
+                60, TimeUnit.SECONDS,
+                new LinkedBlockingQueue<>(Math.max(1, syncWorkerQueueCapacity)),
                 r -> {
                     Thread t = new Thread(r);
                     t.setName("sync-worker-" + t.threadId());

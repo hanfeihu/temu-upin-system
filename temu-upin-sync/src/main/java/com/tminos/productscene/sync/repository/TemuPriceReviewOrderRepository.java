@@ -36,6 +36,19 @@ public interface TemuPriceReviewOrderRepository extends JpaRepository<TemuPriceR
                                                                  @Param("orderStatus") Integer orderStatus,
                                                                  Pageable pageable);
 
+    @Query("""
+            select o from TemuPriceReviewOrder o
+            where o.shopId = :shopId
+              and o.orderStatus = 1
+              and (o.reviewAction is null or trim(o.reviewAction) = '' or upper(trim(o.reviewAction)) = 'PENDING')
+              and o.suggestSupplyPrice is not null
+              and o.suggestSupplyPrice <= :maxSuggestSupplyPrice
+            order by o.id asc
+            """)
+    List<TemuPriceReviewOrder> findLowPricePendingForWorker(@Param("shopId") String shopId,
+                                                            @Param("maxSuggestSupplyPrice") Integer maxSuggestSupplyPrice,
+                                                            Pageable pageable);
+
     List<TemuPriceReviewOrder> findByShopIdAndIdIn(String shopId, List<Long> ids);
 
     List<TemuPriceReviewOrder> findByIdIn(List<Long> ids);

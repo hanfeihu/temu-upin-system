@@ -114,6 +114,15 @@ public class TemuGoods {
     @Column(name = "temu_created_at")
     private Long temuCreatedAt;
 
+    @Column(name = "sensitive_attr_confirm_status", length = 32)
+    private String sensitiveAttrConfirmStatus;
+
+    @Column(name = "sensitive_attr_confirm_at")
+    private LocalDateTime sensitiveAttrConfirmAt;
+
+    @Column(name = "sensitive_attr_confirm_error", columnDefinition = "text")
+    private String sensitiveAttrConfirmError;
+
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "raw_json", columnDefinition = "jsonb")
     private String rawJson;
@@ -126,6 +135,9 @@ public class TemuGoods {
 
     @Transient
     private Integer site100MaxSupplierPrice;
+
+    @Transient
+    private Boolean activityBlacklisted;
 
     @Builder.Default
     @Column(name = "created_at", nullable = false)

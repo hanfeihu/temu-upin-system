@@ -4,7 +4,7 @@
     radial-gradient(circle at top left, rgba(14, 116, 144, 0.22), transparent 32%),
     radial-gradient(circle at top right, rgba(59, 130, 246, 0.16), transparent 28%),
     linear-gradient(135deg, #06131f 0%, #0b2236 52%, #11283d 100%);
-  padding: 28px;
+  padding: 20px;
   color: #e5eef8;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
@@ -12,14 +12,14 @@
 .order-dashboard-hero {
   display: flex;
   justify-content: space-between;
-  gap: 24px;
-  margin-bottom: 20px;
+  gap: 18px;
+  margin-bottom: 14px;
 }
 
 .order-dashboard-hero h1.ant-typography {
-  margin-bottom: 8px;
+  margin-bottom: 6px;
   color: #f8fbff;
-  font-size: 32px;
+  font-size: 28px;
 }
 
 .order-dashboard-hero .ant-typography {
@@ -31,13 +31,14 @@
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 8px;
-  min-width: 280px;
-  padding: 18px 20px;
-  border-radius: 22px;
+  gap: 6px;
+  min-width: 248px;
+  padding: 14px 16px;
+  border-radius: 18px;
   background: rgba(255, 255, 255, 0.08);
   backdrop-filter: blur(12px);
   color: #dbeafe;
+  font-size: 13px;
 }
 
 .order-dashboard-tabs-card,
@@ -50,23 +51,24 @@
 }
 
 .order-dashboard-tabs-card {
-  border-radius: 22px;
-  padding: 18px 20px 14px;
-  margin-bottom: 18px;
+  border-radius: 18px;
+  padding: 14px 16px 10px;
+  margin-bottom: 14px;
 }
 
 .order-dashboard-tabs-card .ant-tabs {
-  margin-bottom: 8px;
+  margin-bottom: 4px;
 }
 
 .order-dashboard-tabs-card .ant-tabs-nav {
-  margin-bottom: 8px;
+  margin-bottom: 4px;
 }
 
 .order-dashboard-tabs-card .ant-tabs-tab {
   background: rgba(255, 255, 255, 0.05) !important;
   border-color: rgba(148, 163, 184, 0.16) !important;
   color: #dbeafe !important;
+  padding: 6px 12px !important;
 }
 
 .order-dashboard-tabs-card .ant-tabs-tab-active {
@@ -75,39 +77,57 @@
 
 .order-dashboard-tabs-card .ant-typography {
   color: rgba(219, 234, 254, 0.8);
+  font-size: 12px;
 }
 
 .order-dashboard-summary-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 16px;
-  margin-bottom: 18px;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
 }
 
 .order-dashboard-summary-card {
-  border-radius: 22px;
-  padding: 18px 20px;
+  border-radius: 18px;
+  padding: 12px 13px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
+  min-height: 92px;
 }
 
 .order-dashboard-summary-card .summary-label {
-  font-size: 13px;
+  font-size: 11px;
+  line-height: 1.35;
   color: rgba(219, 234, 254, 0.78);
 }
 
 .order-dashboard-summary-card strong {
-  font-size: 34px;
+  font-size: 24px;
   line-height: 1;
   color: #f8fbff;
   font-weight: 700;
 }
 
+.order-dashboard-summary-card.is-positive {
+  border-color: rgba(34, 197, 94, 0.28);
+  background: linear-gradient(180deg, rgba(15, 118, 110, 0.18), rgba(255, 255, 255, 0.08));
+}
+
+.order-dashboard-summary-card.is-negative {
+  border-color: rgba(248, 113, 113, 0.3);
+  background: linear-gradient(180deg, rgba(127, 29, 29, 0.22), rgba(255, 255, 255, 0.08));
+}
+
+.order-dashboard-summary-card.is-neutral {
+  border-color: rgba(250, 204, 21, 0.24);
+  background: linear-gradient(180deg, rgba(161, 98, 7, 0.18), rgba(255, 255, 255, 0.08));
+}
+
 .order-dashboard-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 18px;
+  gap: 12px;
 }
 
 .order-dashboard-grid-full {
@@ -116,26 +136,28 @@
 
 .order-dashboard-chart-card {
   position: relative;
-  border-radius: 24px;
-  padding: 20px 20px 18px;
+  border-radius: 20px;
+  padding: 16px 16px 14px;
   overflow: hidden;
 }
 
 .order-dashboard-chart-header {
   display: flex;
   justify-content: space-between;
-  gap: 16px;
+  gap: 12px;
   align-items: flex-start;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
 .order-dashboard-chart-header h4.ant-typography {
   color: #f8fbff;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
+  font-size: 18px;
 }
 
 .order-dashboard-chart-header .ant-typography {
   color: rgba(219, 234, 254, 0.76);
+  font-size: 12px;
 }
 
 .order-dashboard-chart-legend {
@@ -145,14 +167,14 @@
 .order-dashboard-chart-legend-item {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  font-size: 13px;
+  gap: 6px;
+  font-size: 12px;
   color: #dbeafe;
 }
 
 .order-dashboard-chart-legend-dot {
-  width: 10px;
-  height: 10px;
+  width: 9px;
+  height: 9px;
   border-radius: 999px;
   display: inline-block;
   flex-shrink: 0;
@@ -160,7 +182,7 @@
 
 .order-dashboard-chart-svg-wrap {
   position: relative;
-  min-height: 320px;
+  min-height: 280px;
 }
 
 .order-dashboard-grid-line {
@@ -175,44 +197,44 @@
 
 .order-dashboard-axis-text {
   fill: rgba(219, 234, 254, 0.56);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .order-dashboard-tooltip {
   position: absolute;
-  top: 12px;
-  right: 12px;
-  min-width: 150px;
-  padding: 12px 14px;
-  border-radius: 16px;
+  top: 10px;
+  right: 10px;
+  min-width: 138px;
+  padding: 10px 12px;
+  border-radius: 14px;
   background: rgba(5, 15, 24, 0.9);
   border: 1px solid rgba(148, 163, 184, 0.22);
   box-shadow: 0 18px 36px rgba(2, 6, 23, 0.32);
 }
 
 .order-dashboard-tooltip-date {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   color: #f8fbff;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
 
 .order-dashboard-tooltip-row {
   display: grid;
   grid-template-columns: auto 1fr auto;
-  gap: 8px;
+  gap: 6px;
   align-items: center;
   color: #dbeafe;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .order-dashboard-tooltip-row + .order-dashboard-tooltip-row {
-  margin-top: 6px;
+  margin-top: 5px;
 }
 
 .order-dashboard-empty,
 .order-dashboard-loading {
-  min-height: 320px;
+  min-height: 280px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -221,6 +243,18 @@
 .order-dashboard-empty .ant-empty-description,
 .order-dashboard-loading .ant-spin-text {
   color: rgba(219, 234, 254, 0.72);
+}
+
+@media (max-width: 1800px) {
+  .order-dashboard-summary-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1500px) {
+  .order-dashboard-summary-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 1200px) {
@@ -232,7 +266,7 @@
 @media (max-width: 900px) {
   .order-dashboard-page {
     min-height: 100vh;
-    padding: 18px;
+    padding: 16px;
   }
 
   .order-dashboard-hero {

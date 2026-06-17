@@ -51,6 +51,19 @@ public class ActivityController {
         return ResponseEntity.ok(ApiResponse.success(activityService.matchProducts(request)));
     }
 
+    @PostMapping("/recommend-products")
+    public ResponseEntity<ApiResponse<ActivityDTO.RecommendationResponse>> recommendProducts(
+            @RequestBody ActivityDTO.RecommendationRequest request) {
+        return ResponseEntity.ok(ApiResponse.success(activityService.recommendProducts(request)));
+    }
+
+    @PostMapping("/blacklist")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> addBlacklist(
+            @RequestBody ActivityDTO.BlacklistRequest request) {
+        activityService.addActivityBlacklist(request);
+        return ResponseEntity.ok(ApiResponse.success("已加入活动黑名单", Map.of("success", true)));
+    }
+
     @PostMapping("/sessions/query")
     public ResponseEntity<ApiResponse<ActivityDTO.SessionQueryResponse>> querySessions(
             @RequestBody ActivityDTO.SessionQueryRequest request) {
@@ -62,15 +75,31 @@ public class ActivityController {
             @RequestParam String shopId,
             @RequestParam(required = false) Integer activityType,
             @RequestParam(required = false) Integer enrollStatus,
+            @RequestParam(required = false) Long productId,
+            @RequestParam(required = false) List<Long> productIds,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int pageSize) {
         return ResponseEntity.ok(ApiResponse.success(
-                activityService.listEnrollments(shopId, activityType, enrollStatus, page, pageSize)));
+                activityService.listEnrollments(shopId, activityType, enrollStatus, productId, productIds, page, pageSize)));
     }
 
     @GetMapping("/enrollments/{id}")
     public ResponseEntity<ApiResponse<ActivityDTO.EnrollmentItem>> enrollmentDetail(@PathVariable Long id) {
         return ResponseEntity.ok(ApiResponse.success(activityService.getEnrollmentDetail(id)));
+    }
+
+    @PostMapping("/enrollments/refresh")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> refreshEnrollments(
+            @RequestBody ActivityDTO.EnrollmentRefreshRequest request) {
+        Map<String, Object> result = activityService.refreshEnrollmentRecords(
+                request.getShopId(),
+                request.getActivityType(),
+                request.getActivityThematicId(),
+                request.getProductIds());
+        boolean success = Boolean.TRUE.equals(result.get("success"));
+        return success
+                ? ResponseEntity.ok(ApiResponse.success(String.valueOf(result.get("message")), result))
+                : ResponseEntity.ok(ApiResponse.error("刷新报名记录失败: " + result.get("message"), result));
     }
 
     @PostMapping("/batch-enroll")
@@ -82,7 +111,7 @@ public class ActivityController {
             return ResponseEntity.ok(ApiResponse.success("批量报名完成", result));
         } else {
             String message = String.valueOf(result.getOrDefault("message", "批量报名失败"));
-            return ResponseEntity.ok(ApiResponse.error("批量报名失败: " + message));
+            return ResponseEntity.ok(ApiResponse.error("批量报名失败: " + message, result));
         }
     }
 }

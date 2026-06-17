@@ -23,9 +23,13 @@ import java.util.Map;
 @Service
 public class TemuAutoPublishLogService {
 
+    private static final long LOG_RETENTION_HOURS = 1L;
+    private static final long CLEANUP_INTERVAL_MINUTES = 1L;
+
     private final TemuAutoPublishRunRepository runRepo;
     private final TemuAutoPublishLogRepository logRepo;
     private final ObjectMapper objectMapper;
+    private volatile LocalDateTime lastCleanupAt;
 
     public TemuAutoPublishLogService(TemuAutoPublishRunRepository runRepo,
                                     TemuAutoPublishLogRepository logRepo,
@@ -75,6 +79,24 @@ public class TemuAutoPublishLogService {
             }
         }
         logRepo.save(l);
+        cleanupExpiredLogsIfNeeded();
+    }
+
+    private void cleanupExpiredLogsIfNeeded() {
+        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime previousCleanupAt = lastCleanupAt;
+        if (previousCleanupAt != null && previousCleanupAt.isAfter(now.minusMinutes(CLEANUP_INTERVAL_MINUTES))) {
+            return;
+        }
+        synchronized (this) {
+            LocalDateTime latestCleanupAt = lastCleanupAt;
+            LocalDateTime refreshedNow = LocalDateTime.now();
+            if (latestCleanupAt != null && latestCleanupAt.isAfter(refreshedNow.minusMinutes(CLEANUP_INTERVAL_MINUTES))) {
+                return;
+            }
+            logRepo.deleteByCreatedAtBefore(refreshedNow.minusHours(LOG_RETENTION_HOURS));
+            lastCleanupAt = refreshedNow;
+        }
     }
 
     @Transactional

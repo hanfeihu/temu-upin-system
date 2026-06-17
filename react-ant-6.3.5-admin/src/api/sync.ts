@@ -3,13 +3,19 @@ import type {
   ActivityDetailVO,
   ActivityEnrollmentVO,
   ActivityMatchResponseVO,
+  ActivityRecommendationResponseVO,
   ActivitySessionQueryResponseVO,
   ActivitySessionVO,
   ActivityVO,
   ApiResponse,
+  BatchZeroShopSkuVirtualStockResultVO,
   PriceAdjustBatchPayload,
   PriceAdjustOrderVO,
   PriceReviewBatchPayload,
+  PriceReviewLowPriceRejectWorkerConfigPayload,
+  PriceReviewLowPriceRejectWorkerConfigVO,
+  PriceReviewLowPriceRejectWorkerStatusVO,
+  PriceReviewLocalCompletePayload,
   PriceReviewOrderVO,
   SyncGoodsRepairJobVO,
   SpringPage,
@@ -20,6 +26,7 @@ import type {
   SyncTaskProgressVO,
   SyncTaskVO,
   ShopSkuItemVO,
+  ShopSkuWarehouseVO,
 } from '@/types/api';
 
 export const syncApi = {
@@ -62,7 +69,10 @@ export const syncApi = {
   getGoodsList(params: {
     shopId: string;
     keyword?: string;
+    productSkuId?: number;
     skcSiteStatus?: number;
+    activityBlacklisted?: boolean;
+    allSkuOutOfStock?: boolean;
     minSupplierPrice?: number;
     maxSupplierPrice?: number;
     page?: number;
@@ -80,14 +90,38 @@ export const syncApi = {
     productSkcId?: number;
     productSkuId?: number;
     skuExtCode?: string;
+    virtualStockGtZero?: boolean;
+    minSupplierPrice?: number;
+    maxSupplierPrice?: number;
     page?: number;
     pageSize?: number;
   }) {
     return client.get('/sync/shop-skus', { params }) as Promise<ApiResponse<SpringPage<ShopSkuItemVO>>>;
   },
 
+  getShopSkuWarehouses(shopId: string) {
+    return client.get('/sync/shop-skus/warehouses', { params: { shopId } }) as Promise<ApiResponse<ShopSkuWarehouseVO[]>>;
+  },
+
+  batchZeroShopSkuVirtualStock(payload: {
+    shopId: string;
+    productSkcId?: number;
+    productSkuId?: number;
+    skuExtCode?: string;
+    virtualStockGtZero?: boolean;
+    minSupplierPrice?: number;
+    maxSupplierPrice?: number;
+    warehouseId?: string;
+  }) {
+    return client.post('/sync/shop-skus/batch-zero-virtual-stock', payload) as Promise<ApiResponse<BatchZeroShopSkuVirtualStockResultVO>>;
+  },
+
   updateShopSkuPurchasePrice(productSkuId: number, payload: { shopId: string; purchasePrice?: number | null }) {
     return client.put(`/sync/shop-skus/${productSkuId}/purchase-price`, payload) as Promise<ApiResponse<ShopSkuItemVO>>;
+  },
+
+  refreshShopSkuSupplierPrice(productSkuId: number, payload: { shopId: string }) {
+    return client.post(`/sync/shop-skus/${productSkuId}/supplier-price/refresh`, payload) as Promise<ApiResponse<ShopSkuItemVO>>;
   },
 
   repairGoodsDetails(shopId: string) {
@@ -118,6 +152,30 @@ export const syncApi = {
 
   batchReviewPrice(payload: PriceReviewBatchPayload) {
     return client.post('/sync/price-review/batch-review', payload) as Promise<ApiResponse<Record<string, unknown>>>;
+  },
+
+  batchLocalCompletePriceReview(payload: PriceReviewLocalCompletePayload) {
+    return client.post('/sync/price-review/batch-local-complete', payload) as Promise<ApiResponse<Record<string, unknown>>>;
+  },
+
+  getPriceReviewLowPriceRejectWorkerConfig() {
+    return client.get('/sync/price-review/low-price-reject-worker/config') as Promise<ApiResponse<PriceReviewLowPriceRejectWorkerConfigVO>>;
+  },
+
+  updatePriceReviewLowPriceRejectWorkerConfig(payload: PriceReviewLowPriceRejectWorkerConfigPayload) {
+    return client.put('/sync/price-review/low-price-reject-worker/config', payload) as Promise<ApiResponse<PriceReviewLowPriceRejectWorkerStatusVO>>;
+  },
+
+  getPriceReviewLowPriceRejectWorkerStatus() {
+    return client.get('/sync/price-review/low-price-reject-worker/status') as Promise<ApiResponse<PriceReviewLowPriceRejectWorkerStatusVO>>;
+  },
+
+  startPriceReviewLowPriceRejectWorker() {
+    return client.post('/sync/price-review/low-price-reject-worker/start') as Promise<ApiResponse<PriceReviewLowPriceRejectWorkerStatusVO>>;
+  },
+
+  stopPriceReviewLowPriceRejectWorker() {
+    return client.post('/sync/price-review/low-price-reject-worker/stop') as Promise<ApiResponse<PriceReviewLowPriceRejectWorkerStatusVO>>;
   },
 
   getPriceAdjustList(params: {
@@ -165,6 +223,33 @@ export const syncApi = {
     return client.post('/sync/activity/match-products', payload) as Promise<ApiResponse<ActivityMatchResponseVO>>;
   },
 
+  recommendActivityProducts(payload: {
+    shopId: string;
+    activityType: number;
+    activityThematicId?: number;
+    rowCount?: number;
+    minListedDays?: number;
+    maxSalesQuantity?: number;
+    minProfitCents?: number;
+    minProfitRatePercent?: number;
+    defaultActivityStock?: number;
+    minSupplierPrice?: number;
+    maxSupplierPrice?: number;
+    excludeEnrolled?: boolean;
+  }) {
+    return client.post('/sync/activity/recommend-products', payload) as Promise<ApiResponse<ActivityRecommendationResponseVO>>;
+  },
+
+  addActivityBlacklist(payload: {
+    shopId: string;
+    productId: number;
+    goodsId?: number | null;
+    productName?: string | null;
+    reason?: string;
+  }) {
+    return client.post('/sync/activity/blacklist', payload) as Promise<ApiResponse<Record<string, unknown>>>;
+  },
+
   queryActivitySessions(payload: {
     shopId: string;
     activityType: number;
@@ -180,10 +265,21 @@ export const syncApi = {
     shopId: string;
     activityType?: number;
     enrollStatus?: number;
+    productId?: number;
+    productIds?: number[];
     page?: number;
     pageSize?: number;
   }) {
     return client.get('/sync/activity/enrollments', { params }) as Promise<ApiResponse<SpringPage<ActivityEnrollmentVO>>>;
+  },
+
+  refreshActivityEnrollments(payload: {
+    shopId: string;
+    activityType?: number;
+    activityThematicId?: number;
+    productIds?: number[];
+  }) {
+    return client.post('/sync/activity/enrollments/refresh', payload) as Promise<ApiResponse<Record<string, unknown>>>;
   },
 
   getEnrollmentDetail(id: number) {

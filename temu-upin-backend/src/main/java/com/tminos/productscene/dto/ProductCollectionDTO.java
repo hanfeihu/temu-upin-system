@@ -36,6 +36,7 @@ public class ProductCollectionDTO {
 
         // OCR status
         private Integer ocrStatus;
+        private Integer chineseImageCount;
 
         // Counts (derived for list view)
         private Integer carouselImageCount;
@@ -120,6 +121,16 @@ public class ProductCollectionDTO {
         private String temuOptimizedTitleEn;
         private String temuOptimizedTitleZh;
         private String temuCategoryKeywords;
+        private Boolean temuPublished;
+        private String temuGoodsId;
+        private LocalDateTime temuPublishedAt;
+        private String lastPublishStatus;
+        private String lastPublishGoodsId;
+        private String lastPublishRequestJson;
+        private String lastPublishResponseRaw;
+        private String lastPublishError;
+        private LocalDateTime lastPublishStartedAt;
+        private LocalDateTime lastPublishFinishedAt;
 
         private String carouselThumbImages;
         private String carouselVideo;
@@ -192,6 +203,17 @@ public class ProductCollectionDTO {
             public ProductCollectionDetailResponseBuilder temuOptimizedTitleEn(String v) { o.temuOptimizedTitleEn = v; return this; }
             public ProductCollectionDetailResponseBuilder temuOptimizedTitleZh(String v) { o.temuOptimizedTitleZh = v; return this; }
             public ProductCollectionDetailResponseBuilder temuCategoryKeywords(String v) { o.temuCategoryKeywords = v; return this; }
+            public ProductCollectionDetailResponseBuilder temuPublished(Boolean v) { o.temuPublished = v; return this; }
+            public ProductCollectionDetailResponseBuilder temuGoodsId(String v) { o.temuGoodsId = v; return this; }
+            public ProductCollectionDetailResponseBuilder temuPublishedAt(LocalDateTime v) { o.temuPublishedAt = v; return this; }
+            public ProductCollectionDetailResponseBuilder lastPublishRunId(Long v) { o.lastPublishRunId = v; return this; }
+            public ProductCollectionDetailResponseBuilder lastPublishStatus(String v) { o.lastPublishStatus = v; return this; }
+            public ProductCollectionDetailResponseBuilder lastPublishGoodsId(String v) { o.lastPublishGoodsId = v; return this; }
+            public ProductCollectionDetailResponseBuilder lastPublishRequestJson(String v) { o.lastPublishRequestJson = v; return this; }
+            public ProductCollectionDetailResponseBuilder lastPublishResponseRaw(String v) { o.lastPublishResponseRaw = v; return this; }
+            public ProductCollectionDetailResponseBuilder lastPublishError(String v) { o.lastPublishError = v; return this; }
+            public ProductCollectionDetailResponseBuilder lastPublishStartedAt(LocalDateTime v) { o.lastPublishStartedAt = v; return this; }
+            public ProductCollectionDetailResponseBuilder lastPublishFinishedAt(LocalDateTime v) { o.lastPublishFinishedAt = v; return this; }
             public ProductCollectionDetailResponseBuilder carouselThumbImages(String v) { o.carouselThumbImages = v; return this; }
             public ProductCollectionDetailResponseBuilder carouselVideo(String v) { o.carouselVideo = v; return this; }
             public ProductCollectionDetailResponseBuilder baseFreight(BigDecimal v) { o.baseFreight = v; return this; }

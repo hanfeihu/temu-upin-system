@@ -31,11 +31,14 @@ public class TemuSkuPublishDraftConverter {
 
     private final ObjectMapper objectMapper;
     private final TemuParentSpecMappingTable parentSpecMappingTable;
+    private final TemuSkuSpecTranslateService skuSpecTranslateService;
 
     public TemuSkuPublishDraftConverter(ObjectMapper objectMapper,
-                                        TemuParentSpecMappingTable parentSpecMappingTable) {
+                                        TemuParentSpecMappingTable parentSpecMappingTable,
+                                        TemuSkuSpecTranslateService skuSpecTranslateService) {
         this.objectMapper = objectMapper;
         this.parentSpecMappingTable = parentSpecMappingTable;
+        this.skuSpecTranslateService = skuSpecTranslateService;
     }
 
     public StoredPublishSpecDraft convert(ProductCollection pc,
@@ -768,6 +771,7 @@ public class TemuSkuPublishDraftConverter {
         sku.setSiteSupplierPrices(new ArrayList<>(List.of(
                 new AddGloGoodsRequest.ProductSkuReq.SiteSupplierPrice(siteId, priceToCents(finalPrice))
         )));
+        sku.setProductSkuUsSuggestedPriceReq(null);
 
         int publishStock = normalizePublishStock(null, defaultStock, maxStock);
         AddGloGoodsRequest.ProductSkuReq.ProductSkuStockQuantityReq stockReq = new AddGloGoodsRequest.ProductSkuReq.ProductSkuStockQuantityReq();
@@ -875,7 +879,7 @@ public class TemuSkuPublishDraftConverter {
                 return normalizedSize;
             }
         }
-        return normalizeSpecValue(value);
+        return translateSpecValueIfNeeded(normalizeSpecValue(value));
     }
 
     private boolean isSizeLikeFieldName(String fieldName) {
@@ -912,7 +916,7 @@ public class TemuSkuPublishDraftConverter {
         if (singleMatcher.find()) {
             return formatSizeNumber(singleMatcher.group(1));
         }
-        return normalizeSpecValue(candidate);
+        return translateSpecValueIfNeeded(normalizeSpecValue(candidate));
     }
 
     private String canonicalizeSpecValueForPublish(ParentSpec parentSpec,
@@ -942,6 +946,13 @@ public class TemuSkuPublishDraftConverter {
             return midpoint;
         }
         return normalized;
+    }
+
+    private String translateSpecValueIfNeeded(String value) {
+        if (!StringUtils.hasText(value)) {
+            return value;
+        }
+        return skuSpecTranslateService.translatePlainText(value);
     }
 
     private boolean isSizeLikeParentSpec(ParentSpec parentSpec) {

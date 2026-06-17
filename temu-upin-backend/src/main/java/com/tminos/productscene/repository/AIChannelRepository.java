@@ -9,4 +9,5 @@ import java.util.List;
 public interface AIChannelRepository extends JpaRepository<AIChannel, Long> {
     List<AIChannel> findByEnabledTrueOrderBySortOrderAsc();
     List<AIChannel> findByPlatformOrderBySortOrderAsc(String platform);
+    List<AIChannel> findByModelOrderBySortOrderAsc(String model);
 }

@@ -18,6 +18,7 @@ public class TemuSyncConfigService {
         PRESET_CONFIGS.put("lifecycle_sync_thread_count", new String[]{"3", "商品状态同步线程数"});
         PRESET_CONFIGS.put("price_sync_thread_count", new String[]{"3", "价格同步线程数"});
         PRESET_CONFIGS.put("sync_cron", new String[]{"0 2 * * *", "每日同步 cron 表达式"});
+        PRESET_CONFIGS.put("goods_auto_sync_days", new String[]{"7", "商品信息自动同步范围（天）"});
         PRESET_CONFIGS.put("price_adjust_auto_sync_days", new String[]{"7", "调价单自动同步范围（天）"});
         PRESET_CONFIGS.put("price_review_auto_reject_threshold", new String[]{"2800", "核价自动拒绝阈值（分）"});
         PRESET_CONFIGS.put("price_review_auto_approve_threshold", new String[]{"", "核价自动同意阈值（分）"});

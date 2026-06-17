@@ -1391,6 +1391,7 @@ public class TemuMainSaleSpecInferenceService {
         sku.setSiteSupplierPrices(new ArrayList<>(List.of(
                 new AddGloGoodsRequest.ProductSkuReq.SiteSupplierPrice(siteId, priceToCents(finalPrice))
         )));
+        sku.setProductSkuUsSuggestedPriceReq(null);
 
         Integer stock = toInt(originRow == null ? null : originRow.get("stock"));
         int publishStock = normalizePublishStock(stock, defaultStock, maxStock);

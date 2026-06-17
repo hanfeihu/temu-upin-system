@@ -19,6 +19,7 @@ import com.tminos.productscene.service.ProductCollectionService;
 import com.tminos.productscene.service.PostImportAutomationService;
 import com.tminos.productscene.service.AliyunImageTranslateService;
 import com.tminos.productscene.service.ImageGenerationService;
+import com.tminos.productscene.service.OssService;
 import com.tminos.productscene.service.TemuImageTranslateService;
 import com.tminos.productscene.service.TemuPublishService;
 import com.tminos.productscene.service.TemuSizeChartService;
@@ -31,6 +32,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 @RestController
 @RequestMapping("/api/platform/product-collections")
@@ -45,6 +47,7 @@ public class ProductCollectionController {
     private final TemuSkuService temuSkuService;
     private final TemuPublishService temuPublishService;
     private final TemuSizeChartService temuSizeChartService;
+    private final OssService ossService;
     private final ObjectMapper objectMapper;
     private static final Logger log = LoggerFactory.getLogger(ProductCollectionController.class);
 
@@ -57,6 +60,7 @@ public class ProductCollectionController {
                                        TemuSkuService temuSkuService,
                                        TemuPublishService temuPublishService,
                                        TemuSizeChartService temuSizeChartService,
+                                       OssService ossService,
                                        ObjectMapper objectMapper) {
         this.service = service;
         this.postImportAutomationService = postImportAutomationService;
@@ -67,6 +71,7 @@ public class ProductCollectionController {
         this.temuSkuService = temuSkuService;
         this.temuPublishService = temuPublishService;
         this.temuSizeChartService = temuSizeChartService;
+        this.ossService = ossService;
         this.objectMapper = objectMapper;
     }
 
@@ -119,7 +124,9 @@ public class ProductCollectionController {
 
     @GetMapping
     public ResponseEntity<ApiResponse<Page<ProductCollectionResponse>>> list(
+            @RequestParam(value = "id", required = false) Long id,
             @RequestParam(value = "q", required = false) String q,
+            @RequestParam(value = "skuIdKeyword", required = false) String skuIdKeyword,
             @RequestParam(value = "sourcePlatform", required = false) String sourcePlatform,
             @RequestParam(value = "targetShopId", required = false) String targetShopId,
             @RequestParam(value = "collectionStatus", required = false) Integer collectionStatus,
@@ -137,7 +144,9 @@ public class ProductCollectionController {
             @RequestParam(value = "size", defaultValue = "20") int size
     ) {
         return ResponseEntity.ok(ApiResponse.success(service.list(
+                id,
                 q,
+                skuIdKeyword,
                 sourcePlatform,
                 targetShopId,
                 collectionStatus,
@@ -317,6 +326,30 @@ public class ProductCollectionController {
             java.util.Map<String, Object> out = new java.util.LinkedHashMap<>();
             out.put("originalUrl", r.originalUrl());
             out.put("imageUrl", r.uploadedUrl());
+            return ResponseEntity.ok(ApiResponse.success(out));
+        } catch (Exception e) {
+            return ResponseEntity.ok(ApiResponse.error("Upload failed: " + e.getMessage()));
+        }
+    }
+
+    @PostMapping(value = "/{id}/temu/skus/{skuId}/image/file", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<ApiResponse<java.util.Map<String, Object>>> uploadTemuSkuImageFile(
+            @PathVariable Long id,
+            @PathVariable Long skuId,
+            @RequestParam("file") MultipartFile file
+    ) {
+        service.get(id);
+        if (file == null || file.isEmpty()) {
+            return ResponseEntity.ok(ApiResponse.error("图片文件不能为空"));
+        }
+        try {
+            String storedUrl = ossService.uploadSkuImage(file);
+            TemuImageTranslateService.UploadResult r = temuImageTranslateService.uploadGlobalImageByUrl(storedUrl);
+            TemuSkuDTO.TemuSkuRow row = temuSkuService.updateImage(id, skuId, r.uploadedUrl());
+            java.util.Map<String, Object> out = new java.util.LinkedHashMap<>();
+            out.put("storedUrl", storedUrl);
+            out.put("imageUrl", r.uploadedUrl());
+            out.put("sku", row);
             return ResponseEntity.ok(ApiResponse.success(out));
         } catch (Exception e) {
             return ResponseEntity.ok(ApiResponse.error("Upload failed: " + e.getMessage()));

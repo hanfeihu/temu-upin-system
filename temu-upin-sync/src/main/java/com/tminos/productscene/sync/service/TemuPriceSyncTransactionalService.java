@@ -41,18 +41,28 @@ public class TemuPriceSyncTransactionalService {
                              Function<Object, Integer> toInt,
                              Function<Object, String> toStr,
                              Function<Object, List<Map<String, Object>>> extractSiteSupplierPrices) {
+        persistShopBatch(task == null ? null : task.getShopId(), batch, toLong, toInt, toStr, extractSiteSupplierPrices);
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void persistShopBatch(String shopId,
+                                 List<Map<String, Object>> batch,
+                                 Function<Object, Long> toLong,
+                                 Function<Object, Integer> toInt,
+                                 Function<Object, String> toStr,
+                                 Function<Object, List<Map<String, Object>>> extractSiteSupplierPrices) {
         for (Map<String, Object> raw : batch) {
             Long productSkuId = toLong.apply(raw.get("productSkuId"));
             if (productSkuId == null) continue;
             Long productId = toLong.apply(raw.get("productId"));
             Long productSkcId = toLong.apply(raw.get("productSkcId"));
 
-            TemuGoodsSkuPrice price = skuPriceRepo.findByShopIdAndProductSkuId(task.getShopId(), productSkuId)
+            TemuGoodsSkuPrice price = skuPriceRepo.findByShopIdAndProductSkuId(shopId, productSkuId)
                     .orElse(new TemuGoodsSkuPrice());
             Integer oldSupplierPrice = price.getSupplierPrice();
             Integer newSupplierPrice = toInt.apply(raw.get("supplierPrice"));
 
-            price.setShopId(task.getShopId());
+            price.setShopId(shopId);
             price.setProductId(productId);
             price.setProductSkcId(productSkcId);
             price.setProductSkuId(productSkuId);
@@ -64,7 +74,7 @@ public class TemuPriceSyncTransactionalService {
 
             if (!Objects.equals(oldSupplierPrice, newSupplierPrice)) {
                 skuPriceChangeRepo.save(TemuGoodsSkuPriceChange.builder()
-                        .shopId(task.getShopId())
+                        .shopId(shopId)
                         .productId(productId)
                         .productSkcId(productSkcId)
                         .productSkuId(productSkuId)
@@ -123,7 +133,7 @@ public class TemuPriceSyncTransactionalService {
 
                 if (!Objects.equals(oldSiteSupplierPrice, newSiteSupplierPrice)) {
                     skuPriceChangeRepo.save(TemuGoodsSkuPriceChange.builder()
-                            .shopId(task.getShopId())
+                            .shopId(shopId)
                             .productId(productId)
                             .productSkcId(productSkcId)
                             .productSkuId(productSkuId)

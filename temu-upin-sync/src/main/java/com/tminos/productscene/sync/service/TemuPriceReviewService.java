@@ -23,9 +23,12 @@ import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -35,6 +38,56 @@ public class TemuPriceReviewService {
 
     private static final Logger log = LoggerFactory.getLogger(TemuPriceReviewService.class);
     private static final Gson GSON = new Gson();
+    private static final String MATCH_COLLECTION_PRICE_SQL = """
+            with ranked_matches as (
+                select
+                    lower(btrim(pcs.sku_id)) as sku_key,
+                    cast(round(pcs.price * 100) as integer) as collected_price,
+                    pc.source_platform as source_platform,
+                    pc.id as product_collection_id,
+                    pc.product_id as product_id,
+                    pc.product_name as product_name,
+                    pc.product_url as product_url,
+                    pcs.sku_id as collected_sku_id,
+                    pcs.spec_key as collected_sku_spec,
+                    coalesce(pool.base_freight_snapshot, pc.base_freight) as base_freight,
+                    coalesce(pool_sku.weight_value, pool.ai_max_weight_g, pc.packaging_weight, pc.net_weight) as max_weight_g,
+                    pool.published_at_1688 as published_at_1688,
+                    coalesce(pool.pushed_at, pc.temu_published_at, pc.collection_time) as pushed_at,
+                    coalesce(pool.company_name_snapshot, pc.company_name) as company_name,
+                    pc.company_location as company_location,
+                    coalesce(pool.shipping_location_snapshot, pc.shipping_location) as shipping_location,
+                    pool.id as selection_pool_id,
+                    pool.repeat_customer_rate_snapshot as merchant_repeat_customer_rate,
+                    pool.service_score_snapshot as merchant_service_score,
+                    pool.on_time_delivery_rate_snapshot as merchant_on_time_delivery_rate,
+                    pool.shop_positive_rate_snapshot as merchant_shop_positive_rate,
+                    pool.power_seller_snapshot as merchant_power_seller,
+                    pool.settled_years_text_snapshot as merchant_settled_years,
+                    pool.main_business_snapshot as merchant_main_business,
+                    row_number() over (
+                        partition by lower(btrim(pcs.sku_id))
+                        order by coalesce(pool.pushed_at, pc.temu_published_at, pc.updated_at, pc.created_at) desc, pcs.id desc
+                    ) as rn
+                from product_collection_sku pcs
+                join product_collection pc on pc.id = pcs.spu_id
+                left join alibaba_1688_selection_pools pool on (
+                    pool.pushed_product_collection_id = pc.id
+                    or (pc.alibaba_product_id is not null and pc.alibaba_product_id <> '' and pool.offer_id = pc.alibaba_product_id)
+                    or (pc.product_id is not null and pc.product_id <> '' and pool.offer_id = pc.product_id)
+                )
+                left join alibaba_1688_selection_pool_skus pool_sku on pool_sku.pool_id = pool.id
+                    and lower(btrim(pool_sku.source_sku_id)) = lower(btrim(pcs.sku_id))
+                where pc.deleted = false
+                  and pcs.price is not null
+                  and pcs.sku_id is not null
+                  and btrim(pcs.sku_id) <> ''
+                  and lower(btrim(pcs.sku_id)) in (:extCodes)
+            )
+            select *
+            from ranked_matches
+            where rn = 1
+            """;
 
     private final TemuGoodsRepository goodsRepository;
     private final TemuPriceReviewOrderRepository reviewOrderRepository;
@@ -44,6 +97,7 @@ public class TemuPriceReviewService {
     private final TemuGoodsSkuPriceRepository goodsSkuPriceRepository;
     private final TemuShopSkuPurchasePriceRepository purchasePriceRepository;
     private final TemuOpenApiCredentialService credentialService;
+    private final NamedParameterJdbcTemplate namedParameterJdbcTemplate;
 
     public TemuPriceReviewService(TemuGoodsRepository goodsRepository,
                                   TemuPriceReviewOrderRepository reviewOrderRepository,
@@ -52,7 +106,8 @@ public class TemuPriceReviewService {
                                   TemuGoodsSkuSpecRepository goodsSkuSpecRepository,
                                   TemuGoodsSkuPriceRepository goodsSkuPriceRepository,
                                   TemuShopSkuPurchasePriceRepository purchasePriceRepository,
-                                  TemuOpenApiCredentialService credentialService) {
+                                  TemuOpenApiCredentialService credentialService,
+                                  NamedParameterJdbcTemplate namedParameterJdbcTemplate) {
         this.goodsRepository = goodsRepository;
         this.reviewOrderRepository = reviewOrderRepository;
         this.reviewSkuRepository = reviewSkuRepository;
@@ -61,6 +116,7 @@ public class TemuPriceReviewService {
         this.goodsSkuPriceRepository = goodsSkuPriceRepository;
         this.purchasePriceRepository = purchasePriceRepository;
         this.credentialService = credentialService;
+        this.namedParameterJdbcTemplate = namedParameterJdbcTemplate;
     }
 
     // ==================== 查询 ====================
@@ -241,6 +297,12 @@ public class TemuPriceReviewService {
                 si.setExtCode(goodsSku.getExtCode());
                 si.setSpecInfo(skuContext.specInfoBySkuId().get(goodsSku.getId()));
                 si.setCurrentSupplyPrice(skuContext.currentSupplyPriceByProductSkuId().get(sku.getProductSkuId()));
+                CollectedPriceMatch collectedPriceMatch = skuContext.collectedPriceMatchByExtCode().get(normalizeExtCode(goodsSku.getExtCode()));
+                if (collectedPriceMatch != null) {
+                    si.setCollectedPrice(collectedPriceMatch.collectedPrice());
+                    si.setCollectedPriceSource(collectedPriceMatch.sourcePlatform());
+                    applyCollectedPriceMatch(si, collectedPriceMatch);
+                }
             }
             si.setPurchasePrice(skuContext.purchasePriceByProductSkuId().get(sku.getProductSkuId()));
             return si;
@@ -326,7 +388,135 @@ public class TemuPriceReviewService {
                 .filter(item -> item.getProductSkuId() != null && item.getPurchasePrice() != null)
                 .collect(Collectors.toMap(item -> item.getProductSkuId(), item -> item.getPurchasePrice(), (left, right) -> left, LinkedHashMap::new));
 
-        return new ReviewSkuContext(goodsSkuMap, specInfoMap, currentSupplyPriceMap, imageUrlMap, purchasePriceMap);
+        Map<String, CollectedPriceMatch> collectedPriceMatchByExtCode = loadCollectedPriceMatchByExtCode(
+                goodsSkuMap.values().stream()
+                        .map(TemuGoodsSku::getExtCode)
+                        .filter(Objects::nonNull)
+                        .toList());
+
+        return new ReviewSkuContext(goodsSkuMap, specInfoMap, currentSupplyPriceMap, imageUrlMap, purchasePriceMap, collectedPriceMatchByExtCode);
+    }
+
+    private Map<String, CollectedPriceMatch> loadCollectedPriceMatchByExtCode(Collection<String> extCodes) {
+        List<String> normalizedExtCodes = extCodes == null ? List.of() : extCodes.stream()
+                .map(this::normalizeExtCode)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        if (normalizedExtCodes.isEmpty()) {
+            return Map.of();
+        }
+
+        Map<String, CollectedPriceMatch> result = new LinkedHashMap<>();
+        MapSqlParameterSource params = new MapSqlParameterSource("extCodes", normalizedExtCodes);
+        namedParameterJdbcTemplate.query(MATCH_COLLECTION_PRICE_SQL, params, rs -> {
+            String skuKey = normalizeExtCode(rs.getString("sku_key"));
+            Integer collectedPrice = toCollectedPrice(rs.getObject("collected_price"));
+            if (skuKey == null || collectedPrice == null) {
+                return;
+            }
+            result.putIfAbsent(skuKey, new CollectedPriceMatch(
+                    skuKey,
+                    collectedPrice,
+                    rs.getString("source_platform"),
+                    toLong(rs.getObject("product_collection_id")),
+                    rs.getString("product_id"),
+                    rs.getString("product_name"),
+                    rs.getString("product_url"),
+                    rs.getString("collected_sku_id"),
+                    rs.getString("collected_sku_spec"),
+                    toBigDecimal(rs.getObject("base_freight")),
+                    toBigDecimal(rs.getObject("max_weight_g")),
+                    rs.getTimestamp("published_at_1688") == null ? null : rs.getTimestamp("published_at_1688").toLocalDateTime(),
+                    rs.getTimestamp("pushed_at") == null ? null : rs.getTimestamp("pushed_at").toLocalDateTime(),
+                    rs.getString("company_name"),
+                    rs.getString("company_location"),
+                    rs.getString("shipping_location"),
+                    toLong(rs.getObject("selection_pool_id")),
+                    toPlainString(rs.getObject("merchant_repeat_customer_rate")),
+                    toPlainString(rs.getObject("merchant_service_score")),
+                    toPlainString(rs.getObject("merchant_on_time_delivery_rate")),
+                    toPlainString(rs.getObject("merchant_shop_positive_rate")),
+                    rs.getObject("merchant_power_seller") == null ? null : rs.getBoolean("merchant_power_seller"),
+                    rs.getString("merchant_settled_years"),
+                    rs.getString("merchant_main_business")
+            ));
+        });
+        return result;
+    }
+
+    private void applyCollectedPriceMatch(PriceReviewDTO.ReviewSkuItem si, CollectedPriceMatch match) {
+        si.setCollectedProductCollectionId(match.productCollectionId());
+        si.setCollectedProductId(match.productId());
+        si.setCollectedProductName(match.productName());
+        si.setCollectedProductUrl(match.productUrl());
+        si.setCollectedSkuId(match.collectedSkuId());
+        si.setCollectedSkuSpec(match.collectedSkuSpec());
+        si.setCollectedBaseFreight(match.baseFreight());
+        si.setCollectedMaxWeightG(match.maxWeightG());
+        si.setCollectedPublishedAt1688(match.publishedAt1688());
+        si.setCollectedPushedAt(match.pushedAt());
+        si.setCollectedCompanyName(match.companyName());
+        si.setCollectedCompanyLocation(match.companyLocation());
+        si.setCollectedShippingLocation(match.shippingLocation());
+        si.setCollectedSelectionPoolId(match.selectionPoolId());
+        si.setCollectedMerchantRepeatCustomerRate(match.merchantRepeatCustomerRate());
+        si.setCollectedMerchantServiceScore(match.merchantServiceScore());
+        si.setCollectedMerchantOnTimeDeliveryRate(match.merchantOnTimeDeliveryRate());
+        si.setCollectedMerchantShopPositiveRate(match.merchantShopPositiveRate());
+        si.setCollectedMerchantPowerSeller(match.merchantPowerSeller());
+        si.setCollectedMerchantSettledYears(match.merchantSettledYears());
+        si.setCollectedMerchantMainBusiness(match.merchantMainBusiness());
+    }
+
+    private Integer toCollectedPrice(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        if (value instanceof BigDecimal decimal) {
+            return decimal.intValue();
+        }
+        try {
+            return new BigDecimal(String.valueOf(value).trim()).intValue();
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private BigDecimal toBigDecimal(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof BigDecimal decimal) {
+            return decimal;
+        }
+        if (value instanceof Number number) {
+            return BigDecimal.valueOf(number.doubleValue());
+        }
+        try {
+            return new BigDecimal(String.valueOf(value).trim());
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private String toPlainString(Object value) {
+        BigDecimal decimal = toBigDecimal(value);
+        return decimal == null ? null : decimal.stripTrailingZeros().toPlainString();
+    }
+
+    private String normalizeExtCode(String extCode) {
+        if (extCode == null) {
+            return null;
+        }
+        String trimmed = extCode.trim();
+        if (trimmed.isBlank()) {
+            return null;
+        }
+        return trimmed.toLowerCase(Locale.ROOT);
     }
 
     @SuppressWarnings("unchecked")
@@ -375,10 +565,37 @@ public class TemuPriceReviewService {
                                     Map<Long, String> specInfoBySkuId,
                                     Map<Long, Integer> currentSupplyPriceByProductSkuId,
                                     Map<Long, String> imageUrlByProductSkuId,
-                                    Map<Long, Integer> purchasePriceByProductSkuId) {
+                                    Map<Long, Integer> purchasePriceByProductSkuId,
+                                    Map<String, CollectedPriceMatch> collectedPriceMatchByExtCode) {
         private static ReviewSkuContext empty() {
-            return new ReviewSkuContext(Map.of(), Map.of(), Map.of(), Map.of(), Map.of());
+            return new ReviewSkuContext(Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of());
         }
+    }
+
+    private record CollectedPriceMatch(String extCode,
+                                       Integer collectedPrice,
+                                       String sourcePlatform,
+                                       Long productCollectionId,
+                                       String productId,
+                                       String productName,
+                                       String productUrl,
+                                       String collectedSkuId,
+                                       String collectedSkuSpec,
+                                       BigDecimal baseFreight,
+                                       BigDecimal maxWeightG,
+                                       LocalDateTime publishedAt1688,
+                                       LocalDateTime pushedAt,
+                                       String companyName,
+                                       String companyLocation,
+                                       String shippingLocation,
+                                       Long selectionPoolId,
+                                       String merchantRepeatCustomerRate,
+                                       String merchantServiceScore,
+                                       String merchantOnTimeDeliveryRate,
+                                       String merchantShopPositiveRate,
+                                       Boolean merchantPowerSeller,
+                                       String merchantSettledYears,
+                                       String merchantMainBusiness) {
     }
 
     @SuppressWarnings("unchecked")
@@ -470,6 +687,12 @@ public class TemuPriceReviewService {
         if (orderIds == null || orderIds.isEmpty()) {
             return Map.of("success", false, "message", "请选择至少一条核价单");
         }
+        if ("REJECT".equals(action)) {
+            String rejectValidationMessage = validateRejectRequest(request);
+            if (rejectValidationMessage != null) {
+                return Map.of("success", false, "message", rejectValidationMessage);
+            }
+        }
 
         List<TemuPriceReviewOrder> orders = reviewOrderRepository.findByShopIdAndIdIn(shopId, orderIds);
         if (orders.isEmpty()) {
@@ -482,6 +705,7 @@ public class TemuPriceReviewService {
             TemuOpenApiClient client = new TemuOpenApiClient(creds);
 
             int successCount = 0;
+            int autoCompletedCount = 0;
             int failCount = 0;
             List<String> errors = new ArrayList<>();
 
@@ -510,6 +734,17 @@ public class TemuPriceReviewService {
                     if (result.success) {
                         updateLocalReviewResult(order, action, request);
                         successCount++;
+                    } else if (shouldAutoCompleteRejectedOrder(action, result)) {
+                        markLocalCompleted(order);
+                        autoCompletedCount++;
+                        log.warn("核价单拒绝失败后已自动标记本地完成, shopId={}, localOrderId={}, orderId={}, action={}, apiType={}, params={}, raw={}",
+                                shopId,
+                                order.getId(),
+                                order.getOrderId(),
+                                action,
+                                apiType,
+                                summarizeReviewParams(params),
+                                truncate(result == null ? null : result.raw, 1500));
                     } else {
                         failCount++;
                         String failureDetail = buildReviewApiFailureDetail(result);
@@ -541,12 +776,13 @@ public class TemuPriceReviewService {
             resultMap.put("success", failCount == 0);
             resultMap.put("total", orders.size());
             resultMap.put("successCount", successCount);
+            resultMap.put("autoCompletedCount", autoCompletedCount);
             resultMap.put("failCount", failCount);
             if (!errors.isEmpty()) {
                 resultMap.put("errors", errors);
-                resultMap.put("message", buildBatchReviewMessage(successCount, failCount, errors));
+                resultMap.put("message", buildBatchReviewMessage(successCount, autoCompletedCount, failCount, errors));
             } else {
-                resultMap.put("message", "批量核价完成，共成功 " + successCount + " 条");
+                resultMap.put("message", buildBatchReviewSuccessMessage(successCount, autoCompletedCount));
             }
             return resultMap;
         } catch (Exception e) {
@@ -555,10 +791,65 @@ public class TemuPriceReviewService {
         }
     }
 
-    private String buildBatchReviewMessage(int successCount, int failCount, List<String> errors) {
+    @Transactional
+    public Map<String, Object> batchLocalComplete(PriceReviewDTO.BatchLocalCompleteRequest request) {
+        String shopId = request == null ? null : request.getShopId();
+        List<Long> orderIds = request == null ? null : request.getOrderIds();
+        if (shopId == null || shopId.isBlank()) {
+            return Map.of("success", false, "message", "shopId不能为空");
+        }
+        if (orderIds == null || orderIds.isEmpty()) {
+            return Map.of("success", false, "message", "请选择至少一条核价单");
+        }
+
+        List<TemuPriceReviewOrder> orders = reviewOrderRepository.findByShopIdAndIdIn(shopId, orderIds);
+        if (orders.isEmpty()) {
+            return Map.of("success", false, "message", "未找到指定的核价单");
+        }
+
+        int updatedCount = 0;
+        int skippedCount = 0;
+        LocalDateTime now = LocalDateTime.now();
+        for (TemuPriceReviewOrder order : orders) {
+            String normalizedAction = order.getReviewAction() == null ? null : order.getReviewAction().trim().toUpperCase(Locale.ROOT);
+            boolean isPending = normalizedAction == null || normalizedAction.isBlank() || "PENDING".equals(normalizedAction);
+            if (!isPending) {
+                skippedCount++;
+                continue;
+            }
+            order.setReviewAction("COMPLETED");
+            order.setReviewAt(now);
+            updatedCount++;
+        }
+        if (updatedCount > 0) {
+            reviewOrderRepository.saveAll(orders);
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("success", true);
+        result.put("total", orders.size());
+        result.put("updatedCount", updatedCount);
+        result.put("skippedCount", skippedCount);
+        if (updatedCount == 0) {
+            result.put("message", skippedCount > 0 ? "选中的核价单已存在本地处理状态，无需重复标记" : "没有可标记的核价单");
+        } else if (skippedCount > 0) {
+            result.put("message", "已标记完成 " + updatedCount + " 条，跳过 " + skippedCount + " 条已有处理状态的数据");
+        } else {
+            result.put("message", "已标记完成 " + updatedCount + " 条");
+        }
+        return result;
+    }
+
+    private String buildBatchReviewMessage(int successCount, int autoCompletedCount, int failCount, List<String> errors) {
         StringBuilder builder = new StringBuilder();
         if (successCount > 0) {
             builder.append("成功 ").append(successCount).append(" 条");
+        }
+        if (autoCompletedCount > 0) {
+            if (builder.length() > 0) {
+                builder.append("，");
+            }
+            builder.append("自动标记已处理 ").append(autoCompletedCount).append(" 条");
         }
         if (failCount > 0) {
             if (builder.length() > 0) {
@@ -576,6 +867,23 @@ public class TemuPriceReviewService {
         return builder.length() > 0 ? builder.toString() : "批量核价失败";
     }
 
+    private String buildBatchReviewSuccessMessage(int successCount, int autoCompletedCount) {
+        StringBuilder builder = new StringBuilder("批量核价完成");
+        if (successCount > 0 || autoCompletedCount > 0) {
+            builder.append("，");
+        }
+        if (successCount > 0) {
+            builder.append("成功 ").append(successCount).append(" 条");
+        }
+        if (autoCompletedCount > 0) {
+            if (successCount > 0) {
+                builder.append("，");
+            }
+            builder.append("自动标记已处理 ").append(autoCompletedCount).append(" 条");
+        }
+        return builder.toString();
+    }
+
     private String buildReviewApiFailureDetail(TemuOpenApiClient.ApiResult result) {
         String errorMsg = defaultIfBlank(result == null ? null : result.errorMsg, "TEMU接口返回失败");
         Map<String, Object> rawMap = parseRawResponse(result == null ? null : result.raw);
@@ -590,6 +898,21 @@ public class TemuPriceReviewService {
             builder.append(" raw=").append(rawSnippet);
         }
         return builder.toString();
+    }
+
+    private boolean shouldAutoCompleteRejectedOrder(String action, TemuOpenApiClient.ApiResult result) {
+        if (!"REJECT".equals(action) || result == null || result.success) {
+            return false;
+        }
+        Map<String, Object> rawMap = parseRawResponse(result.raw);
+        Long errorCode = toLong(rawMap.get("errorCode"));
+        return Objects.equals(errorCode, 400000010L);
+    }
+
+    private void markLocalCompleted(TemuPriceReviewOrder order) {
+        order.setReviewAction("COMPLETED");
+        order.setReviewAt(LocalDateTime.now());
+        reviewOrderRepository.save(order);
     }
 
     private String defaultIfBlank(String value, String fallback) {
@@ -626,6 +949,42 @@ public class TemuPriceReviewService {
         return value.substring(0, maxLength) + "...";
     }
 
+    private String validateRejectRequest(PriceReviewDTO.BatchReviewRequest request) {
+        if (request == null || request.getBargainReasonList() == null || request.getBargainReasonList().isEmpty()) {
+            return null;
+        }
+        for (PriceReviewDTO.BargainReasonItem item : request.getBargainReasonList()) {
+            if (item == null) {
+                continue;
+            }
+            boolean hasExternalLinks = item.getExternalLinkList() != null
+                    && item.getExternalLinkList().stream().anyMatch(link -> link != null && !link.isBlank());
+            boolean hasValidComponent = item.getComponentList() != null
+                    && item.getComponentList().stream().anyMatch(this::isValidRejectReasonComponent);
+            boolean hasInvalidType = item.getComponentList() != null
+                    && item.getComponentList().stream().filter(Objects::nonNull).anyMatch(component ->
+                    component.getReason() != null
+                            && !component.getReason().isBlank()
+                            && (component.getType() == null || component.getType() < 0 || component.getType() > 8));
+            if (hasInvalidType) {
+                return "拒绝原因类型仅支持 0-8";
+            }
+            if (hasExternalLinks && !hasValidComponent) {
+                return "填写外部链接时，请至少填写一条拒绝原因";
+            }
+        }
+        return null;
+    }
+
+    private boolean isValidRejectReasonComponent(PriceReviewDTO.RejectReasonComponent component) {
+        return component != null
+                && component.getReason() != null
+                && !component.getReason().isBlank()
+                && component.getType() != null
+                && component.getType() >= 0
+                && component.getType() <= 8;
+    }
+
     private List<Map<String, Object>> buildBargainReasonList(List<PriceReviewDTO.BargainReasonItem> source) {
         if (source == null || source.isEmpty()) {
             return List.of();
@@ -637,7 +996,7 @@ public class TemuPriceReviewService {
             List<Map<String, Object>> componentList = new ArrayList<>();
             if (item.getComponentList() != null) {
                 for (PriceReviewDTO.RejectReasonComponent component : item.getComponentList()) {
-                    if (component == null || component.getType() == null || component.getReason() == null || component.getReason().isBlank()) {
+                    if (!isValidRejectReasonComponent(component)) {
                         continue;
                     }
                     componentList.add(Map.of(
@@ -651,14 +1010,12 @@ public class TemuPriceReviewService {
                     ? List.of()
                     : item.getExternalLinkList().stream().filter(link -> link != null && !link.isBlank()).map(String::trim).toList();
 
-            if (componentList.isEmpty() && externalLinks.isEmpty()) {
+            if (componentList.isEmpty()) {
                 continue;
             }
 
             Map<String, Object> row = new LinkedHashMap<>();
-            if (!componentList.isEmpty()) {
-                row.put("componentList", componentList);
-            }
+            row.put("componentList", componentList);
             if (!externalLinks.isEmpty()) {
                 row.put("externalLinkList", externalLinks);
             }

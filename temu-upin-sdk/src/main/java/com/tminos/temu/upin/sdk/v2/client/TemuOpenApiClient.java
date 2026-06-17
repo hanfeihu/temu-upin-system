@@ -32,6 +32,10 @@ public class TemuOpenApiClient {
     public static final String API_GOODS_PRICE_LIST = "bg.glo.goods.price.list.get";
     public static final String API_LOGISTICS_TEMPLATE = "bg.glo.logistics.template.get";
     public static final String API_WAREHOUSE_LIST = "bg.btg.goods.stock.warehouse.list.get";
+    public static final String API_SEMI_STOCK_QUANTITY_UPDATE = "bg.btg.goods.stock.quantity.update";
+    public static final String API_VIRTUAL_INVENTORY_JIT_EDIT = "bg.virtualinventoryjit.edit";
+    public static final String API_VIRTUAL_INVENTORY_QTG_EDIT = "bg.qtg.stock.virtualinventoryjit.edit";
+    public static final String API_GOODS_EDIT_SENSITIVE_ATTR = "bg.glo.goods.edit.sensitive.attr";
 
     // ==================== 核价 / 调价 API ====================
     public static final String API_PRICE_ADJUST_QUERY = "bg.semi.adjust.price.page.query.order";

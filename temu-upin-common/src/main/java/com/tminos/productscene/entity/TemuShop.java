@@ -47,6 +47,10 @@ public class TemuShop {
     @Column(name = "dianxiaomi_cookie", columnDefinition = "TEXT")
     private String dianxiaomiCookie;
 
+    /** 店小秘店铺 ID，用于按店铺拉取店小秘订单 */
+    @Column(name = "dianxiaomi_shop_id", length = 64)
+    private String dianxiaomiShopId;
+
     @Column(name = "site_id", nullable = false)
     private Integer siteId;
 
@@ -100,6 +104,7 @@ public class TemuShop {
     public String getToken() { return token; }
     public String getOrderToken() { return orderToken; }
     public String getDianxiaomiCookie() { return dianxiaomiCookie; }
+    public String getDianxiaomiShopId() { return dianxiaomiShopId; }
     public Integer getSiteId() { return siteId; }
     public String getWarehouseId() { return warehouseId; }
     public Integer getSkuDefaultStock() { return skuDefaultStock; }

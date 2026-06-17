@@ -12,6 +12,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -25,6 +27,67 @@ public class TemuActivityService {
     private static final Gson GSON = new Gson();
     private static final int ENROLL_PAGE_SIZE = 50;
     private static final int ENROLL_SUBMIT_BATCH_SIZE = 20;
+    private static final String ACTIVITY_RECOMMEND_LOCAL_CANDIDATES_SQL = """
+            with sku_stats as (
+                select
+                    g.id as goods_id,
+                    g.product_id,
+                    g.product_name,
+                    g.main_image_url,
+                    g.ext_code,
+                    g.temu_created_at,
+                    coalesce(sum(case when o.order_status is null or o.order_status <> 3 then o.quantity else 0 end), 0) as sales_quantity,
+                    min(purchase.purchase_price) as min_purchase_price,
+                    max(purchase.purchase_price) as max_purchase_price,
+                    min(coalesce(site_price.supplier_price, price.supplier_price, 0)) as min_supplier_price,
+                    max(coalesce(site_price.supplier_price, price.supplier_price, 0)) as max_supplier_price
+                from temu_goods g
+                join temu_goods_sku sku
+                  on sku.goods_id = g.id
+                 and sku.shop_id = g.shop_id
+                left join temu_goods_sku_price price
+                  on price.shop_id = sku.shop_id
+                 and price.product_sku_id = sku.product_sku_id
+                left join temu_goods_sku_site_price site_price
+                  on site_price.sku_price_id = price.id
+                 and site_price.site_id = 100
+                left join temu_shop_sku_purchase_price purchase
+                  on purchase.shop_id = sku.shop_id
+                 and purchase.product_sku_id = sku.product_sku_id
+                left join temu_shops shop
+                  on shop.shop_id = g.shop_id
+                left join temu_orders o
+                  on o.shop_record_id = shop.id
+                 and o.matched_temu_sku_id = cast(sku.product_sku_id as text)
+                where g.shop_id = :shopId
+                  and coalesce(g.skc_site_status, 0) = 1
+                  and not exists (
+                      select 1 from temu_activity_blacklist blacklist
+                      where blacklist.shop_id = g.shop_id
+                        and blacklist.product_id = g.product_id
+                  )
+                  and (:hasMinSupplierPrice = false or coalesce(site_price.supplier_price, price.supplier_price, 0) >= :minSupplierPrice)
+                  and (:hasMaxSupplierPrice = false or coalesce(site_price.supplier_price, price.supplier_price, 0) <= :maxSupplierPrice)
+                  and (
+                    :excludeEnrolled = false
+                    or not exists (
+                        select 1 from temu_activity_enrollment e
+                        where e.shop_id = g.shop_id
+                          and e.product_id = g.product_id
+                          and e.activity_type = :activityType
+                          and (:hasActivityThematicId = false or e.activity_thematic_id = :activityThematicId)
+                          and coalesce(e.enroll_status, 0) in (1, 3, 4)
+                    )
+                  )
+                group by g.id, g.product_id, g.product_name, g.main_image_url, g.ext_code, g.temu_created_at
+            )
+            select *
+            from sku_stats
+            where (:hasMaxSalesQuantity = false or sales_quantity <= :maxSalesQuantity)
+              and (:hasMinListedDays = false or temu_created_at is null or temu_created_at <= :listedBeforeSeconds)
+            order by max_supplier_price desc nulls last, sales_quantity asc, product_id desc
+            limit :limit
+            """;
 
     private final TemuActivityRepository activityRepository;
     private final TemuActivityThematicRepository thematicRepository;
@@ -34,6 +97,8 @@ public class TemuActivityService {
     private final TemuGoodsRepository goodsRepository;
     private final TemuGoodsSkuRepository goodsSkuRepository;
     private final TemuGoodsSkuSpecRepository goodsSkuSpecRepository;
+    private final TemuActivityBlacklistRepository activityBlacklistRepository;
+    private final NamedParameterJdbcTemplate namedParameterJdbcTemplate;
     private final TemuOpenApiCredentialService credentialService;
 
     public TemuActivityService(TemuActivityRepository activityRepository,
@@ -44,6 +109,8 @@ public class TemuActivityService {
                                TemuGoodsRepository goodsRepository,
                                TemuGoodsSkuRepository goodsSkuRepository,
                                TemuGoodsSkuSpecRepository goodsSkuSpecRepository,
+                               TemuActivityBlacklistRepository activityBlacklistRepository,
+                               NamedParameterJdbcTemplate namedParameterJdbcTemplate,
                                TemuOpenApiCredentialService credentialService) {
         this.activityRepository = activityRepository;
         this.thematicRepository = thematicRepository;
@@ -53,6 +120,8 @@ public class TemuActivityService {
         this.goodsRepository = goodsRepository;
         this.goodsSkuRepository = goodsSkuRepository;
         this.goodsSkuSpecRepository = goodsSkuSpecRepository;
+        this.activityBlacklistRepository = activityBlacklistRepository;
+        this.namedParameterJdbcTemplate = namedParameterJdbcTemplate;
         this.credentialService = credentialService;
     }
 
@@ -65,7 +134,8 @@ public class TemuActivityService {
         } else {
             activities = activityRepository.findByShopId(shopId);
         }
-        return activities.stream().map(a -> {
+        Map<String, ActivityDTO.ActivityItem> deduped = new LinkedHashMap<>();
+        for (TemuActivity a : activities) {
             ActivityDTO.ActivityItem item = new ActivityDTO.ActivityItem();
             item.setId(a.getId());
             item.setShopId(a.getShopId());
@@ -94,8 +164,17 @@ public class TemuActivityService {
                 return ti;
             }).collect(Collectors.toList()));
 
-            return item;
-        }).collect(Collectors.toList());
+            String key = item.getActivityType() + "|" + (item.getActivityName() == null ? "" : item.getActivityName());
+            ActivityDTO.ActivityItem existing = deduped.get(key);
+            if (existing == null || thematicSize(item) > thematicSize(existing) || (thematicSize(item) == thematicSize(existing) && item.getId() > existing.getId())) {
+                deduped.put(key, item);
+            }
+        }
+        return new ArrayList<>(deduped.values());
+    }
+
+    private int thematicSize(ActivityDTO.ActivityItem item) {
+        return item.getThematicList() == null ? 0 : item.getThematicList().size();
     }
 
     public ActivityDTO.ActivityDetail getActivityDetail(String shopId, Integer activityType, Long activityThematicId) {
@@ -169,6 +248,60 @@ public class TemuActivityService {
         return mapProductMatchResponse(request.getShopId(), resultMap);
     }
 
+    public ActivityDTO.RecommendationResponse recommendProducts(ActivityDTO.RecommendationRequest request) {
+        if (request == null || request.getActivityType() == null) {
+            throw new IllegalArgumentException("activityType不能为空");
+        }
+        if (request.getShopId() == null || request.getShopId().isBlank()) {
+            throw new IllegalArgumentException("shopId不能为空");
+        }
+
+        int rowCount = clamp(request.getRowCount(), 1, 100, 20);
+        List<LocalActivityCandidate> localCandidates = loadLocalActivityCandidates(request, Math.min(rowCount * 4, 200));
+        ActivityDTO.RecommendationResponse response = new ActivityDTO.RecommendationResponse();
+        response.setLocalCandidateCount(localCandidates.size());
+        if (localCandidates.isEmpty()) {
+            response.setMatchedCount(0);
+            response.setList(List.of());
+            return response;
+        }
+        Map<Long, LocalActivityCandidate> localByProductId = localCandidates.stream()
+                .collect(Collectors.toMap(LocalActivityCandidate::productId, item -> item, (left, right) -> left, LinkedHashMap::new));
+        List<ActivityDTO.RecommendedProductItem> recommended = new ArrayList<>();
+        int matchedCount = 0;
+        for (List<LocalActivityCandidate> batch : partition(localCandidates, 50)) {
+            ActivityDTO.ProductMatchRequest matchRequest = new ActivityDTO.ProductMatchRequest();
+            matchRequest.setShopId(request.getShopId());
+            matchRequest.setActivityType(request.getActivityType());
+            matchRequest.setActivityThematicId(request.getActivityThematicId());
+            matchRequest.setRowCount(batch.size());
+            matchRequest.setProductIds(batch.stream().map(LocalActivityCandidate::productId).toList());
+
+            ActivityDTO.ProductMatchResponse matchResponse = matchProducts(matchRequest);
+            List<ActivityDTO.MatchedProductItem> matchList = matchResponse.getMatchList() == null ? List.of() : matchResponse.getMatchList();
+            matchedCount += matchList.size();
+            for (ActivityDTO.MatchedProductItem matched : matchList) {
+                LocalActivityCandidate local = localByProductId.get(matched.getProductId());
+                if (local == null) {
+                    continue;
+                }
+                ActivityDTO.RecommendedProductItem item = buildRecommendedProduct(local, matched, request);
+                if (!"不建议".equals(item.getDecision())) {
+                    recommended.add(item);
+                }
+                if (recommended.size() >= rowCount) {
+                    break;
+                }
+            }
+            if (recommended.size() >= rowCount) {
+                break;
+            }
+        }
+        response.setMatchedCount(matchedCount);
+        response.setList(recommended);
+        return response;
+    }
+
     public ActivityDTO.SessionQueryResponse querySessions(ActivityDTO.SessionQueryRequest request) {
         if (request == null || request.getActivityType() == null) {
             throw new IllegalArgumentException("activityType不能为空");
@@ -209,8 +342,36 @@ public class TemuActivityService {
 
     // ==================== 报名记录 ====================
 
-    public Page<TemuActivityEnrollment> listEnrollments(String shopId, Integer activityType, Integer enrollStatus, int page, int pageSize) {
+    public Page<TemuActivityEnrollment> listEnrollments(String shopId, Integer activityType, Integer enrollStatus, Long productId, List<Long> productIds, int page, int pageSize) {
         PageRequest pageRequest = PageRequest.of(page - 1, pageSize, Sort.by(Sort.Direction.DESC, "id"));
+        List<Long> safeProductIds = productIds == null ? List.of() : productIds.stream().filter(Objects::nonNull).distinct().toList();
+        if (safeProductIds.isEmpty() && productId != null) {
+            safeProductIds = List.of(productId);
+        }
+        if (!safeProductIds.isEmpty() && activityType != null && enrollStatus != null) {
+            return enrollmentRepository.findByShopIdAndProductIdInAndActivityTypeAndEnrollStatus(shopId, safeProductIds, activityType, enrollStatus, pageRequest);
+        }
+        if (!safeProductIds.isEmpty() && activityType != null) {
+            return enrollmentRepository.findByShopIdAndProductIdInAndActivityType(shopId, safeProductIds, activityType, pageRequest);
+        }
+        if (!safeProductIds.isEmpty() && enrollStatus != null) {
+            return enrollmentRepository.findByShopIdAndProductIdInAndEnrollStatus(shopId, safeProductIds, enrollStatus, pageRequest);
+        }
+        if (!safeProductIds.isEmpty()) {
+            return enrollmentRepository.findByShopIdAndProductIdIn(shopId, safeProductIds, pageRequest);
+        }
+        if (productId != null && activityType != null && enrollStatus != null) {
+            return enrollmentRepository.findByShopIdAndProductIdAndActivityTypeAndEnrollStatus(shopId, productId, activityType, enrollStatus, pageRequest);
+        }
+        if (productId != null && activityType != null) {
+            return enrollmentRepository.findByShopIdAndProductIdAndActivityType(shopId, productId, activityType, pageRequest);
+        }
+        if (productId != null && enrollStatus != null) {
+            return enrollmentRepository.findByShopIdAndProductIdAndEnrollStatus(shopId, productId, enrollStatus, pageRequest);
+        }
+        if (productId != null) {
+            return enrollmentRepository.findByShopIdAndProductId(shopId, productId, pageRequest);
+        }
         if (enrollStatus != null) {
             return enrollmentRepository.findByShopIdAndEnrollStatus(shopId, enrollStatus, pageRequest);
         }
@@ -218,6 +379,28 @@ public class TemuActivityService {
             return enrollmentRepository.findByShopIdAndActivityType(shopId, activityType, pageRequest);
         }
         return enrollmentRepository.findByShopId(shopId, pageRequest);
+    }
+
+    @Transactional
+    public Map<String, Object> refreshEnrollmentRecords(String shopId, Integer activityType, Long activityThematicId, List<Long> productIds) {
+        try {
+            int beforeCount = productIds == null || productIds.isEmpty()
+                    ? 0
+                    : enrollmentRepository.findByShopIdAndProductIdIn(shopId, productIds).size();
+            doRefreshEnrollmentRecords(shopId, activityType, activityThematicId, productIds);
+            int afterCount = productIds == null || productIds.isEmpty()
+                    ? 0
+                    : enrollmentRepository.findByShopIdAndProductIdIn(shopId, productIds).size();
+            return Map.of(
+                    "success", true,
+                    "beforeCount", beforeCount,
+                    "afterCount", afterCount,
+                    "message", afterCount > beforeCount ? "已刷新到新的报名记录" : "已请求 TEMU 刷新，暂未发现新的报名记录"
+            );
+        } catch (Exception e) {
+            log.warn("手动刷新活动报名记录失败: {}", e.getMessage());
+            return Map.of("success", false, "message", e.getMessage());
+        }
     }
 
     public ActivityDTO.EnrollmentItem getEnrollmentDetail(Long id) {
@@ -278,6 +461,21 @@ public class TemuActivityService {
         if (request.getProductList() == null || request.getProductList().isEmpty()) {
             return Map.of("success", false, "message", "productList不能为空");
         }
+        List<Long> requestedProductIds = request.getProductList().stream()
+                .map(ActivityDTO.EnrollProductItem::getProductId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        List<Long> blacklistedProductIds = requestedProductIds.isEmpty()
+                ? List.of()
+                : activityBlacklistRepository.findByShopIdAndProductIdIn(request.getShopId(), requestedProductIds).stream()
+                .map(TemuActivityBlacklist::getProductId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        if (!blacklistedProductIds.isEmpty()) {
+            return Map.of("success", false, "message", "存在活动黑名单商品，已阻止报名: " + blacklistedProductIds);
+        }
         try {
             TemuOpenApiClient client = buildClient(request.getShopId());
             List<List<ActivityDTO.EnrollProductItem>> batches = partition(request.getProductList(), ENROLL_SUBMIT_BATCH_SIZE);
@@ -319,15 +517,11 @@ public class TemuActivityService {
                 }
             }
 
-            List<Long> productIds = request.getProductList().stream()
-                    .map(ActivityDTO.EnrollProductItem::getProductId)
-                    .filter(Objects::nonNull)
-                    .distinct()
-                    .toList();
+            List<Long> productIds = requestedProductIds;
             String refreshWarning = null;
             if (!productIds.isEmpty() && successCount > 0) {
                 try {
-                    refreshEnrollmentRecords(request.getShopId(), request.getActivityType(), request.getActivityThematicId(), productIds);
+                    doRefreshEnrollmentRecords(request.getShopId(), request.getActivityType(), request.getActivityThematicId(), productIds);
                 } catch (Exception e) {
                     log.warn("活动报名成功但刷新报名记录失败: {}", e.getMessage());
                     refreshWarning = e.getMessage();
@@ -358,7 +552,30 @@ public class TemuActivityService {
         }
     }
 
-    private void refreshEnrollmentRecords(String shopId, Integer activityType, Long activityThematicId, List<Long> productIds) throws Exception {
+    @Transactional
+    public TemuActivityBlacklist addActivityBlacklist(ActivityDTO.BlacklistRequest request) {
+        if (request == null || request.getShopId() == null || request.getShopId().isBlank()) {
+            throw new IllegalArgumentException("shopId不能为空");
+        }
+        if (request.getProductId() == null) {
+            throw new IllegalArgumentException("productId不能为空");
+        }
+        String reason = request.getReason();
+        if (reason == null || reason.isBlank()) {
+            reason = "建议活动价太低";
+        }
+        TemuActivityBlacklist row = activityBlacklistRepository.findByShopIdAndProductId(request.getShopId(), request.getProductId())
+                .orElseGet(() -> TemuActivityBlacklist.builder()
+                        .shopId(request.getShopId())
+                        .productId(request.getProductId())
+                        .build());
+        row.setGoodsId(request.getGoodsId());
+        row.setProductName(request.getProductName());
+        row.setReason(reason.trim());
+        return activityBlacklistRepository.save(row);
+    }
+
+    private void doRefreshEnrollmentRecords(String shopId, Integer activityType, Long activityThematicId, List<Long> productIds) throws Exception {
         if (shopId == null || shopId.isBlank() || productIds == null || productIds.isEmpty()) {
             return;
         }
@@ -551,6 +768,21 @@ public class TemuActivityService {
         response.setHasMore(toBool(resultMap.get("hasMore")));
 
         List<Map<String, Object>> rawProducts = toMapList(resultMap.get("matchList"));
+        List<Long> rawProductIds = rawProducts.stream().map(item -> toLong(item.get("productId"))).filter(Objects::nonNull).distinct().toList();
+        Set<Long> blacklistedProductIds = rawProductIds.isEmpty()
+                ? Set.of()
+                : activityBlacklistRepository.findByShopIdAndProductIdIn(shopId, rawProductIds).stream()
+                .map(TemuActivityBlacklist::getProductId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        if (!blacklistedProductIds.isEmpty()) {
+            rawProducts = rawProducts.stream()
+                    .filter(item -> {
+                        Long productId = toLong(item.get("productId"));
+                        return productId == null || !blacklistedProductIds.contains(productId);
+                    })
+                    .toList();
+        }
         Map<Long, TemuGoods> goodsByProductId = goodsRepository.findByShopIdAndProductIdIn(
                         shopId,
                         rawProducts.stream().map(item -> toLong(item.get("productId"))).filter(Objects::nonNull).distinct().toList())
@@ -728,6 +960,177 @@ public class TemuActivityService {
             items.add(item);
         }
         return items;
+    }
+
+    private List<LocalActivityCandidate> loadLocalActivityCandidates(ActivityDTO.RecommendationRequest request, int limit) {
+        long nowSeconds = System.currentTimeMillis() / 1000;
+        Integer minListedDays = request.getMinListedDays();
+        Long listedBeforeSeconds = minListedDays == null || minListedDays <= 0
+                ? null
+                : nowSeconds - minListedDays.longValue() * 24 * 60 * 60;
+        MapSqlParameterSource params = new MapSqlParameterSource()
+                .addValue("shopId", request.getShopId())
+                .addValue("activityType", request.getActivityType())
+                .addValue("activityThematicId", request.getActivityThematicId())
+                .addValue("hasActivityThematicId", request.getActivityThematicId() != null)
+                .addValue("minSupplierPrice", request.getMinSupplierPrice())
+                .addValue("hasMinSupplierPrice", request.getMinSupplierPrice() != null)
+                .addValue("maxSupplierPrice", request.getMaxSupplierPrice())
+                .addValue("hasMaxSupplierPrice", request.getMaxSupplierPrice() != null)
+                .addValue("excludeEnrolled", !Boolean.FALSE.equals(request.getExcludeEnrolled()))
+                .addValue("maxSalesQuantity", request.getMaxSalesQuantity())
+                .addValue("hasMaxSalesQuantity", request.getMaxSalesQuantity() != null)
+                .addValue("minListedDays", minListedDays)
+                .addValue("hasMinListedDays", minListedDays != null && minListedDays > 0)
+                .addValue("listedBeforeSeconds", listedBeforeSeconds)
+                .addValue("limit", limit);
+        return namedParameterJdbcTemplate.query(ACTIVITY_RECOMMEND_LOCAL_CANDIDATES_SQL, params, rs -> {
+            List<LocalActivityCandidate> list = new ArrayList<>();
+            while (rs.next()) {
+                Long productId = toLong(rs.getObject("product_id"));
+                if (productId == null) {
+                    continue;
+                }
+                Long temuCreatedAt = toLong(rs.getObject("temu_created_at"));
+                Integer listedDays = temuCreatedAt == null || temuCreatedAt <= 0
+                        ? null
+                        : Math.max(0, (int) ((nowSeconds - temuCreatedAt) / (24 * 60 * 60)));
+                list.add(new LocalActivityCandidate(
+                        rs.getLong("goods_id"),
+                        productId,
+                        rs.getString("product_name"),
+                        rs.getString("main_image_url"),
+                        rs.getString("ext_code"),
+                        toInt(rs.getObject("min_supplier_price")),
+                        toInt(rs.getObject("max_supplier_price")),
+                        toInt(rs.getObject("min_purchase_price")),
+                        toInt(rs.getObject("max_purchase_price")),
+                        rs.getLong("sales_quantity"),
+                        listedDays
+                ));
+            }
+            return list;
+        });
+    }
+
+    private ActivityDTO.RecommendedProductItem buildRecommendedProduct(LocalActivityCandidate local,
+                                                                       ActivityDTO.MatchedProductItem matched,
+                                                                       ActivityDTO.RecommendationRequest request) {
+        Integer suggestActivityPrice = resolveSuggestActivityPrice(matched);
+        Integer purchasePrice = local.maxPurchasePrice();
+        Integer estimatedProfit = suggestActivityPrice != null && purchasePrice != null
+                ? suggestActivityPrice - purchasePrice
+                : null;
+        Double estimatedProfitRate = estimatedProfit != null && suggestActivityPrice != null && suggestActivityPrice > 0
+                ? estimatedProfit * 100.0 / suggestActivityPrice
+                : null;
+        Integer minProfitCents = request.getMinProfitCents() == null ? 0 : request.getMinProfitCents();
+        Integer minProfitRatePercent = request.getMinProfitRatePercent() == null ? 0 : request.getMinProfitRatePercent();
+
+        String decision = "可报名";
+        String reason = "利润和销量条件符合，适合小库存测试活动";
+        if (suggestActivityPrice == null) {
+            decision = "需确认";
+            reason = "TEMU 未返回建议活动价，需要人工确认活动价";
+        } else if (purchasePrice == null) {
+            decision = "需确认";
+            reason = "本地没有采购价，无法自动判断利润";
+        } else if (estimatedProfit == null || estimatedProfit < minProfitCents) {
+            decision = "不建议";
+            reason = "建议活动价低于最低利润要求";
+        } else if (estimatedProfitRate != null && estimatedProfitRate < minProfitRatePercent) {
+            decision = "不建议";
+            reason = "建议活动价利润率低于要求";
+        } else if (local.salesQuantity() != null && request.getMaxSalesQuantity() != null && local.salesQuantity() > request.getMaxSalesQuantity()) {
+            decision = "需确认";
+            reason = "销量超过当前筛选条件，建议人工确认是否仍要报活动";
+        }
+
+        ActivityDTO.RecommendedProductItem item = new ActivityDTO.RecommendedProductItem();
+        item.setProductId(local.productId());
+        item.setGoodsId(local.goodsId());
+        item.setProductName(local.productName());
+        item.setMainImageUrl(local.mainImageUrl());
+        item.setExtCode(local.extCode());
+        item.setCurrentSupplyPrice(local.maxSupplierPrice());
+        item.setSuggestActivityPrice(suggestActivityPrice);
+        item.setMinPurchasePrice(local.minPurchasePrice());
+        item.setMaxPurchasePrice(local.maxPurchasePrice());
+        item.setEstimatedProfit(estimatedProfit);
+        item.setEstimatedProfitRate(estimatedProfitRate);
+        item.setSalesQuantity(local.salesQuantity());
+        item.setListedDays(local.listedDays());
+        int defaultStock = clamp(request.getDefaultActivityStock(), 1, 99999, 5);
+        int suggestedStock = Math.max(
+                matched.getSuggestActivityStock() == null ? 0 : matched.getSuggestActivityStock(),
+                matched.getTargetActivityStock() == null ? 0 : matched.getTargetActivityStock()
+        );
+        item.setActivityStock(Math.max(defaultStock, suggestedStock));
+        item.setDecision(decision);
+        item.setReason(reason);
+        item.setMatchedProduct(matched);
+        return item;
+    }
+
+    private Integer resolveSuggestActivityPrice(ActivityDTO.MatchedProductItem matched) {
+        if (matched == null || matched.getSkcList() == null) {
+            return null;
+        }
+        Integer best = null;
+        for (ActivityDTO.MatchedSkcItem skc : matched.getSkcList()) {
+            best = minNonNull(best, firstPrice(skc.getSuggestActivityPrice(), skc.getActivityPrice()));
+            if (skc.getSitePriceList() != null) {
+                for (ActivityDTO.SitePriceItem sitePrice : skc.getSitePriceList()) {
+                    best = minNonNull(best, firstPrice(sitePrice.getSuggestActivityPrice(), sitePrice.getActivityPrice()));
+                }
+            }
+            if (skc.getSkuList() != null) {
+                for (ActivityDTO.MatchedSkuItem sku : skc.getSkuList()) {
+                    best = minNonNull(best, firstPrice(sku.getSuggestActivityPrice(), sku.getActivityPrice()));
+                    if (sku.getSitePriceList() != null) {
+                        for (ActivityDTO.SitePriceItem sitePrice : sku.getSitePriceList()) {
+                            best = minNonNull(best, firstPrice(sitePrice.getSuggestActivityPrice(), sitePrice.getActivityPrice()));
+                        }
+                    }
+                }
+            }
+        }
+        return best;
+    }
+
+    private Integer firstPrice(Integer... values) {
+        if (values == null) {
+            return null;
+        }
+        for (Integer value : values) {
+            if (value != null && value > 0) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private Integer minNonNull(Integer left, Integer right) {
+        if (left == null) {
+            return right;
+        }
+        if (right == null) {
+            return left;
+        }
+        return Math.min(left, right);
+    }
+
+    private int clamp(Integer value, int min, int max, int fallback) {
+        int normalized = value == null ? fallback : value;
+        return Math.max(min, Math.min(max, normalized));
+    }
+
+    private <T> List<List<T>> partition(List<T> list, int batchSize) {
+        List<List<T>> batches = new ArrayList<>();
+        for (int i = 0; i < list.size(); i += batchSize) {
+            batches.add(new ArrayList<>(list.subList(i, Math.min(i + batchSize, list.size()))));
+        }
+        return batches;
     }
 
     private TemuOpenApiClient buildClient(String shopId) {
@@ -912,12 +1315,17 @@ public class TemuActivityService {
         return null;
     }
 
-    private <T> List<List<T>> partition(List<T> source, int batchSize) {
-        List<List<T>> result = new ArrayList<>();
-        for (int index = 0; index < source.size(); index += batchSize) {
-            result.add(new ArrayList<>(source.subList(index, Math.min(index + batchSize, source.size()))));
-        }
-        return result;
+    private record LocalActivityCandidate(Long goodsId,
+                                          Long productId,
+                                          String productName,
+                                          String mainImageUrl,
+                                          String extCode,
+                                          Integer minSupplierPrice,
+                                          Integer maxSupplierPrice,
+                                          Integer minPurchasePrice,
+                                          Integer maxPurchasePrice,
+                                          Long salesQuantity,
+                                          Integer listedDays) {
     }
 
 }

@@ -297,8 +297,10 @@ public class TemuImageTranslateService {
         String main = pc.getProductMainImage();
         List<String> carousel = parseJsonStringList(pc.getCarouselImages());
         List<String> detail = parseJsonStringList(pc.getDetailImages());
+        String targetShopId = resolveRequiredTargetShopId(pc);
 
         List<Map<String, Object>> changes = Collections.synchronizedList(new ArrayList<>());
+        List<Map<String, Object>> failures = Collections.synchronizedList(new ArrayList<>());
 
         // Parallelize per-image normalization. Note:
         // - Each image call may hit network + TEMU upload; keep concurrency bounded by globalWorkerExecutor.
@@ -324,9 +326,13 @@ public class TemuImageTranslateService {
             String url = e.getValue();
             futures.put(field, CompletableFuture.supplyAsync(() -> {
                 try {
-                    return normalizeOne800(url, field, changes, true);
+                    return normalizeOne800(url, field, changes, true, targetShopId);
                 } catch (Exception ex) {
-                    // keep original on failure
+                    Map<String, Object> one = new LinkedHashMap<>();
+                    one.put("field", field);
+                    one.put("original", url);
+                    one.put("error", ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage());
+                    failures.add(one);
                     return url;
                 }
             }, globalWorkerExecutor));
@@ -355,6 +361,11 @@ public class TemuImageTranslateService {
         boolean changed = !Objects.equals(main, newMain)
                 || !Objects.equals(carousel, newCarousel)
                 || !Objects.equals(detail, newDetail);
+
+        if (!failures.isEmpty()) {
+            throw new IllegalStateException("image normalize failed: " + failures.size() + " images, first="
+                    + Objects.toString(failures.get(0).get("error"), "unknown"));
+        }
 
         if (changed) {
             ProductCollection latest = productCollectionRepository.findById(spuId)
@@ -387,6 +398,7 @@ public class TemuImageTranslateService {
         out.put("carouselCount", newCarousel.size());
         out.put("detailCount", newDetail.size());
         out.put("changes", changes);
+        out.put("failures", failures);
         return out;
     }
 
@@ -403,8 +415,10 @@ public class TemuImageTranslateService {
         List<String> carousel = parseJsonStringList(pc.getCarouselImages());
         List<String> detail = parseJsonStringList(pc.getDetailImages());
         List<ProductCollectionTemuSku> temuSkus = temuSkuRepository.findBySpuIdOrderByIdAsc(spuId);
+        String targetShopId = resolveRequiredTargetShopId(pc);
 
         List<Map<String, Object>> changes = Collections.synchronizedList(new ArrayList<>());
+        List<Map<String, Object>> failures = Collections.synchronizedList(new ArrayList<>());
 
         // Collect all image tasks: field -> url
         Map<String, String> originalByField = new LinkedHashMap<>();
@@ -440,9 +454,15 @@ public class TemuImageTranslateService {
                 String url = e.getValue();
                 futures.put(field, CompletableFuture.supplyAsync(() -> {
                     try {
-                        return normalizeOne800(url, field, changes, true);
+                        return normalizeOne800(url, field, changes, true, targetShopId);
                     } catch (Exception ex) {
-                        log.warn("normalizeAllImagesToTemu800 field={} failed: {}", field, ex.getMessage());
+                        String error = ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage();
+                        Map<String, Object> one = new LinkedHashMap<>();
+                        one.put("field", field);
+                        one.put("original", url);
+                        one.put("error", error);
+                        failures.add(one);
+                        log.warn("normalizeAllImagesToTemu800 field={} failed: {}", field, error);
                         return url;
                     }
                 }, pool));
@@ -454,6 +474,11 @@ public class TemuImageTranslateService {
                     f.get(10, TimeUnit.MINUTES);
                 } catch (Exception ignored) {
                 }
+            }
+
+            if (!failures.isEmpty()) {
+                throw new IllegalStateException("image normalize failed: " + failures.size() + " images, first="
+                        + Objects.toString(failures.get(0).get("error"), "unknown"));
             }
 
             // Rebuild results
@@ -509,17 +534,18 @@ public class TemuImageTranslateService {
             out.put("skuImageChanged", skuChanged);
             out.put("totalImages", originalByField.size());
             out.put("changes", changes);
+            out.put("failures", failures);
             return out;
         } finally {
             pool.shutdown();
         }
     }
 
-    private String normalizeOne800(String url, String field, List<Map<String, Object>> changes, boolean recordMeta) throws Exception {
+    private String normalizeOne800(String url, String field, List<Map<String, Object>> changes, boolean recordMeta, String targetShopId) throws Exception {
         String input = url == null ? null : url.trim();
         if (!StringUtils.hasText(input)) return input;
 
-        TemuImageNormalizeService.Result r = imageNormalizeService.normalizeToTemu800(input);
+        TemuImageNormalizeService.Result r = imageNormalizeService.normalizeToTemu800(input, targetShopId);
         String out = r == null ? input : r.getUploadedUrl();
         if (!StringUtils.hasText(out)) out = input;
 
@@ -547,6 +573,17 @@ public class TemuImageTranslateService {
         }
 
         return out;
+    }
+
+    private String resolveRequiredTargetShopId(ProductCollection pc) {
+        if (pc == null) {
+            throw new IllegalStateException("product is required for TEMU image normalize");
+        }
+        List<String> shopIds = parseJsonStringList(pc.getTargetShopIds());
+        if (shopIds.isEmpty() || !StringUtils.hasText(shopIds.get(0))) {
+            throw new IllegalStateException("product target shop is required for TEMU image normalize");
+        }
+        return shopIds.get(0).trim();
     }
 
     private String replaceOneIfNeeded(String url, String field, List<Map<String, Object>> changes) throws Exception {

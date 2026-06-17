@@ -10,6 +10,7 @@ import com.tminos.productscene.entity.TemuOrderLogistics;
 import com.tminos.productscene.entity.TemuOrderSyncState;
 import com.tminos.productscene.entity.TemuOrderSyncType;
 import com.tminos.productscene.entity.TemuShop;
+import com.tminos.productscene.sync.entity.TemuGoods;
 import com.tminos.productscene.repository.TemuOrderLogisticsRepository;
 import com.tminos.productscene.repository.TemuOrderRepository;
 import com.tminos.productscene.repository.TemuOrderSyncStateRepository;
@@ -17,10 +18,12 @@ import com.tminos.productscene.sync.entity.TemuGoodsSku;
 import com.tminos.productscene.sync.entity.TemuGoodsSkuPrice;
 import com.tminos.productscene.sync.entity.TemuGoodsSkuSitePrice;
 import com.tminos.productscene.sync.entity.TemuGoodsSkuSpec;
+import com.tminos.productscene.sync.entity.TemuShopSkuPurchasePrice;
 import com.tminos.productscene.sync.repository.TemuGoodsSkuRepository;
 import com.tminos.productscene.sync.repository.TemuGoodsSkuPriceRepository;
 import com.tminos.productscene.sync.repository.TemuGoodsSkuSitePriceRepository;
 import com.tminos.productscene.sync.repository.TemuGoodsSkuSpecRepository;
+import com.tminos.productscene.sync.repository.TemuShopSkuPurchasePriceRepository;
 import com.tminos.temu.upin.sdk.v2.common.TemuOpenApiCredentials;
 import jakarta.persistence.criteria.Predicate;
 import jakarta.persistence.criteria.Subquery;
@@ -30,6 +33,8 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -50,11 +55,52 @@ import java.util.Objects;
 public class TemuOrderService {
 
     private static final Logger log = LoggerFactory.getLogger(TemuOrderService.class);
+    private static final long DAY_MS = 24L * 60L * 60L * 1000L;
     private static final int DEFAULT_PAGE_SIZE = 100;
     private static final int MAX_SYNC_PAGES = 500;
     private static final long DEFAULT_INCREMENTAL_HOURS = 24L;
     private static final long DEFAULT_FULL_SYNC_HOURS = 24L * 30L;
     private static final long CURSOR_OVERLAP_SECONDS = 3600L;
+    private static final String LATEST_SINGLE_ITEM_FIRST_LEG_FEE_SQL = """
+            with latest_logistics as (
+                select distinct on (l.shop_record_id, l.parent_order_sn)
+                    l.shop_record_id,
+                    l.parent_order_sn,
+                    l.first_leg_logistics_fee,
+                    l.updated_at,
+                    l.id
+                from temu_order_logistics l
+                where l.shop_record_id = :shopRecordId
+                order by l.shop_record_id, l.parent_order_sn, l.updated_at desc, l.id desc
+            ),
+            qualified_orders as (
+                select
+                    o.matched_temu_sku_id as product_sku_id,
+                    logistics.first_leg_logistics_fee as first_leg_logistics_fee,
+                    row_number() over (
+                        partition by o.matched_temu_sku_id
+                        order by coalesce(o.order_time_ms, o.update_time_ms, 0) desc, o.id desc
+                    ) as rn
+                from temu_orders o
+                join latest_logistics logistics
+                  on logistics.shop_record_id = o.shop_record_id
+                 and logistics.parent_order_sn = o.parent_order_sn
+                where o.shop_record_id = :shopRecordId
+                  and o.matched_temu_sku_id in (:skuIds)
+                  and o.quantity = 1
+                  and logistics.first_leg_logistics_fee is not null
+                  and not exists (
+                      select 1
+                      from temu_orders sibling
+                      where sibling.shop_record_id = o.shop_record_id
+                        and sibling.parent_order_sn = o.parent_order_sn
+                        and sibling.id <> o.id
+                  )
+            )
+            select product_sku_id, first_leg_logistics_fee
+            from qualified_orders
+            where rn = 1
+            """;
 
     private final TemuOrderRepository orderRepository;
     private final TemuOrderLogisticsRepository logisticsRepository;
@@ -63,12 +109,14 @@ public class TemuOrderService {
     private final TemuGoodsSkuSpecRepository goodsSkuSpecRepository;
     private final TemuGoodsSkuPriceRepository goodsSkuPriceRepository;
     private final TemuGoodsSkuSitePriceRepository goodsSkuSitePriceRepository;
+    private final TemuShopSkuPurchasePriceRepository purchasePriceRepository;
     private final TemuShopService shopService;
     private final TemuOpenApiCredentialService credentialService;
     private final TemuOrderOpenApiService orderOpenApiService;
     private final TemuOrderMatchService orderMatchService;
     private final DianxiaomiPackageService dianxiaomiPackageService;
     private final HaoyuanLogisticsService haoyuanLogisticsService;
+    private final NamedParameterJdbcTemplate namedParameterJdbcTemplate;
     private final ObjectMapper objectMapper;
 
     public TemuOrderService(TemuOrderRepository orderRepository,
@@ -78,12 +126,14 @@ public class TemuOrderService {
                             TemuGoodsSkuSpecRepository goodsSkuSpecRepository,
                             TemuGoodsSkuPriceRepository goodsSkuPriceRepository,
                             TemuGoodsSkuSitePriceRepository goodsSkuSitePriceRepository,
+                            TemuShopSkuPurchasePriceRepository purchasePriceRepository,
                             TemuShopService shopService,
                             TemuOpenApiCredentialService credentialService,
                             TemuOrderOpenApiService orderOpenApiService,
                             TemuOrderMatchService orderMatchService,
                             DianxiaomiPackageService dianxiaomiPackageService,
                             HaoyuanLogisticsService haoyuanLogisticsService,
+                            NamedParameterJdbcTemplate namedParameterJdbcTemplate,
                             ObjectMapper objectMapper) {
         this.orderRepository = orderRepository;
         this.logisticsRepository = logisticsRepository;
@@ -92,12 +142,14 @@ public class TemuOrderService {
         this.goodsSkuSpecRepository = goodsSkuSpecRepository;
         this.goodsSkuPriceRepository = goodsSkuPriceRepository;
         this.goodsSkuSitePriceRepository = goodsSkuSitePriceRepository;
+        this.purchasePriceRepository = purchasePriceRepository;
         this.shopService = shopService;
         this.credentialService = credentialService;
         this.orderOpenApiService = orderOpenApiService;
         this.orderMatchService = orderMatchService;
         this.dianxiaomiPackageService = dianxiaomiPackageService;
         this.haoyuanLogisticsService = haoyuanLogisticsService;
+        this.namedParameterJdbcTemplate = namedParameterJdbcTemplate;
         this.objectMapper = objectMapper;
     }
 
@@ -106,10 +158,12 @@ public class TemuOrderService {
                                             String shopId,
                                             String keyword,
                                             String matchedTemuSkuIdLike,
+                                            String agingFilter,
                                             String cancelState,
                                             String aftersaleState,
                                             Integer orderStatus,
                                             String matchStatus,
+                                            Boolean noStockProduct,
                                             Long orderTimeStartMs,
                                             Long orderTimeEndMs,
                                             Long updateTimeStartMs,
@@ -119,7 +173,8 @@ public class TemuOrderService {
         int safePage = Math.max(page, 1);
         int safePageSize = Math.max(pageSize, 1);
         Page<TemuOrder> rows = orderRepository.findAll(
-                buildListSpec(shopRecordId, shopId, keyword, matchedTemuSkuIdLike, cancelState, aftersaleState, orderStatus, matchStatus,
+                buildListSpec(shopRecordId, shopId, keyword, matchedTemuSkuIdLike, agingFilter,
+                        cancelState, aftersaleState, orderStatus, matchStatus, noStockProduct,
                         orderTimeStartMs, orderTimeEndMs, updateTimeStartMs, updateTimeEndMs),
                 PageRequest.of(safePage - 1, safePageSize, Sort.by(
                         Sort.Order.desc("orderTimeMs").nullsLast(),
@@ -129,12 +184,16 @@ public class TemuOrderService {
         Map<String, TemuOrderLogistics> logisticsMap = loadLatestLogistics(rows.getContent());
         Map<String, String> matchedSkuSpecNameMap = loadMatchedSkuSpecNameMap(rows.getContent());
         Map<String, MatchedSupplyPriceContext> matchedSupplyPriceMap = loadMatchedSupplyPriceMap(rows.getContent());
+        Map<String, Integer> matchedPurchasePriceMap = loadMatchedPurchasePriceMap(rows.getContent());
+        Map<SkuStatsKey, BigDecimal> matchedFirstLegFeeMap = loadMatchedFirstLegFeeMap(rows.getContent());
         Map<SkuStatsKey, SkuAftersaleStats> skuAftersaleStatsMap = loadSkuAftersaleStats(rows.getContent());
         return rows.map(row -> toListItem(
                 row,
                 logisticsMap.get(logisticsKey(row.getShopRecordId(), row.getParentOrderSn())),
                 matchedSkuSpecNameMap,
                 matchedSupplyPriceMap,
+                matchedPurchasePriceMap,
+                matchedFirstLegFeeMap,
                 skuAftersaleStatsMap
         ));
     }
@@ -152,6 +211,8 @@ public class TemuOrderService {
                 logistics,
                 loadMatchedSkuSpecNameMap(List.of(order)),
                 loadMatchedSupplyPriceMap(List.of(order)),
+                loadMatchedPurchasePriceMap(List.of(order)),
+                loadMatchedFirstLegFeeMap(List.of(order)),
                 loadSkuAftersaleStats(List.of(order))
         );
     }
@@ -212,9 +273,33 @@ public class TemuOrderService {
         return toLogisticsSnapshot(logistics);
     }
 
+    @Transactional
+    public void updateDianxiaomiPackageNumber(Long orderId, TemuOrderDTO.ManualPackageNumberRequest request) {
+        TemuOrder order = orderRepository.findById(orderId)
+                .orElseThrow(() -> new IllegalArgumentException("订单不存在: " + orderId));
+        String packageNumber = trim(request == null ? null : request.getPackageNumber());
+        if (!StringUtils.hasText(packageNumber)) {
+            throw new IllegalArgumentException("店小秘单号不能为空");
+        }
+
+        String parentOrderSn = firstNonBlank(order.getParentOrderSn(), order.getOrderSn());
+        if (!StringUtils.hasText(parentOrderSn)) {
+            throw new IllegalStateException("当前订单缺少父订单号，无法保存店小秘单号");
+        }
+
+        TemuShop shop = shopService.getEnabledShopByIdOrThrow(order.getShopRecordId());
+        dianxiaomiPackageService.savePackageNumber(shop, parentOrderSn, packageNumber);
+        order.setDianxiaomiPackageNumber(packageNumber);
+    }
+
     public int refreshRecentLogistics(Long shopRecordId, Integer hoursBack, Integer limit) {
         TemuShop shop = shopService.getEnabledShopByIdOrThrow(shopRecordId);
         return refreshRecentLogistics(shop, hoursBack, limit);
+    }
+
+    public int refreshAllEligibleLogistics(Long shopRecordId) {
+        TemuShop shop = shopService.getEnabledShopByIdOrThrow(shopRecordId);
+        return refreshAllLogistics(shop);
     }
 
     private TemuOrderDTO.SyncResponse syncShop(TemuShop shop, boolean fullSync, Integer hoursBack) {
@@ -368,10 +453,12 @@ public class TemuOrderService {
                                                    String shopId,
                                                    String keyword,
                                                    String matchedTemuSkuIdLike,
+                                                   String agingFilter,
                                                    String cancelState,
                                                    String aftersaleState,
                                                    Integer orderStatus,
                                                    String matchStatus,
+                                                   Boolean noStockProduct,
                                                    Long orderTimeStartMs,
                                                    Long orderTimeEndMs,
                                                    Long updateTimeStartMs,
@@ -384,6 +471,9 @@ public class TemuOrderService {
             if (StringUtils.hasText(shopId)) {
                 predicates.add(cb.equal(root.get("shopId"), shopId.trim()));
             }
+            var lifecycleStatus = cb.<Integer>selectCase()
+                    .when(cb.isNotNull(root.get("parentOrderStatus")), root.get("parentOrderStatus"))
+                    .otherwise(root.get("orderStatus"));
             String normalizedCancelState = cancelState == null ? null : cancelState.trim().toUpperCase();
             if ("CANCELLED".equals(normalizedCancelState)) {
                 predicates.add(cb.equal(root.get("orderStatus"), 3));
@@ -415,6 +505,33 @@ public class TemuOrderService {
             if (StringUtils.hasText(matchStatus)) {
                 predicates.add(cb.equal(root.get("matchStatus"), matchStatus.trim()));
             }
+            if (Boolean.TRUE.equals(noStockProduct)) {
+                Subquery<Long> matchedGoodsSubquery = query.subquery(Long.class);
+                var skuRoot = matchedGoodsSubquery.from(TemuGoodsSku.class);
+                var goodsRoot = matchedGoodsSubquery.from(TemuGoods.class);
+                matchedGoodsSubquery.select(cb.literal(1L));
+                matchedGoodsSubquery.where(
+                        cb.equal(skuRoot.get("goodsId"), goodsRoot.get("id")),
+                        cb.equal(goodsRoot.get("shopId"), root.get("shopId")),
+                        cb.equal(skuRoot.get("shopId"), root.get("shopId")),
+                        cb.equal(skuRoot.get("productSkuId").as(String.class), root.get("matchedTemuSkuId"))
+                );
+
+                Subquery<Long> positiveStockSkuSubquery = query.subquery(Long.class);
+                var matchedSkuRoot = positiveStockSkuSubquery.from(TemuGoodsSku.class);
+                var siblingSkuRoot = positiveStockSkuSubquery.from(TemuGoodsSku.class);
+                positiveStockSkuSubquery.select(cb.literal(1L));
+                positiveStockSkuSubquery.where(
+                        cb.equal(matchedSkuRoot.get("shopId"), root.get("shopId")),
+                        cb.equal(matchedSkuRoot.get("productSkuId").as(String.class), root.get("matchedTemuSkuId")),
+                        cb.equal(siblingSkuRoot.get("shopId"), matchedSkuRoot.get("shopId")),
+                        cb.equal(siblingSkuRoot.get("goodsId"), matchedSkuRoot.get("goodsId")),
+                        cb.greaterThan(cb.coalesce(siblingSkuRoot.get("virtualStock"), 0), 0)
+                );
+
+                predicates.add(cb.exists(matchedGoodsSubquery));
+                predicates.add(cb.not(cb.exists(positiveStockSkuSubquery)));
+            }
             if (StringUtils.hasText(keyword)) {
                 String like = "%" + keyword.trim().toLowerCase() + "%";
                 predicates.add(cb.or(
@@ -429,6 +546,20 @@ public class TemuOrderService {
             if (StringUtils.hasText(matchedTemuSkuIdLike)) {
                 String like = "%" + matchedTemuSkuIdLike.trim().toLowerCase() + "%";
                 predicates.add(cb.like(cb.lower(root.get("matchedTemuSkuId")), like));
+            }
+            String normalizedAgingFilter = agingFilter == null ? null : agingFilter.trim().toUpperCase();
+            if ("UNSIGNED_OVER_15_DAYS".equals(normalizedAgingFilter)) {
+                predicates.add(cb.lessThanOrEqualTo(root.get("orderTimeMs"), System.currentTimeMillis() - 15L * DAY_MS));
+                predicates.add(cb.or(
+                        cb.isNull(lifecycleStatus),
+                        cb.not(lifecycleStatus.in(3, 5, 51))
+                ));
+            } else if ("UNSHIPPED_OVER_8_DAYS".equals(normalizedAgingFilter)) {
+                predicates.add(cb.lessThanOrEqualTo(root.get("orderTimeMs"), System.currentTimeMillis() - 8L * DAY_MS));
+                predicates.add(cb.or(
+                        cb.isNull(lifecycleStatus),
+                        cb.not(lifecycleStatus.in(3, 4, 5, 41, 51))
+                ));
             }
             if (orderTimeStartMs != null) {
                 predicates.add(cb.greaterThanOrEqualTo(root.get("orderTimeMs"), orderTimeStartMs));
@@ -561,19 +692,24 @@ public class TemuOrderService {
         if (shop == null || shop.getId() == null || safeLimit <= 0) {
             return 0;
         }
-        int safeHours = hoursBack == null || hoursBack <= 0 ? 24 : hoursBack;
-        long sinceMs = System.currentTimeMillis() - safeHours * 3600_000L;
-        int fetchSize = Math.min(Math.max(safeLimit * 20, 200), 2000);
+        return refreshEligibleLogistics(shop, safeLimit);
+    }
+
+    private int refreshEligibleLogistics(TemuShop shop, Integer limit) {
+        if (shop == null || shop.getId() == null) {
+            return 0;
+        }
+        int safeLimit = limit == null ? 0 : Math.max(limit, 0);
+        long cutoffMs = System.currentTimeMillis() - 6L * DAY_MS;
+        int fetchSize = safeLimit > 0 ? Math.min(Math.max(safeLimit * 20, 200), 2000) : 5000;
 
         Page<TemuOrder> rows = orderRepository.findAll((root, query, cb) -> {
             List<Predicate> predicates = new ArrayList<>();
             predicates.add(cb.equal(root.get("shopRecordId"), shop.getId()));
             predicates.add(cb.isNotNull(root.get("parentOrderSn")));
             predicates.add(cb.notEqual(cb.trim(root.get("parentOrderSn")), ""));
-            predicates.add(cb.or(
-                    cb.greaterThanOrEqualTo(root.get("updateTimeMs"), sinceMs),
-                    cb.greaterThanOrEqualTo(root.get("orderTimeMs"), sinceMs)
-            ));
+            predicates.add(cb.lessThanOrEqualTo(root.get("orderTimeMs"), cutoffMs));
+            predicates.add(cb.or(root.get("orderStatus").isNull(), root.get("orderStatus").in(3, 5, 51).not()));
             return cb.and(predicates.toArray(new Predicate[0]));
         }, PageRequest.of(0, fetchSize, Sort.by(
                 Sort.Order.desc("updateTimeMs"),
@@ -585,24 +721,59 @@ public class TemuOrderService {
             return 0;
         }
 
-        Map<String, TemuOrderLogistics> logisticsMap = loadLatestLogistics(rows.getContent());
-        LocalDateTime freshThreshold = LocalDateTime.now().minusHours(12);
         LinkedHashMap<String, Long> targets = new LinkedHashMap<>();
         for (TemuOrder order : rows.getContent()) {
             if (order == null || !StringUtils.hasText(order.getParentOrderSn())) {
                 continue;
             }
             String parentOrderSn = order.getParentOrderSn().trim();
-            TemuOrderLogistics logistics = logisticsMap.get(logisticsKey(order.getShopRecordId(), parentOrderSn));
-            if (logistics != null && logistics.getLastSyncedAt() != null && logistics.getLastSyncedAt().isAfter(freshThreshold)) {
-                continue;
-            }
             targets.putIfAbsent(parentOrderSn, firstPositive(order.getUpdateTimeMs(), order.getOrderTimeMs(), 0L));
-            if (targets.size() >= safeLimit) {
+            if (safeLimit > 0 && targets.size() >= safeLimit) {
                 break;
             }
         }
-        return refreshTouchedLogistics(shop, targets, safeLimit);
+        return refreshTouchedLogistics(shop, targets, safeLimit > 0 ? safeLimit : targets.size());
+    }
+
+    private int refreshAllLogistics(TemuShop shop) {
+        if (shop == null || shop.getId() == null) {
+            return 0;
+        }
+        int refreshedCount = 0;
+        int pageNumber = 0;
+        int pageSize = 1000;
+        while (true) {
+            Page<TemuOrder> rows = orderRepository.findAll((root, query, cb) -> {
+                List<Predicate> predicates = new ArrayList<>();
+                predicates.add(cb.equal(root.get("shopRecordId"), shop.getId()));
+                predicates.add(cb.isNotNull(root.get("parentOrderSn")));
+                predicates.add(cb.notEqual(cb.trim(root.get("parentOrderSn")), ""));
+                return cb.and(predicates.toArray(new Predicate[0]));
+            }, PageRequest.of(pageNumber, pageSize, Sort.by(
+                    Sort.Order.desc("updateTimeMs"),
+                    Sort.Order.desc("orderTimeMs"),
+                    Sort.Order.desc("id")
+            )));
+
+            if (rows.isEmpty()) {
+                break;
+            }
+
+            LinkedHashMap<String, Long> targets = new LinkedHashMap<>();
+            for (TemuOrder order : rows.getContent()) {
+                if (order == null || !StringUtils.hasText(order.getParentOrderSn())) {
+                    continue;
+                }
+                targets.putIfAbsent(order.getParentOrderSn().trim(), firstPositive(order.getUpdateTimeMs(), order.getOrderTimeMs(), 0L));
+            }
+            refreshedCount += refreshTouchedLogistics(shop, targets, targets.size());
+
+            if (!rows.hasNext()) {
+                break;
+            }
+            pageNumber++;
+        }
+        return refreshedCount;
     }
 
     private int refreshTouchedLogistics(TemuShop shop, Map<String, Long> touchedParentOrders, int maxCount) {
@@ -668,6 +839,8 @@ public class TemuOrderService {
                                              TemuOrderLogistics logistics,
                                              Map<String, String> matchedSkuSpecNameMap,
                                              Map<String, MatchedSupplyPriceContext> matchedSupplyPriceMap,
+                                             Map<String, Integer> matchedPurchasePriceMap,
+                                             Map<SkuStatsKey, BigDecimal> matchedFirstLegFeeMap,
                                              Map<SkuStatsKey, SkuAftersaleStats> skuAftersaleStatsMap) {
         SkuAftersaleStats skuAftersaleStats = resolveSkuAftersaleStats(entity, skuAftersaleStatsMap);
         return TemuOrderDTO.ListItem.builder()
@@ -694,6 +867,8 @@ public class TemuOrderService {
                 .matchedSkuSpecName(resolveMatchedSkuSpecName(entity, matchedSkuSpecNameMap))
                 .matchedProductName(entity.getMatchedProductName())
                 .matchedSupplyPrice(resolveMatchedSupplyPrice(entity, matchedSupplyPriceMap))
+                .purchasePrice(resolveMatchedPurchasePrice(entity, matchedPurchasePriceMap))
+                .matchedFirstLegLogisticsFee(resolveMatchedFirstLegFee(entity, matchedFirstLegFeeMap))
                 .salesQuantity(skuAftersaleStats == null ? null : skuAftersaleStats.salesQuantity())
                 .aftersaleQuantity(skuAftersaleStats == null ? null : skuAftersaleStats.aftersaleQuantity())
                 .aftersaleRate(skuAftersaleStats == null ? null : skuAftersaleStats.aftersaleRate())
@@ -715,6 +890,8 @@ public class TemuOrderService {
                                          TemuOrderLogistics logistics,
                                          Map<String, String> matchedSkuSpecNameMap,
                                          Map<String, MatchedSupplyPriceContext> matchedSupplyPriceMap,
+                                         Map<String, Integer> matchedPurchasePriceMap,
+                                         Map<SkuStatsKey, BigDecimal> matchedFirstLegFeeMap,
                                          Map<SkuStatsKey, SkuAftersaleStats> skuAftersaleStatsMap) {
         SkuAftersaleStats skuAftersaleStats = resolveSkuAftersaleStats(entity, skuAftersaleStatsMap);
         return TemuOrderDTO.Detail.builder()
@@ -749,6 +926,8 @@ public class TemuOrderService {
                 .matchedSkuSpecName(resolveMatchedSkuSpecName(entity, matchedSkuSpecNameMap))
                 .matchedProductName(entity.getMatchedProductName())
                 .matchedSupplyPrice(resolveMatchedSupplyPrice(entity, matchedSupplyPriceMap))
+                .purchasePrice(resolveMatchedPurchasePrice(entity, matchedPurchasePriceMap))
+                .matchedFirstLegLogisticsFee(resolveMatchedFirstLegFee(entity, matchedFirstLegFeeMap))
                 .salesQuantity(skuAftersaleStats == null ? null : skuAftersaleStats.salesQuantity())
                 .aftersaleQuantity(skuAftersaleStats == null ? null : skuAftersaleStats.aftersaleQuantity())
                 .aftersaleRate(skuAftersaleStats == null ? null : skuAftersaleStats.aftersaleRate())
@@ -968,6 +1147,73 @@ public class TemuOrderService {
         return out;
     }
 
+    private Map<String, Integer> loadMatchedPurchasePriceMap(List<TemuOrder> orders) {
+        if (orders == null || orders.isEmpty()) {
+            return Collections.emptyMap();
+        }
+
+        Map<String, LinkedHashSet<Long>> skuIdsByShopId = collectMatchedSkuIdsByShopId(orders);
+        if (skuIdsByShopId.isEmpty()) {
+            return Collections.emptyMap();
+        }
+
+        Map<String, Integer> out = new LinkedHashMap<>();
+        for (Map.Entry<String, LinkedHashSet<Long>> entry : skuIdsByShopId.entrySet()) {
+            List<TemuShopSkuPurchasePrice> rows = purchasePriceRepository.findByShopIdAndProductSkuIdIn(entry.getKey(), List.copyOf(entry.getValue()));
+            for (TemuShopSkuPurchasePrice row : rows) {
+                if (row == null || row.getProductSkuId() == null || row.getPurchasePrice() == null || !StringUtils.hasText(row.getShopId())) {
+                    continue;
+                }
+                out.putIfAbsent(matchedSupplyPriceKey(row.getShopId(), row.getProductSkuId()), row.getPurchasePrice());
+            }
+        }
+        return out;
+    }
+
+    private Map<SkuStatsKey, BigDecimal> loadMatchedFirstLegFeeMap(List<TemuOrder> orders) {
+        if (orders == null || orders.isEmpty()) {
+            return Collections.emptyMap();
+        }
+
+        Map<Long, LinkedHashSet<String>> skuIdsByShopRecordId = new LinkedHashMap<>();
+        for (TemuOrder order : orders) {
+            if (order == null || order.getShopRecordId() == null) {
+                continue;
+            }
+            String matchedTemuSkuId = trim(order.getMatchedTemuSkuId());
+            if (!StringUtils.hasText(matchedTemuSkuId)) {
+                continue;
+            }
+            skuIdsByShopRecordId.computeIfAbsent(order.getShopRecordId(), key -> new LinkedHashSet<>()).add(matchedTemuSkuId);
+        }
+        if (skuIdsByShopRecordId.isEmpty()) {
+            return Collections.emptyMap();
+        }
+
+        Map<SkuStatsKey, BigDecimal> out = new LinkedHashMap<>();
+        for (Map.Entry<Long, LinkedHashSet<String>> entry : skuIdsByShopRecordId.entrySet()) {
+            Long shopRecordId = entry.getKey();
+            List<String> skuIds = entry.getValue().stream()
+                    .filter(StringUtils::hasText)
+                    .distinct()
+                    .toList();
+            if (shopRecordId == null || skuIds.isEmpty()) {
+                continue;
+            }
+            MapSqlParameterSource params = new MapSqlParameterSource()
+                    .addValue("shopRecordId", shopRecordId)
+                    .addValue("skuIds", skuIds);
+            namedParameterJdbcTemplate.query(LATEST_SINGLE_ITEM_FIRST_LEG_FEE_SQL, params, rs -> {
+                String matchedTemuSkuId = trim(rs.getString("product_sku_id"));
+                if (!StringUtils.hasText(matchedTemuSkuId)) {
+                    return;
+                }
+                out.putIfAbsent(new SkuStatsKey(shopRecordId, matchedTemuSkuId), rs.getBigDecimal("first_leg_logistics_fee"));
+            });
+        }
+        return out;
+    }
+
     private Map<String, LinkedHashSet<Long>> collectMatchedSkuIdsByShopId(List<TemuOrder> orders) {
         Map<String, LinkedHashSet<Long>> skuIdsByShopId = new LinkedHashMap<>();
         for (TemuOrder order : orders) {
@@ -1047,6 +1293,28 @@ public class TemuOrderService {
             supplierPrice = context.priceRow().getSupplierPrice();
         }
         return supplierPrice == null ? null : BigDecimal.valueOf(supplierPrice.longValue()).movePointLeft(2);
+    }
+
+    private Integer resolveMatchedPurchasePrice(TemuOrder order, Map<String, Integer> matchedPurchasePriceMap) {
+        if (order == null || matchedPurchasePriceMap == null || matchedPurchasePriceMap.isEmpty() || !StringUtils.hasText(order.getShopId())) {
+            return null;
+        }
+        Long productSkuId = toLong(order.getMatchedTemuSkuId());
+        if (productSkuId == null) {
+            return null;
+        }
+        return matchedPurchasePriceMap.get(matchedSupplyPriceKey(order.getShopId(), productSkuId));
+    }
+
+    private BigDecimal resolveMatchedFirstLegFee(TemuOrder order, Map<SkuStatsKey, BigDecimal> matchedFirstLegFeeMap) {
+        if (order == null || matchedFirstLegFeeMap == null || matchedFirstLegFeeMap.isEmpty()) {
+            return null;
+        }
+        SkuStatsKey key = skuStatsKey(order.getShopRecordId(), order.getMatchedTemuSkuId());
+        if (key == null) {
+            return null;
+        }
+        return matchedFirstLegFeeMap.get(key);
     }
 
     private TemuOrderDTO.LogisticsSnapshot toLogisticsSnapshot(TemuOrderLogistics logistics) {
